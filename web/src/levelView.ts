@@ -6,6 +6,7 @@ import { parseTerrain, heightAt, type Terrain } from "./terrain.ts";
 import { TerrainRenderer, type FlyCamera } from "./terrainRenderer.ts";
 import type { PakSource } from "./paks.ts";
 import { parseLevelObjects, type LevelObjects } from "./levelObjects.ts";
+import { parseCover, type Cover } from "./cover.ts";
 import { ModelRenderer } from "./renderer.ts";
 import { buildWorldScene, lodItems, newWorldCaches, selectLods, type WorldScene } from "./world.ts";
 import { Vfs } from "./vfs.ts";
@@ -19,7 +20,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 }
 
 let stopActive: (() => void) | null = null;
-const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects }>>();
+const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover }>>();
 const vfsCache = new Map<string, Promise<Vfs>>();
 const worldCaches = newWorldCaches();
 const STREAM_RADIUS = 500; // metres of objects around the camera
@@ -38,6 +39,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   }
   let terrain: Terrain;
   let objects: LevelObjects;
+  let cover: Cover | undefined;
   let vfs: Vfs;
   let device: GPUDevice;
   try {
@@ -45,19 +47,24 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (!p) {
       p = (async () => {
         const blob = await pak.open();
-        const entry = (await readCentralDirectory(blob)).find((e) => e.name.toLowerCase() === "terrain/terrain.dat");
+        const entries = await readCentralDirectory(blob);
+        const entry = entries.find((e) => e.name.toLowerCase() === "terrain/terrain.dat");
+        const ctc = entries.find((e) => e.name.toLowerCase() === "terrain/cover.ctc");
         if (!entry) throw new Error("terrain/terrain.dat not found in the level pak");
         status.textContent = `Reading terrain (${Math.round(entry.usize / 2 ** 20)} MiB)…`;
         const bytes = await readEntry(blob, entry);
         status.textContent = "Decoding heightmap and object octree…";
         await new Promise((r) => setTimeout(r, 0));
         const terrain = parseTerrain(bytes);
-        return { terrain, objects: parseLevelObjects(bytes, terrain.objectsOffset) };
+        const objects = parseLevelObjects(bytes, terrain.objectsOffset);
+        status.textContent = "Reading terrain colour…";
+        const cover = ctc ? parseCover(await readEntry(blob, ctc), terrain.size) : undefined;
+        return { terrain, objects, cover };
       })();
       p.catch(() => terrainCache.delete(pakPath));
       terrainCache.set(pakPath, p);
     }
-    ({ terrain, objects } = await p);
+    ({ terrain, objects, cover } = await p);
     let v = vfsCache.get(pakPath);
     if (!v) {
       // assets from every non-level pak, with this level's own files (brush/*.cgf, …) on top
@@ -73,7 +80,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (!navigator.gpu) throw new Error("WebGPU is not available in this browser (chrome://flags/#enable-unsafe-webgpu).");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter) throw new Error("No WebGPU adapter.");
-    device = await adapter.requestDevice();
+    device = await adapter.requestDevice({ requiredFeatures: adapter.features.has("texture-compression-bc") ? ["texture-compression-bc"] : [] });
   } catch (err) {
     host.replaceChildren(el("p", "error", (err as Error).message));
     return;
@@ -81,17 +88,27 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
 
   const canvas = el("canvas", "model-canvas level-canvas");
   canvas.tabIndex = 0;
-  const hud = el("p", "note");
+  const hud = el("p", "note level-hud");
+  const stage = el("div", "level-stage");
+  const fullBtn = el("button", "level-full-btn", "⛶ Full window");
+  fullBtn.type = "button";
+  stage.append(canvas, fullBtn, hud);
   host.replaceChildren(
     el("p", "scene-title", `${level}: ${terrain.size} × ${terrain.size} m terrain, ${objects.brushName.length.toLocaleString()} brushes, ${objects.vegGroup.length.toLocaleString()} vegetation instances`),
-    canvas,
-    el("p", "dim", "Click the view, then: drag to look · WASD/arrows move · Q/E or Space/C down/up · Shift = fast"),
-    hud,
+    stage,
+    el("p", "dim", "Click the view, then: drag to look · WASD/arrows move · Q/E or Space/C down/up · Shift = fast · Esc leaves full window"),
   );
+  const setFull = (on: boolean) => {
+    stage.classList.toggle("full", on);
+    fullBtn.textContent = on ? "✕ Exit full window" : "⛶ Full window";
+    canvas.focus();
+  };
+  fullBtn.addEventListener("click", () => setFull(!stage.classList.contains("full")));
+  canvas.addEventListener("keydown", (e) => { if (e.code === "Escape") setFull(false); });
   const ctx = canvas.getContext("webgpu")!;
   const format = navigator.gpu.getPreferredCanvasFormat();
   ctx.configure({ device, format, alphaMode: "opaque" });
-  const renderer = new TerrainRenderer(device, format, terrain);
+  const renderer = new TerrainRenderer(device, format, terrain, cover);
   const models = new ModelRenderer(device, format, 4);
   let depth: GPUTexture | null = null;
   let msaa: GPUTexture | null = null;

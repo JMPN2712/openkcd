@@ -73,6 +73,35 @@ How this was established (none of it was guessable from the field names):
 Heights range from 10.5 to 218.4 m. The viewer keeps one 4097² `Uint16Array`
 in 5 cm units (34 MB) and upsamples coarse leaves bilinearly.
 
+## Terrain colour: cover.ctc (`web/src/cover.ts`)
+
+- **Header.**
+  - `"CRY\0"`, `u8 fileType` (100), `u8 flags`, `u16 version` (9).
+  - `u16 layerCount` (2), `u16 flags`, `f32 brightness` (1.0).
+  - Per layer: `u16 sectorPixels` (256), `u16`, `u32 format`,
+    `u32 bytesPerSector` (32,768, i.e. 256² BC1).
+- **Slot table.** **`u16`** `nodeCount` (5,461, matching the terrain
+  quadtree), then `u16 slot[nodeCount]` in the terrain tree's depth-first
+  order, with 0xFFFF for none. Reading the count as a u32 shifts the whole
+  table by one entry; the u16 reading gives slots exactly 0…1364 and 4-byte
+  aligned data.
+- **Slot data.** Slots × (layer 0 = colour, layer 1 = normal map). The
+  normal map's R ≈ −∂h/∂x and B ≈ −∂h/∂y; G is unused.
+- **Coverage.** Only depths 0–5 are textured (1,365 nodes). The finest colour
+  is 128 m per 256 px, about 0.5 m/px, an 8192² map.
+- **Orientation.** Tiles are **X-major** like the heightmap: image rows run
+  along world x. Correlating the normal layer with heightmap slopes gives
+  r = −0.93 / −0.91 for this layout against about 0 for the alternative.
+  (A side-by-side image comparison misled me here; the correlation didn't.)
+- **Rendering.**
+  - Each depth's mosaic is half the previous, so depths 5…0 are a ready-made
+    mip chain.
+  - The renderer uploads it as `bc1-rgba-unorm-srgb` (43 MB) when the device
+    has `texture-compression-bc`; otherwise it decodes depth ≤ 4 to RGBA.
+  - Sampled at uv = (y, x)/4096, ×2 brightness as the CryEngine terrain
+    shader does.
+  - Without water, the river shows as its muddy bed.
+
 ## Object octree (`web/src/levelObjects.ts`)
 
 The octree follows the terrain tree and runs exactly to the end of
@@ -119,7 +148,7 @@ elder bushes and branch piles.
   spacing by distance. Each patch has a skirt (its border duplicated 4 steps
   lower) to hide cracks between LODs. A typical ground-level view is about
   1M triangles.
-- **Colour:** slope and height only, until `cover.ctc` is decoded.
+- **Colour:** from `cover.ctc` (see above), with slope and height colouring as a fallback.
 - **Headless check:** `web/scripts/render-terrain.ts` renders views to PNG
   through Dawn. Keep the object returned by `create()` referenced; if it is
   garbage-collected while the device is alive, Dawn aborts with a glibc
@@ -167,9 +196,8 @@ elder bushes and branch piles.
 - **Known gaps:**
   - no water, roads or decals (octree types 7/9/11 not decoded);
   - road and terrain-blend meshes render as flat dark patches;
-  - no terrain colour (`cover.ctc`), no shadows.
+  - no shadows; terrain detail materials (the 26 surface types) aren't blended in.
 
 ## Not yet decoded
 
-- `cover.ctc` (terrain colour), merged-mesh sectors, and the `layers/*.xml`
-  entities.
+- Merged-mesh sectors and the `layers/*.xml` entities.

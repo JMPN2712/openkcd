@@ -15,6 +15,7 @@ import { ASSET_RE } from "../src/assets.ts";
 import { readCentralDirectory, readEntry } from "../src/zip.ts";
 import { parseTerrain, heightAt } from "../src/terrain.ts";
 import { parseLevelObjects } from "../src/levelObjects.ts";
+import { parseCover } from "../src/cover.ts";
 import { TerrainRenderer, type FlyCamera } from "../src/terrainRenderer.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 import { buildWorldScene, lodItems, newWorldCaches, selectLods } from "../src/world.ts";
@@ -46,10 +47,13 @@ const level = sources.find((s) => s.path.toLowerCase() === "data/levels/rataje/l
 const base = await Vfs.build(sources.filter((s) => !s.path.toLowerCase().startsWith("data/levels/")), { filter: (n) => ASSET_RE.test(n), includeHd: true });
 const vfs = await base.extend(level, (n) => ASSET_RE.test(n));
 const levelBlob = await level.open();
-const tdat = (await readCentralDirectory(levelBlob)).find((e) => e.name.toLowerCase() === "terrain/terrain.dat")!;
+const levelEntries = await readCentralDirectory(levelBlob);
+const tdat = levelEntries.find((e) => e.name.toLowerCase() === "terrain/terrain.dat")!;
+const ctc = levelEntries.find((e) => e.name.toLowerCase() === "terrain/cover.ctc");
 const bytes = await readEntry(levelBlob, tdat);
 const terrain = parseTerrain(bytes);
 const objects = parseLevelObjects(bytes, terrain.objectsOffset);
+const cover = ctc && !args.includes("--no-cover") ? parseCover(await readEntry(levelBlob, ctc), terrain.size) : undefined;
 
 let list = views;
 if (!list.length) {
@@ -69,9 +73,10 @@ if (!list.length) {
 const gpu = create([]);
 const adapter = await gpu.requestAdapter();
 if (!adapter) throw new Error("no WebGPU adapter");
-const device = await adapter.requestDevice();
+const device = await adapter.requestDevice({ requiredFeatures: adapter.features.has("texture-compression-bc") ? ["texture-compression-bc"] : [] });
 device.addEventListener("uncapturederror", (e) => console.log("GPU ERROR:", (e as GPUUncapturedErrorEvent).error.message));
-const terrainR = new TerrainRenderer(device, "rgba8unorm", terrain);
+const terrainR = new TerrainRenderer(device, "rgba8unorm", terrain, cover);
+console.log(`terrain colour: ${terrainR.coverMode}`);
 const models = new ModelRenderer(device, "rgba8unorm", 4);
 const target = device.createTexture({ size: [W, H], format: "rgba8unorm", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
 const msaa = device.createTexture({ size: [W, H], format: "rgba8unorm", sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });

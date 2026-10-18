@@ -5,12 +5,17 @@
 // until the terrain colour texture (cover.ctc) is decoded.
 
 import { HEIGHT_UNIT, type Terrain } from "./terrain.ts";
+import type { Cover } from "./cover.ts";
+import { decodeBC1 } from "./bcn.ts";
 import { lookAt, multiply, perspective, type Vec3 } from "./mat4.ts";
 
 const SHADER = /* wgsl */ `
-struct Cam { viewProj: mat4x4f, eye: vec4f, sun: vec4f, params: vec4f }; // params: x heightUnit, y size, z fog density
+struct Cam { viewProj: mat4x4f, eye: vec4f, sun: vec4f, params: vec4f }; // params: x heightUnit, y size, z fog density, w cover gain (0 = none)
 @group(0) @binding(0) var<uniform> cam: Cam;
 @group(0) @binding(1) var heights: texture_2d<u32>;
+// terrain colour (cover.ctc), stored X-major: sample at (y, x) / size
+@group(0) @binding(2) var cover: texture_2d<f32>;
+@group(0) @binding(3) var coverSamp: sampler;
 
 struct VOut { @builtin(position) pos: vec4f, @location(0) wpos: vec3f, @location(1) n: vec3f };
 
@@ -46,6 +51,8 @@ fn h(p: vec2i) -> f32 {
   let rock = vec3f(0.33, 0.31, 0.28);
   var c = mix(grass, dry, smoothstep(120.0, 200.0, i.wpos.z));
   c = mix(c, rock, smoothstep(0.25, 0.5, slope));
+  let cov = textureSample(cover, coverSamp, vec2f(i.wpos.y, i.wpos.x) / cam.params.y).rgb;
+  c = select(c, cov * cam.params.w, cam.params.w > 0.0);
   let ndl = max(dot(n, normalize(cam.sun.xyz)), 0.0);
   var lit = c * (0.35 + 0.9 * ndl);
   let d = distance(i.wpos, cam.eye.xyz);
@@ -78,7 +85,12 @@ export class TerrainRenderer {
   readonly format: GPUTextureFormat;
   stats = { patches: [0, 0, 0], triangles: 0 };
 
-  constructor(device: GPUDevice, format: GPUTextureFormat, terrain: Terrain) {
+  private coverTex: GPUTexture;
+  private coverGain = 0;
+  /** "bc1" (compressed upload), "rgba" (decoded fallback) or "none" */
+  readonly coverMode: "bc1" | "rgba" | "none";
+
+  constructor(device: GPUDevice, format: GPUTextureFormat, terrain: Terrain, cover?: Cover) {
     this.device = device;
     this.format = format;
     this.terrain = terrain;
@@ -106,15 +118,49 @@ export class TerrainRenderer {
       multisample: { count: 4 },
     });
     this.camBuf = device.createBuffer({ size: 112, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    ({ tex: this.coverTex, mode: this.coverMode } = this.uploadCover(cover));
+    if (this.coverMode !== "none") this.coverGain = 2 * (cover?.brightness ?? 1); // CryEngine terrain doubles the colour map
+    const coverSamp = device.createSampler({ magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge", maxAnisotropy: 8 });
     this.bind = device.createBindGroup({
       layout: this.pipeline.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: { buffer: this.camBuf } }, { binding: 1, resource: this.heightTex.createView() }],
+      entries: [
+        { binding: 0, resource: { buffer: this.camBuf } },
+        { binding: 1, resource: this.heightTex.createView() },
+        { binding: 2, resource: this.coverTex.createView() },
+        { binding: 3, resource: coverSamp },
+      ],
     });
     for (const step of LODS) this.meshes.push(this.patchMesh(PATCH / step));
     const maxPatches = (terrain.size / PATCH) ** 2;
     for (let i = 0; i < LODS.length; i++) {
       this.instBufs.push(device.createBuffer({ size: maxPatches * 12, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST }));
     }
+  }
+
+  /**
+   * The cover mosaics are a ready-made mip chain (8192 → 256 px for Rataje).
+   * Upload the BC1 blocks as-is when the device has texture-compression-bc;
+   * otherwise decode depth ≤ 4 (≤ 4096 px) to RGBA.
+   */
+  private uploadCover(cover?: Cover): { tex: GPUTexture; mode: "bc1" | "rgba" | "none" } {
+    const usage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST;
+    if (!cover?.mosaics.length) {
+      const tex = this.device.createTexture({ size: [1, 1], format: "rgba8unorm-srgb", usage });
+      this.device.queue.writeTexture({ texture: tex }, new Uint8Array([128, 128, 128, 255]), { bytesPerRow: 4 }, [1, 1]);
+      return { tex, mode: "none" };
+    }
+    const bc = this.device.features.has("texture-compression-bc");
+    const levels = bc ? cover.mosaics : cover.mosaics.filter((m) => m.size <= 4096);
+    const tex = this.device.createTexture({ size: [levels[0].size, levels[0].size], mipLevelCount: levels.length, format: bc ? "bc1-rgba-unorm-srgb" : "rgba8unorm-srgb", usage });
+    levels.forEach((m, i) => {
+      if (bc) {
+        this.device.queue.writeTexture({ texture: tex, mipLevel: i }, m.bc1, { bytesPerRow: (m.size / 4) * 8 }, [m.size, m.size]);
+      } else {
+        const rgba = decodeBC1(m.bc1, m.size, m.size);
+        this.device.queue.writeTexture({ texture: tex, mipLevel: i }, rgba as Uint8ClampedArray<ArrayBuffer>, { bytesPerRow: m.size * 4 }, [m.size, m.size]);
+      }
+    });
+    return { tex, mode: bc ? "bc1" : "rgba" };
   }
 
   /** Grid of (n+1)² vertices plus a skirt ring; returns indexed triangles. */
@@ -160,7 +206,7 @@ export class TerrainRenderer {
     u.set(viewProj, 0);
     u.set([...cam.pos, 1], 16);
     u.set([0.45, 0.25, 0.85, 0], 20);
-    u.set([HEIGHT_UNIT, this.terrain.size, 0.00018, 0], 24);
+    u.set([HEIGHT_UNIT, this.terrain.size, 0.00018, this.coverGain], 24);
     this.device.queue.writeBuffer(this.camBuf, 0, u);
     const near = opts.lodDistance ?? 250;
     const per = this.terrain.size / PATCH;
@@ -213,6 +259,7 @@ export class TerrainRenderer {
 
   destroy(): void {
     this.heightTex.destroy();
+    this.coverTex.destroy();
     this.camBuf.destroy();
     for (const m of this.meshes) { m.vb.destroy(); m.ib.destroy(); }
     for (const b of this.instBufs) b.destroy();
