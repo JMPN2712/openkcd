@@ -127,6 +127,8 @@ export class AiWorld {
   /** TryCatch handlers active during the current tick (innermost last) */
   private catchers: ((reason: string) => void)[] = [];
   private current: { npc: number } = { npc: -1 };
+  /** unsupported nodes/features → the NPCs whose trees reached them */
+  readonly unsupported = new Map<string, Set<number>>();
   /** where each NPC is (updated by moves); starts at the entity position */
   readonly positions = new Map<number, [number, number, number]>();
   /** semaphores and external locks by scoped name */
@@ -151,7 +153,11 @@ export class AiWorld {
         const changed = o.lua!.run(code, scope.snapshot(), { id: npc, name: this.o.ents.get(npc)?.name ?? "" });
         for (const [k, v] of Object.entries(changed)) scope.set(k, v);
       } : undefined,
-      report: (w) => o.trace?.(`[unsupported] ${w}`),
+      report: (w) => {
+        const set = this.unsupported.get(w) ?? new Set<number>();
+        if (!set.has(this.current.npc)) { set.add(this.current.npc); o.trace?.(`[unsupported] ${w}`); }
+        this.unsupported.set(w, set);
+      },
     };
     this.runner = new Runner(host);
     if (o.lua) {
@@ -268,6 +274,24 @@ export class AiWorld {
         break;
       }
       case "LinkTagFilter": ok = tags.map((t) => t.toLowerCase()).includes(evalIn("tag").toLowerCase()); break;
+      case "EntityClassFilter": {
+        const want = evalIn("Class");
+        const cls = this.o.ents.get(subject)?.cls ?? "";
+        const aliases: Record<string, string[]> = { NPC: ["NPC", "NPC_Female"], SmartObject: ["SmartObjectHolder"], Item: ["PickableItem"], Path: ["PredefinedNavigationPath"] };
+        ok = (aliases[want] ?? [want]).includes(cls);
+        break;
+      }
+      case "WUIDFilter": {
+        const q = this.prop(f, "WUID");
+        const w = wuid(q.startsWith("$") ? c.eval("WUID", null) : this.lookupValue(c.scope, q));
+        ok = w !== null && w === subject;
+        break;
+      }
+      case "NegationOp": {
+        const inner = f.children.find((k) => k.tag === "Child0")?.children[0];
+        ok = inner ? !this.filter(inner, c, parent, child, tags) : true;
+        break;
+      }
       // no inventories or item slots are modelled yet: item filters match nothing
       case "SlotClassFilter": case "ItemClassFilter": ok = false; break;
       case "HasBehaviorFilter": {
@@ -392,6 +416,16 @@ export class AiWorld {
     return { id: k, pos, rot };
   }
 
+  /** Links between entities as the trees change them: AddLink / RemoveLink edit the level's graph. */
+  private hasLink(from: number | null, to: number | null, tag: string): boolean {
+    const t = tag.toLowerCase();
+    const sources = from !== null ? [from] : [...this.o.ents.keys()];
+    for (const f of sources) for (const l of this.o.ents.get(f)?.links ?? []) {
+      if ((to === null || l.target === to) && l.name.split(",").some((x) => x.replace(/\[.*$/, "").trim().toLowerCase() === t)) return true;
+    }
+    return false;
+  }
+
   private node(n: BtNode, c: Context): Task | undefined {
     const kids = n.children;
     const leaf = (f: () => Status): Task => ({ tick: f, abort: () => {} });
@@ -421,6 +455,75 @@ export class AiWorld {
             return s;
           },
           abort: () => { body?.abort(); body = null; leave(); },
+        };
+      }
+      case "Semaphore": {
+        // a mutex for SemaphoreCount holders: others wait (outside timers not modelled)
+        const me = {};
+        let key: string | null = null;
+        let body: Task | null = null;
+        const leave = () => { if (key) this.semaphores.get(key)?.delete(me); key = null; };
+        return {
+          tick: () => {
+            if (!body) {
+              key ??= this.lockKey(n, c, "SemaphoreName");
+              const set = this.semaphores.get(key) ?? new Set<object>();
+              this.semaphores.set(key, set);
+              if (!set.has(me)) {
+                if (set.size >= Number(c.eval("SemaphoreCount", 1))) return "running";
+                set.add(me);
+              }
+              body = kids[0] ? this.runner.make(kids[0], c.scope) : null;
+              if (!body) { leave(); return "success"; }
+            }
+            const s = body.tick();
+            if (s !== "running") { body = null; leave(); }
+            return s;
+          },
+          abort: () => { body?.abort(); body = null; leave(); },
+        };
+      }
+      case "AddLink": case "RemoveLink":
+        return leaf(() => {
+          const from = wuid(this.ref(n, c, "From")), to = wuid(this.ref(n, c, "To"));
+          const tag = String(c.eval("Tag", ""));
+          const e = from === null ? undefined : this.o.ents.get(from);
+          if (!e || to === null || !tag) return this.prop(n, "LinkOpHandleMode") === "Fail" ? "failure" : "success";
+          e.links ??= [];
+          const same = (l: { target: number; name: string }) => l.target === to && l.name === tag;
+          if (n.tag === "AddLink") {
+            if (!e.links.some(same)) {
+              e.links.push({ target: to, name: tag });
+              const back = this.parents.get(to) ?? [];
+              back.push({ target: from!, name: tag });
+              this.parents.set(to, back);
+            }
+          } else {
+            e.links = e.links.filter((l) => !same(l));
+            this.parents.set(to, (this.parents.get(to) ?? []).filter((l) => !(l.target === from && l.name === tag)));
+          }
+          this.trace(`npc ${this.current.npc}: ${n.tag} ${this.name(from!)} -${tag}-> ${this.name(to)}`);
+          return "success";
+        });
+      case "LinkOperationBarrier": {
+        // waits until the link (From -Tag-> To; Any = wildcard) exists (Exist, ExistAdd, Added) or is gone (Removed, RemovedNotThere)
+        let body: Task | null = null;
+        return {
+          tick: () => {
+            if (!body) {
+              const from = c.eval("AnyFrom", false) === true || c.eval("AnyFrom", false) === "true" ? null : wuid(this.ref(n, c, "From"));
+              const to = c.eval("AnyTo", false) === true || c.eval("AnyTo", false) === "true" ? null : wuid(this.ref(n, c, "To"));
+              const exists = this.hasLink(from, to, String(c.eval("Tag", "")));
+              const op = this.prop(n, "LinkOp");
+              if ((op.startsWith("Removed") ? exists : !exists)) return "running";
+              body = kids[0] ? this.runner.make(kids[0], c.scope) : null;
+              if (!body) return "success";
+            }
+            const s = body.tick();
+            if (s !== "running") body = null;
+            return s;
+          },
+          abort: () => { body?.abort(); body = null; },
         };
       }
       case "SetExternalLock":
@@ -516,7 +619,7 @@ export class AiWorld {
           abort: () => { execTask?.abort(); execTask = null; },
         };
       }
-      case "Move": case "MoveAndAct": case "PlayAnimation": {
+      case "Move": case "MoveAndAct": case "ExactMove": case "PlayAnimation": {
         let until: number | null = null;
         return {
           tick: () => {
@@ -531,6 +634,11 @@ export class AiWorld {
                 // MoveAndAct without a destination goes to a helper of the smart object it acts on
                 const obj = wuid(c.scope.get("__object"));
                 let rot: [number, number, number, number] | undefined;
+                // ExactMove to an object with a helper id (destinationSpecification2): that helper
+                if (n.tag === "ExactMove" && wuid(dest) !== null && this.prop(n, "destinationSpecification2")) {
+                  const h = this.helperFor(wuid(dest)!, String(c.eval("destinationSpecification3", "")));
+                  if (h) { p = h.pos; rot = h.rot; }
+                }
                 if (!p && n.tag === "MoveAndAct" && obj !== null) {
                   const h = this.helperFor(obj, String(c.eval("AnimationToPlay", "")));
                   p = h?.pos ?? null;

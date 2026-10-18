@@ -268,7 +268,6 @@ export class Runner {
   constructor(host: Host) { this.host = host; }
 
   report(what: string): void {
-    if (this.reported.has(what)) return;
     this.reported.add(what);
     this.host.report?.(what);
   }
@@ -308,7 +307,7 @@ export class Runner {
     const c = this.ctx(scope, n);
     const kids = n.children;
     const child = (tag: string) => kids.find((k) => k.tag === tag);
-    const only = (k: BtNode | undefined): Slot | null => (k ? new Slot(() => this.make(k.children.length === 1 && ["Then", "Else", "Behavior", "OnInit", "LOD", "Detail", "Child"].includes(k.tag) ? k.children[0] : k, scope)) : null);
+    const only = (k: BtNode | undefined): Slot | null => (k ? new Slot(() => this.make(k.children.length === 1 && ["Then", "Else", "Behavior", "OnInit", "LOD", "Detail", "Child", "OnSuccess", "OnFail", "Search", "Exec", "Subtree"].includes(k.tag) ? k.children[0] : k, scope)) : null);
     const text = (prop: string) => { const v = n.props[prop]; return v === undefined ? "" : quoted(v) ?? v; };
     const flag = (prop: string, d = false) => { const v = c.eval(prop, d); return v === "true" ? true : v === "false" ? false : truthy(v); };
 
@@ -525,6 +524,40 @@ export class Runner {
           abort: () => { chosen?.abort(); chosen = null; },
         };
       }
+      case "ContinuousSwitch": {
+        // like Switch, but the conditions are re-evaluated every tick: a change of branch aborts the
+        // running one (IfCondition children; TimerBox / DistanceCondition are not modelled: never true)
+        let chosenNode: BtNode | null | undefined;
+        let chosen: Slot | null = null;
+        return {
+          tick: () => {
+            const hit = kids.find((k) => k.tag === "IfCondition" && truthy(this.ctx(scope, k).eval("condition", false))) ?? null;
+            if (hit !== chosenNode) {
+              chosen?.abort();
+              chosenNode = hit;
+              chosen = hit?.children[0] ? new Slot(() => this.make(hit.children[0], scope)) : null;
+            }
+            if (!chosen) return "running";
+            const s = chosen.tick();
+            if (s !== "running") { chosenNode = undefined; chosen = null; }
+            return s;
+          },
+          abort: () => { chosen?.abort(); chosen = null; chosenNode = undefined; },
+        };
+      }
+      case "RandomItem":
+        return leaf(() => {
+          const arr = scope.get(text("Array"));
+          if (!Array.isArray(arr) || !arr.length) return "failure";
+          const clamp = num(c.eval("Clamp", -1));
+          const n = clamp > 0 ? Math.min(clamp, arr.length) : arr.length;
+          scope.set(text("Result"), arr[Math.floor(this.host.random() * n)]);
+          return "success";
+        });
+      case "AllowSituations": return kids[0] ? this.make(kids[0], scope) : constant("success");
+      case "ProcessMessage":
+        // waits for a message in an inbox; NPC messaging is not modelled yet, so nothing arrives
+        return { tick: () => "running", abort: () => {} };
       case "IfGate": {
         // KeepRunning: wait until the condition holds, then run the child; Halt: fail if it does not hold
         const body = only(kids[0]);

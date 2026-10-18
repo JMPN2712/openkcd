@@ -215,6 +215,7 @@ for (const [i, v] of list.entries()) {
         npcAi.tick(0.1);
         if (Math.round(t * 10) % 10 === 0) await npcAi.settle(); // let fragment clips load
       }
+      if (aiTrace) console.log(`  unsupported, by NPCs reaching it: ${[...npcAi.world.unsupported].sort((x, y) => y[1].size - x[1].size).slice(0, 25).map(([k, v]) => `${k.replace("unsupported node ", "")} ×${v.size}`).join(", ")}`);
       if (aiTrace) console.log(`  engine API called from tree Lua: ${[...lua!.calls].sort((x, y) => y[1] - x[1]).slice(0, 25).map(([k, v]) => `${k}×${v}`).join(", ")}\n  Lua errors: ${[...new Set(lua!.errors)].slice(0, 6).join(" | ")}`);
       for (const id of npcAi.ids()) {
         const st = npcAi.state(id)!;

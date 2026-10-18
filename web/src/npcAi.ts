@@ -38,7 +38,7 @@ interface Driven {
 }
 
 export class NpcAi {
-  private world: AiWorld;
+  readonly world: AiWorld;
   private libs: Record<"male" | "female", AnimLibrary>;
   private driven = new Map<number, Driven>();
   private female = new Map<number, boolean>();
