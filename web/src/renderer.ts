@@ -292,10 +292,13 @@ export class ModelRenderer {
       this.stats.vertices += nv;
 
       for (const s of mesh.subsets) {
-        const mat = model.materials[s.matId];
+        // a single (non-multi) material applies to every subset whatever its ID, as in CryEngine:
+        // NPC bodies use material ID 4 with the one-material s1_body_normal.mtl (arms and hands were white)
+        const mi = model.materials.length === 1 ? 0 : s.matId;
+        const mat = model.materials[mi];
         if (mat?.nodraw) continue;
-        const chain = model.diffuse[s.matId] ?? null;
-        const specChain = model.specular[s.matId] ?? null;
+        const chain = model.diffuse[mi] ?? null;
+        const specChain = model.specular[mi] ?? null;
         const gpu = (c: MipChain | null) => {
           if (!c) return this.white;
           let t = textures.get(c);
