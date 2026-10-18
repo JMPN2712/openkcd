@@ -77,6 +77,31 @@ Rule files assign roles, schedules and attributes to characters:
   `setAttribute`, `modAttribute`, ….
 - 1,681 rules, a small vocabulary.
 
+## NPC placement (`objects_mission0.xml`)
+
+- **Where.** Each level pak's `objects_mission0.xml` is the editor's
+  entity list: 52 MB for Rataje, 55,122 entities in 71 classes (`TagPoint`
+  10.5k, `ItemSlot`, `SmartObjectHolder`, `AreaShape`, `PickableItem`,
+  `Stash`, `Bed` 1,302, `AnimDoor`, …).
+- **NPCs.** 952 are `NPC` or `NPC_Female`, with `Pos`, `Rotate`
+  (quaternion w,x,y,z, forward = +Y), links (`Work[…]` ×761, `Home,owner`,
+  `futureWork[…]`, `preferedBed`, `cryofreeze` …) and properties such as
+  `esModularBehaviorTree`, faction and perception.
+- **Soul link.** There is no soul attribute: the **entity name is the soul
+  name** (929 of 952 match a `soul_name`). The 23 unmatched are camp
+  enemies and a few DLC characters.
+- **Spawn heights.** 717 spawn on the terrain surface (±0.25 m) and 122 sit
+  more than 1 m above it (upper floors).
+- **Spawn spots are not live positions.** These are spawn spots; where an
+  NPC actually is during the day comes from its schedule (Storm
+  `addScheduleItem` plus the `daycycle` trees), via the linked home, work
+  and bed entities.
+
+The world view assembles the nearest 40 NPCs within 120 m from their souls
+(`web/src/npcs.ts`). It stands each one at its spawn transform, playing
+`relaxed_idle` from `male_general.dba` / `female_general.dba` with a random
+phase. Test: `web/scripts/test-npcs.ts`.
+
 ## What this means for the port
 
 1. **Don't emulate WHGame.dll.** It's 33 MB of x86-64 code tied to D3D11,

@@ -11,6 +11,8 @@ import { ModelRenderer } from "./renderer.ts";
 import { WaterRenderer } from "./waterRenderer.ts";
 import { buildWorldScene, lodItems, newWorldCaches, selectLods, type WorldScene } from "./world.ts";
 import { Vfs } from "./vfs.ts";
+import { parseNpcEntities, type NpcEntity } from "./levelEntities.ts";
+import { NpcWorld, npcItems, animateNpcs, type WorldNpc } from "./npcs.ts";
 import { ASSET_RE } from "./assets.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -21,11 +23,12 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 }
 
 let stopActive: (() => void) | null = null;
-const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover }>>();
+const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[] }>>();
 const vfsCache = new Map<string, Promise<Vfs>>();
 const worldCaches = newWorldCaches();
 const STREAM_RADIUS = 500; // metres of objects around the camera
 const STREAM_STEP = 150; // rebuild after moving this far
+const NPC_RADIUS = 120, NPC_MAX = 40, NPC_STEP = 40;
 
 export async function showLevel(host: HTMLElement, paks: PakSource[], level: string): Promise<void> {
   stopActive?.();
@@ -41,6 +44,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let terrain: Terrain;
   let objects: LevelObjects;
   let cover: Cover | undefined;
+  let npcEntities: NpcEntity[];
   let vfs: Vfs;
   let device: GPUDevice;
   try {
@@ -60,12 +64,15 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         const objects = parseLevelObjects(bytes, terrain.objectsOffset);
         status.textContent = "Reading terrain colour…";
         const cover = ctc ? parseCover(await readEntry(blob, ctc), terrain.size) : undefined;
-        return { terrain, objects, cover };
+        const mission = entries.find((e) => e.name.toLowerCase() === "objects_mission0.xml");
+        status.textContent = "Reading NPC placements…";
+        const npcEntities = mission ? parseNpcEntities(new TextDecoder().decode(await readEntry(blob, mission))) : [];
+        return { terrain, objects, cover, npcEntities };
       })();
       p.catch(() => terrainCache.delete(pakPath));
       terrainCache.set(pakPath, p);
     }
-    ({ terrain, objects, cover } = await p);
+    ({ terrain, objects, cover, npcEntities } = await p);
     let v = vfsCache.get(pakPath);
     if (!v) {
       // assets from every non-level pak, with this level's own files (brush/*.cgf, …) on top
@@ -93,7 +100,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const stage = el("div", "level-stage");
   const fullBtn = el("button", "level-full-btn", "⛶ Full window");
   fullBtn.type = "button";
-  stage.append(canvas, fullBtn, hud);
+  const marketBtn = el("button", "level-full-btn level-goto-btn", "Go to Rataje market");
+  marketBtn.type = "button";
+  stage.append(canvas, fullBtn, marketBtn, hud);
   host.replaceChildren(
     el("p", "scene-title", `${level}: ${terrain.size} × ${terrain.size} m terrain, ${objects.brushName.length.toLocaleString()} brushes, ${objects.vegGroup.length.toLocaleString()} vegetation instances`),
     stage,
@@ -105,6 +114,13 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     canvas.focus();
   };
   fullBtn.addEventListener("click", () => setFull(!stage.classList.contains("full")));
+  marketBtn.addEventListener("click", () => {
+    // Rataje's market under the town wall, looking south at a guard by the stalls
+    cam.pos = [2577.8, 574, 83.8];
+    cam.yaw = -Math.PI / 2;
+    cam.pitch = -0.21;
+    canvas.focus();
+  });
   canvas.addEventListener("keydown", (e) => { if (e.code === "Escape") setFull(false); });
   const ctx = canvas.getContext("webgpu")!;
   const format = navigator.gpu.getPreferredCanvasFormat();
@@ -112,6 +128,29 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const renderer = new TerrainRenderer(device, format, terrain, cover);
   const models = new ModelRenderer(device, format, 4);
   const water = new WaterRenderer(device, format, objects.water);
+  const npcR = new ModelRenderer(device, format, 4);
+  const npcWorld = new NpcWorld(vfs, npcEntities);
+  let npcs: WorldNpc[] = [];
+  let npcsAt: [number, number, number] | null = null;
+  let npcBusy = false;
+  let npcInfo = `NPCs: ${npcEntities.length} in level`;
+  const streamNpcs = async () => {
+    if (npcBusy) return;
+    npcBusy = true;
+    const at: [number, number, number] = [...cam.pos];
+    try {
+      const next = await npcWorld.near(at, NPC_RADIUS, NPC_MAX, (s) => { npcInfo = s; });
+      if (stopped) return;
+      npcR.setModels(npcItems(next));
+      npcs = next;
+      npcsAt = at;
+      npcInfo = `${next.length} NPCs within ${NPC_RADIUS} m`;
+    } catch (err) {
+      npcInfo = `NPCs: ${(err as Error).message}`;
+    } finally {
+      npcBusy = false;
+    }
+  };
   let depth: GPUTexture | null = null;
   let msaa: GPUTexture | null = null;
   let streamedAt: [number, number] | null = null;
@@ -191,6 +230,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (cam.pos[2] < ground + 1.7) cam.pos[2] = ground + 1.7;
     if (!canvas.width) return;
     if (!streamedAt || Math.hypot(cam.pos[0] - streamedAt[0], cam.pos[1] - streamedAt[1]) > STREAM_STEP) void stream();
+    if (streamedAt && (!npcsAt || Math.hypot(cam.pos[0] - npcsAt[0], cam.pos[1] - npcsAt[1], cam.pos[2] - npcsAt[2]) > NPC_STEP)) void streamNpcs();
     const target = ctx.getCurrentTexture();
     if (!depth || depth.width !== target.width || depth.height !== target.height) {
       depth?.destroy();
@@ -202,6 +242,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     renderer.prepare(cam, vp);
     models.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
     water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
+    npcR.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
+    animateNpcs(npcs, now / 1000, (k, m) => npcR.setPalette(k, m), (k) => npcR.paletteSize(k));
     if (scene) {
       const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts);
       lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
@@ -214,10 +256,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     });
     renderer.draw(pass);
     models.draw(pass);
+    npcR.draw(pass);
     water.draw(pass);
     pass.end();
     device.queue.submit([enc.finish()]);
-    hud.textContent = `x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${sceneInfo}${lodInfo}`;
+    hud.textContent = `x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${sceneInfo}${lodInfo} · ${npcInfo}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();
@@ -226,6 +269,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     stopped = true;
     cancelAnimationFrame(raf);
     models.destroy();
+    npcR.destroy();
     water.destroy();
     depth?.destroy();
     msaa?.destroy();

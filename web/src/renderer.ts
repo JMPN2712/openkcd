@@ -401,7 +401,7 @@ export class ModelRenderer {
     let tris = 0;
     for (const d of this.draws) {
       const n = this.itemInst[d.item]?.count ?? d.instCount;
-      if (!n) continue;
+      if (!n || !d.count) continue;
       pass.setVertexBuffer(0, d.vb);
       pass.setVertexBuffer(1, d.inst);
       pass.setIndexBuffer(d.ib, "uint32");
