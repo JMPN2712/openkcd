@@ -52,7 +52,7 @@ const sched = new Schedules(npcs, ents);
 console.log(`beds assigned: ${sched.bedCount}`);
 let bad = 0;
 const ground = (x: number, y: number) => heightAt(terrain, x, y);
-for (const hhmm of ["03:00", "07:00", "12:00", "19:00"]) {
+for (const hhmm of ["03:00", "07:00", "08:05", "12:00", "19:00", "20:40"]) {
   const [h, m] = hhmm.split(":").map(Number);
   t0 = performance.now();
   const where = new Map<string, number>(), acts = new Map<string, number>();
@@ -60,7 +60,7 @@ for (const hhmm of ["03:00", "07:00", "12:00", "19:00"]) {
   for (const n of npcs) {
     const s = souls.get(n.name);
     if (!s) continue;
-    const p = sched.place(n, s.schedule, h * 60 + m, ground);
+    const p = sched.at(n, s.schedule, h * 60 + m, ground, n.female ? 1.29 : 1.4);
     where.set(p.where, (where.get(p.where) ?? 0) + 1);
     acts.set(p.activity || "(none)", (acts.get(p.activity || "(none)") ?? 0) + 1);
     const d = Math.hypot(p.pos[0] - n.pos[0], p.pos[1] - n.pos[1]);

@@ -170,8 +170,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       npcR.setModels(npcItems(next));
       npcs = next;
       npcKey = key;
-      const asleep = next.filter((n) => n.placement.pose === "sleep").length;
-      npcInfo = `${next.length} NPCs within ${NPC_RADIUS} m${asleep ? ` (${asleep} asleep)` : ""}`;
+      npcInfo = `${next.length} NPCs within ${NPC_RADIUS} m`;
     } catch (err) {
       npcInfo = `NPCs: ${(err as Error).message}`;
     } finally {
@@ -274,7 +273,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     models.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
     water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
     npcR.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
-    animateNpcs(npcs, now / 1000, (k, m) => npcR.setPalette(k, m), (k) => npcR.paletteSize(k));
+    animateNpcs(npcs, npcWorld, minute, now / 1000, npcR);
     if (scene) {
       const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts);
       lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
@@ -291,7 +290,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     water.draw(pass);
     pass.end();
     device.queue.submit([enc.finish()]);
-    hud.textContent = `x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${sceneInfo}${lodInfo} · ${npcInfo}`;
+    hud.textContent = `x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${sceneInfo}${lodInfo} · ${npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep)` : ""}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();

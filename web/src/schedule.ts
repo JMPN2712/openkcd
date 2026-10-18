@@ -1,17 +1,18 @@
 // NPC daily schedules: which activity a soul is doing at a given time (from
 // the soul table's baked activity_N/time_N columns) and where that puts them
 // (bed, work area, home area or spawn point, via the NPC entity's links).
-// Walking between places and the activity behaviours themselves (behaviour
-// trees) come later; this only answers "where is this NPC at 14:30?".
+// At the start of each activity the NPC walks there in a straight line from
+// the previous activity's place (no pathfinding yet). The activity behaviours
+// themselves (behaviour trees) come later.
 
 import type { ScheduleItem } from "./character.ts";
 import type { EntityInfo, NpcEntity } from "./levelEntities.ts";
 
-export type Pose = "stand" | "sleep";
+export type Pose = "stand" | "sleep" | "walk";
 
 export interface Placement {
   activity: string;
-  /** what the position came from: "bed" | "work" | "home" | "spawn" */
+  /** what the position came from: "bed" | "work" | "home" | "spawn", or "→ work" etc. while walking there */
   where: string;
   pos: [number, number, number];
   /** quaternion w, x, y, z */
@@ -100,6 +101,9 @@ function linked(npc: NpcEntity, ents: Map<number, EntityInfo>, test: (name: stri
   return undefined;
 }
 
+/** Real seconds per game minute: KCD's clock runs at 15× real time. */
+export const REAL_SECONDS_PER_GAME_MINUTE = 4;
+
 /** Per-level schedule state: entity index plus each NPC's bed. */
 export class Schedules {
   private ents: Map<number, EntityInfo>;
@@ -131,6 +135,29 @@ export class Schedules {
 
   get bedCount(): number {
     return this.beds.size;
+  }
+
+  /**
+   * Where the NPC is at `minute`, including the walk between places: the current activity
+   * starts with a straight walk from the previous one's place at `speed` m/s (real time).
+   */
+  at(npc: NpcEntity, schedule: ScheduleItem[], minute: number, groundAt: (x: number, y: number) => number, speed: number): Placement {
+    const to = this.place(npc, schedule, minute, groundAt);
+    if (schedule.length < 2) return to;
+    let i = schedule.length - 1;
+    schedule.forEach((s, k) => { if (s.start <= minute) i = k; });
+    const elapsed = (minute - schedule[i].start + 1440) % 1440;
+    const from = this.place(npc, schedule, (schedule[i].start + 1439) % 1440, groundAt);
+    const dx = to.pos[0] - from.pos[0], dy = to.pos[1] - from.pos[1];
+    const dist = Math.hypot(dx, dy);
+    const walkMinutes = dist / speed / REAL_SECONDS_PER_GAME_MINUTE;
+    if (dist < 1 || elapsed >= walkMinutes) return to;
+    const t = elapsed / walkMinutes;
+    const x = from.pos[0] + dx * t, y = from.pos[1] + dy * t;
+    // ends may be indoors above the terrain; in between, keep to the ground
+    const z = Math.max(groundAt(x, y), from.pos[2] + (to.pos[2] - from.pos[2]) * t);
+    // the walk clip moves along model +Y: turn +Y to the walking direction
+    return { activity: to.activity, where: `→ ${to.where}`, pos: [x, y, z], rot: yawQuat(Math.atan2(dy, dx) - Math.PI / 2), pose: "walk" };
   }
 
   place(npc: NpcEntity, schedule: ScheduleItem[], minute: number, groundAt: (x: number, y: number) => number): Placement {

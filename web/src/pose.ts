@@ -116,13 +116,17 @@ export class Animator {
     return [m[12], m[13], m[14]];
   }
 
-  /** Evaluate the clip at `frame` (null clip = bind pose). Bones are ordered parents-first in CompiledBones. */
-  evaluate(clip: Clip | null, frame: number): Float32Array[] {
+  /**
+   * Evaluate the clip at `frame` (null clip = bind pose). Bones are ordered parents-first in CompiledBones.
+   * `inPlace` drops the root bone's animated translation (locomotion clips carry their forward
+   * motion there: relaxed_walk_medium moves the root 3.03 m over its 65 frames).
+   */
+  evaluate(clip: Clip | null, frame: number, inPlace = false): Float32Array[] {
     const bones = this.skeleton.bones;
     for (let i = 0; i < bones.length; i++) {
       const track = clip?.tracks.get(bones[i].controllerId);
       const rot = (track && sampleRot(track, frame)) ?? this.localRot[i];
-      const pos = (track && samplePos(track, frame)) ?? this.localPos[i];
+      const pos = (inPlace && bones[i].parent < 0 ? null : track && samplePos(track, frame)) ?? this.localPos[i];
       const local = quatPosMatrix(rot, pos);
       const p = bones[i].parent;
       this.world[i] = p >= 0 ? multiply(this.world[p], local) : local;

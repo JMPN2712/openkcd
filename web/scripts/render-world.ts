@@ -160,9 +160,9 @@ for (const [i, v] of list.entries()) {
   if (npcWorld) {
     const npcs = await npcWorld.near(cam.pos, 120, 40, minute);
     npcR.setModels(npcItems(npcs));
-    animateNpcs(npcs, animTime, (k, m) => npcR.setPalette(k, m), (k) => npcR.paletteSize(k));
+    animateNpcs(npcs, npcWorld, minute, animTime, npcR);
     npcR.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
-    console.log(`  NPCs drawn: ${npcs.length} (${npcs.slice(0, 6).map((n) => `${n.entity.name} ${n.placement.activity}@${n.placement.where}`).join(", ")}${npcs.length > 6 ? ", …" : ""}); idle clip ${npcs[0]?.clip ? "ok" : "missing"}`);
+    console.log(`  NPCs drawn: ${npcs.length} (${npcs.slice(0, 6).map((n) => `${n.entity.name} ${n.placement.activity}@${n.placement.where}`).join(", ")}${npcs.length > 6 ? ", …" : ""}); ${npcs.filter((n) => n.placement.pose === "walk").length} walking`);
   }
   models.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
   water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);

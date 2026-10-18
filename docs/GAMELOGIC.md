@@ -138,8 +138,20 @@ phase. Test: `web/scripts/test-npcs.ts`.
     half do), else a stable pseudo-random point.
 
   Rataje at 03:00: 577 in bed, 204 at work (night shifts). At 12:00: 637
-  at work, 188 at home. No walking yet: NPCs jump when their activity
-  changes.
+  at work, 188 at home.
+- **Walking.** Each activity starts with a walk from the previous
+  activity's place:
+  - straight line, no pathfinding yet, so NPCs can pass through walls;
+  - speed taken from the walk clip's root motion: `relaxed_walk_medium`
+    moves its root 3.03 m in 65 frames, 1.40 m/s for men and 1.29 m/s for
+    women;
+  - game time runs at 15× real time (4 real seconds per game minute);
+  - the clip plays in place (root translation dropped) while the entity
+    moves, facing the direction of travel.
+
+  At 08:05, 49 of Rataje's NPCs are on their way to work. Placement is
+  recomputed every frame. The NPC set is re-streamed only when NPCs enter
+  or leave the 40 nearest within 120 m.
 
 ## What this means for the port
 
