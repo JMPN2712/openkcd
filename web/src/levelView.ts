@@ -7,6 +7,7 @@ import { TerrainRenderer, type FlyCamera } from "./terrainRenderer.ts";
 import type { PakSource } from "./paks.ts";
 import { parseLevelObjects, type LevelObjects } from "./levelObjects.ts";
 import { parseCover, type Cover } from "./cover.ts";
+import { setGpuBlockCompression } from "./model.ts";
 import { ModelRenderer } from "./renderer.ts";
 import { WaterRenderer } from "./waterRenderer.ts";
 import { buildWorldScene, lodItems, newWorldCaches, selectLods, type WorldScene } from "./world.ts";
@@ -118,6 +119,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter) throw new Error("No WebGPU adapter.");
     device = await adapter.requestDevice({ requiredFeatures: adapter.features.has("texture-compression-bc") ? ["texture-compression-bc"] : [] });
+    setGpuBlockCompression(device.features.has("texture-compression-bc"));
   } catch (err) {
     host.replaceChildren(el("p", "error", (err as Error).message));
     return;

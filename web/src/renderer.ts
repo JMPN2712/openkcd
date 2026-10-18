@@ -199,6 +199,22 @@ export class ModelRenderer {
 
   private upload(chain: MipChain): GPUTexture {
     const top = chain.levels[0];
+    if (chain.bc) {
+      // raw BCn blocks: the GPU decodes them (sizes rounded up to whole 4×4 blocks for small mips)
+      const format = (/^(bc1|bc2|bc3|bc7)-rgba-unorm$/.test(chain.bc.format) ? `${chain.bc.format}-srgb` : chain.bc.format) as GPUTextureFormat;
+      const t = this.device.createTexture({
+        size: [Math.ceil(top.w / 4) * 4, Math.ceil(top.h / 4) * 4],
+        mipLevelCount: chain.levels.length,
+        format,
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+      });
+      chain.levels.forEach((l, i) => {
+        const bw = Math.ceil(l.w / 4), bh = Math.ceil(l.h / 4);
+        this.device.queue.writeTexture({ texture: t, mipLevel: i }, l.data as Uint8Array<ArrayBuffer>, { bytesPerRow: bw * chain.bc!.blockBytes, rowsPerImage: bh }, [bw * 4, bh * 4]);
+      });
+      this.owned.push(t);
+      return t;
+    }
     // diffuse maps are colour data: sample as sRGB even if the DDS says UNORM
     const t = this.device.createTexture({
       size: [top.w, top.h],

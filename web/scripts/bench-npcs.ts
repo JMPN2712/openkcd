@@ -21,8 +21,12 @@ import { createAiWorld } from "../src/btWorld.ts";
 import { NpcAi } from "../src/npcAi.ts";
 import { AnimLibrary } from "../src/mannequin.ts";
 import { LuaHost } from "../src/luaHost.ts";
+import { setGpuBlockCompression } from "../src/model.ts";
 
-const root = process.argv[2] ?? join(homedir(), "kcd1");
+// as in the browser with texture-compression-bc: keep BC blocks instead of decoding on the CPU
+setGpuBlockCompression(!process.argv.includes("--decode"));
+
+const root = process.argv.slice(2).find((a) => !a.startsWith("--")) ?? join(homedir(), "kcd1");
 const T = () => performance.now();
 const lap = (label: string, t0: number) => console.log(`${label.padEnd(44)} ${(T() - t0).toFixed(0).padStart(6)} ms`);
 

@@ -102,6 +102,7 @@ export class Vfs {
   }
 
   async read(hit: VfsHit, limit?: number): Promise<Uint8Array> {
-    return readEntry(await this.blob(hit.pak), hit.entry, limit);
+    // asset reads skip the CRC check (the pak tests verify the files)
+    return readEntry(await this.blob(hit.pak), hit.entry, limit, false);
   }
 }

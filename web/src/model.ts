@@ -3,7 +3,7 @@
 import { parseCgf, type Cgf } from "./cgf.ts";
 import { parseSkeleton, type Skeleton } from "./skeleton.ts";
 import { parseMtl, mtlPath, textureFile, type Material } from "./mtl.ts";
-import { decodeMip, openTexture } from "./texture.ts";
+import { decodeMip, mipData, openTexture } from "./texture.ts";
 import { mipDims } from "./dds.ts";
 import type { Vfs, VfsHit } from "./vfs.ts";
 
@@ -13,9 +13,20 @@ export const MTL_RE = /\.mtl$/;
 export interface MipChain {
   stem: string;
   srgb: boolean;
-  /** RGBA8 levels, largest first */
-  levels: { w: number; h: number; data: Uint8ClampedArray }[];
+  /** RGBA8 levels, largest first (or raw BC blocks when `bc` is set) */
+  levels: { w: number; h: number; data: Uint8ClampedArray | Uint8Array }[];
+  /** raw block-compressed levels: the WebGPU format family (e.g. "bc1-rgba-unorm") and bytes per 4×4 block */
+  bc?: { format: string; blockBytes: number };
 }
+
+/** Raw BC upload (no CPU decode) when the GPU supports texture-compression-bc: set by the renderer's owner. */
+let gpuBc = false;
+export function setGpuBlockCompression(on: boolean): void {
+  gpuBc = on;
+}
+
+/** DDS format name → WebGPU block format (sRGB variants are chosen at upload). */
+const BC_FORMATS: Record<string, string> = { BC1: "bc1-rgba-unorm", BC2: "bc2-rgba-unorm", BC3: "bc3-rgba-unorm", BC7: "bc7-rgba-unorm" };
 
 export interface LoadedModel {
   path: string;
@@ -39,6 +50,15 @@ export async function loadMipChain(vfs: Vfs, stem: string, maxDim: number): Prom
   let level = t.firstLevel;
   while (level < t.header.mipCount - 1 && Math.max(...mipDims(t.header, level)) > maxDim) level++;
   const levels: MipChain["levels"] = [];
+  const bcFormat = BC_FORMATS[t.header.format.name];
+  if (gpuBc && bcFormat && !t.attached) {
+    // the GPU decodes BCn itself: keep the blocks (4–8× smaller than RGBA, no CPU decode)
+    for (let l = level; l < t.header.mipCount; l++) {
+      const [w, h] = mipDims(t.header, l);
+      levels.push({ w, h, data: await mipData(vfs, t, l) });
+    }
+    return { stem, srgb: t.header.srgb, levels, bc: { format: bcFormat, blockBytes: t.header.format.bytes } };
+  }
   for (let l = level; l < t.header.mipCount; l++) {
     const { w, h, pixels } = await decodeMip(vfs, t, l);
     if (pixels.kind !== "ldr") throw new Error("HDR textures are not used as diffuse maps");

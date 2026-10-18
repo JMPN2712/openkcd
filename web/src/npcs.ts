@@ -145,14 +145,20 @@ export class NpcWorld {
     const db = await (this.db ??= CharacterDb.load(this.vfs));
     const souls = new Map(db.souls.map((s) => [s.name, s]));
     const candidates = await this.select(center, radius, max, minute);
+    // start the character loads up front, four at a time, so file reads and decoding overlap
+    const missing = candidates.filter(({ e }) => !this.chars.has(e.id));
+    let started = 0, done = 0;
+    const startNext = (): Promise<void> | undefined => {
+      const c = missing[started++];
+      if (!c) return undefined;
+      const p = loadCharacter(this.vfs, db.soul(souls.get(c.e.name)!.id), { maxTextureDim: 256 }).catch(() => null);
+      this.chars.set(c.e.id, p);
+      return p.then(() => { onStatus?.(`Assembling NPCs ${++done}/${missing.length}`); return startNext(); });
+    };
+    await Promise.all([startNext(), startNext(), startNext(), startNext()]);
     const out: WorldNpc[] = [];
-    for (const [k, { e, p: placement }] of candidates.entries()) {
-      let p = this.chars.get(e.id);
-      if (!p) {
-        onStatus?.(`Assembling NPC ${k + 1}/${candidates.length}: ${e.name}`);
-        p = loadCharacter(this.vfs, db.soul(souls.get(e.name)!.id), { maxTextureDim: 256 }).catch(() => null);
-        this.chars.set(e.id, p);
-      }
+    for (const { e, p: placement } of candidates) {
+      const p = this.chars.get(e.id)!;
       const character = await p;
       if (!character?.parts.length) continue;
       const rig = await this.rig(character.spec.skeleton, e.female);

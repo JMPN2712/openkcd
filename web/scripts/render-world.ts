@@ -27,6 +27,7 @@ import { LuaHost } from "../src/luaHost.ts";
 import { createRequire } from "node:module";
 import { NpcWorld, npcItems, animateNpcs, updateAi } from "../src/npcs.ts";
 import { TerrainRenderer, type FlyCamera } from "../src/terrainRenderer.ts";
+import { setGpuBlockCompression } from "../src/model.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 import { buildWorldScene, lodItems, newWorldCaches, selectLods } from "../src/world.ts";
 
@@ -118,6 +119,7 @@ const gpu = create([]);
 const adapter = await gpu.requestAdapter();
 if (!adapter) throw new Error("no WebGPU adapter");
 const device = await adapter.requestDevice({ requiredFeatures: adapter.features.has("texture-compression-bc") ? ["texture-compression-bc"] : [] });
+setGpuBlockCompression(device.features.has("texture-compression-bc"));
 device.addEventListener("uncapturederror", (e) => console.log("GPU ERROR:", (e as GPUUncapturedErrorEvent).error.message));
 const terrainR = new TerrainRenderer(device, "rgba8unorm", terrain, cover);
 console.log(`terrain colour: ${terrainR.coverMode}`);

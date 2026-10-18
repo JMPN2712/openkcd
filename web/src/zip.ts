@@ -109,16 +109,17 @@ async function dataStart(blob: Blob, e: PakEntry): Promise<number> {
 
 /**
  * Read an entry's uncompressed bytes. With `limit`, stops after that many
- * output bytes (for previews) and skips the CRC check.
+ * output bytes (for previews) and skips the CRC check; `verify = false` skips
+ * it too (bulk asset reads at run time, where it cost ~15% of loading).
  */
-export async function readEntry(blob: Blob, e: PakEntry, limit?: number): Promise<Uint8Array> {
+export async function readEntry(blob: Blob, e: PakEntry, limit?: number, verify = true): Promise<Uint8Array> {
   if (e.flags & 1) throw new Error("encrypted entries are not supported");
   const start = await dataStart(blob, e);
   const want = limit === undefined ? e.usize : Math.min(limit, e.usize);
 
   if (e.method === 0) {
     const out = new Uint8Array(await blob.slice(start, start + want).arrayBuffer());
-    if (limit === undefined) checkCrc(out, e);
+    if (limit === undefined && verify) checkCrc(out, e);
     return out;
   }
   if (e.method !== 8) throw new Error(`unsupported compression method ${e.method}`);
@@ -136,7 +137,7 @@ export async function readEntry(blob: Blob, e: PakEntry, limit?: number): Promis
   }
   await reader.cancel().catch(() => {});
   if (got < want) throw new Error(`truncated data in ${e.name}: ${got}/${want} bytes`);
-  if (limit === undefined) checkCrc(out, e);
+  if (limit === undefined && verify) checkCrc(out, e);
   return out;
 }
 
