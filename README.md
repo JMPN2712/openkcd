@@ -11,6 +11,7 @@ extracted assets or derived data are ever committed.
 - `docs/RECON.md`: Phase 1 survey of the install (binaries, middleware, pak format quirks).
 - `docs/CHARACTERS.md`: how NPCs are assembled from the database, .cdf files and clothing materials.
 - `docs/ANIMATION.md`: animation clip format, quaternion decoding, skinning.
+- `docs/LEVELS.md`: level files and the compiled terrain heightmap.
 - `tools/`: read-only Python recon scripts (`pe_info.py`, `pak_survey.py`, `pak_report.py`, `pakread.py`).
 - `web/`: browser pak reader (Vite + TypeScript, no backend, no runtime dependencies).
 
@@ -29,6 +30,7 @@ node scripts/test-cgf.ts                         # parse every model, check indi
 node scripts/test-characters.ts                  # resolve every NPC soul/preset from the database, load a sample
 node scripts/test-anim.ts                        # parse all 8,233 .caf clips (~2 min)
 node scripts/test-dba.ts                         # decode all 5,155 .dba animation databases (~1.5 min)
+node scripts/test-terrain.ts /tmp/rataje.png      # decode the Rataje heightmap, check seams, write a hillshade
 node scripts/render-model.ts /tmp/r soul:henry --anim <clip.caf | db.dba#anim.caf> --frames 0,20,40   # animated headless renders
 node scripts/render-model.ts /tmp/renders objects/vehicles/cart/cart_01.cga   # headless WebGPU render to PNG (Dawn)
 ```
