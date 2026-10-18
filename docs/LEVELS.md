@@ -276,3 +276,27 @@ Decoded by `web/src/navmesh.ts` and `tools/navmesh.py`.
 - **`level.pak/ubernav.tmm`** (796 KB): a packed graph, probably the coarse
   long-distance travel network. Not decoded.
 
+## Editor layers
+
+- **Layer field.** Brush records carry the editor layer id at +28 (u32;
+  0 = no layer). In Rataje, 169,731 brushes have no layer and 43,148 sit in
+  611 layers.
+- **Layer names.** `leveldata.xml` lists 1,969 layers
+  (`<Layer Name="re_executioner_state0{guid}" Id="1269" Specs="-1"/>`).
+  Layered entities live in `layers/*.xml` (not loaded); mission entities
+  have no layer.
+- **States coexist in the file:**
+  - alternative versions of places (`re_executioner_state0` / `_state1`,
+    `hall_state0` / `hall_state2` / `hall_state12`, burned or intact farms,
+    with matching uber-LODs);
+  - cutscene set dressing (`cin_*`), event obstacles and barriers.
+
+  The game switches them through quest-driven "layer profiles"
+  (`streamLayerProfile` in Libs/Haste; `layer_profile` columns in the New
+  Homes tables), but the profile definitions are not in the shipped XML or
+  Lua.
+- **The viewer's default** (`web/src/levelLayers.ts`): hide `cin_*`,
+  `event*`, `test*`, `_dream*` and barrier layers, plus state N > 0 when the
+  same prefix has a state 0. That is 652 layers.
+- **Before this,** drawing every layer together doubled buildings up and
+  left set dressing floating in Rattay.

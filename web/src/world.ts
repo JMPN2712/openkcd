@@ -136,6 +136,8 @@ export async function buildWorldScene(
     maxModels?: number; maxTextureDim?: number; onStatus?: (s: string) => void; caches?: WorldCaches;
     /** entity props (src/levelEntities.ts propEntities) */
     props?: EntityInfo[];
+    /** brush layers not drawn (levelLayers.ts defaultHiddenLayers) */
+    hiddenLayers?: Set<number>;
   } = {},
 ): Promise<WorldScene> {
   const groups = new Map<string, Group>();
@@ -158,6 +160,7 @@ export async function buildWorldScene(
   for (let i = 0; i < objects.brushName.length; i++) {
     const m = objects.brushMatrix.subarray(i * 16, i * 16 + 16);
     if (Math.abs(m[12] - center[0]) > radius || Math.abs(m[13] - center[1]) > radius) continue;
+    if (opts.hiddenLayers?.has(objects.brushLayer[i])) continue;
     const name = terrain.brushNames[objects.brushName[i]];
     if (name && !HIDDEN_BRUSH.test(name)) add(resolveLevelPath(name), "brush", m, m[12], m[13]);
   }

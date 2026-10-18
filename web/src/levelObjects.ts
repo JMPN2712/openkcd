@@ -28,6 +28,8 @@ export interface LevelObjects {
   /** brushes: name index, material index, world matrix (column-major 4×4) */
   brushName: Uint32Array;
   brushMaterial: Int32Array;
+  /** u32 @+28: the editor layer id (0 = not in a switchable layer); see docs/LEVELS.md */
+  brushLayer: Uint32Array;
   brushMatrix: Float32Array; // 16 per brush
   /** vegetation: group index, position, scale, angle (radians) */
   vegGroup: Uint16Array;
@@ -104,6 +106,7 @@ export function parseLevelObjects(bytes: Uint8Array, offset: number): LevelObjec
   const out: LevelObjects = {
     brushName: new Uint32Array(nBrush),
     brushMaterial: new Int32Array(nBrush),
+    brushLayer: new Uint32Array(nBrush),
     brushMatrix: new Float32Array(nBrush * 16),
     vegGroup: new Uint16Array(nVeg),
     vegPos: new Float32Array(nVeg * 3),
@@ -120,6 +123,7 @@ export function parseLevelObjects(bytes: Uint8Array, offset: number): LevelObjec
     if (t === 1) {
       out.brushName[bi] = dv.getUint16(p + 36, true);
       out.brushMaterial[bi] = dv.getInt32(p + 92, true);
+      out.brushLayer[bi] = dv.getUint32(p + 28, true);
       const m = out.brushMatrix.subarray(bi * 16, bi * 16 + 16);
       for (let r = 0; r < 3; r++) for (let c = 0; c < 4; c++) m[c * 4 + r] = dv.getFloat32(p + 40 + (r * 4 + c) * 4, true);
       m[15] = 1;

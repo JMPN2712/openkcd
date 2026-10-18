@@ -17,6 +17,7 @@ import { Schedules } from "./schedule.ts";
 import { NavMesh } from "./navmesh.ts";
 import { NpcWorld, npcItems, animateNpcs, updateAi, type WorldNpc } from "./npcs.ts";
 import { createAiWorld } from "./btWorld.ts";
+import { parseLayerNames, defaultHiddenLayers } from "./levelLayers.ts";
 import { NpcAi } from "./npcAi.ts";
 import { AnimLibrary } from "./mannequin.ts";
 import { LuaHost } from "./luaHost.ts";
@@ -32,7 +33,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 }
 
 let stopActive: (() => void) | null = null;
-const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules; props: EntityInfo[]; ents: Map<number, EntityInfo> }>>();
+const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules; props: EntityInfo[]; ents: Map<number, EntityInfo>; hiddenLayers: Set<number> }>>();
 const vfsCache = new Map<string, Promise<Vfs>>();
 const worldCaches = newWorldCaches();
 const STREAM_RADIUS = 500; // metres of objects around the camera
@@ -58,6 +59,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let schedules: Schedules;
   let props: EntityInfo[];
   let ents: Map<number, EntityInfo>;
+  let hiddenLayers: Set<number>;
   let vfs: Vfs;
   let device: GPUDevice;
   try {
@@ -80,6 +82,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         const mission = entries.find((e) => e.name.toLowerCase() === "objects_mission0.xml");
         status.textContent = "Reading entities (NPCs, furniture)…";
         const xml = mission ? new TextDecoder().decode(await readEntry(blob, mission, undefined, false)) : "";
+        // editor layers: alternative states and cutscene sets hidden at game start (levelLayers.ts)
+        const ld = entries.find((e) => e.name.toLowerCase() === "leveldata.xml");
+        const hiddenLayers = ld ? defaultHiddenLayers(parseLayerNames(new TextDecoder().decode(await readEntry(blob, ld, undefined, false)))) : new Set<number>();
         const npcEntities = parseNpcEntities(xml);
         const ents = parseEntityIndex(xml);
         const schedules = new Schedules(npcEntities, ents);
@@ -97,12 +102,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
             console.warn("navmesh:", err);
           }
         }
-        return { terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents };
+        return { terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers };
       })();
       p.catch(() => terrainCache.delete(pakPath));
       terrainCache.set(pakPath, p);
     }
-    ({ terrain, objects, cover, npcEntities, schedules, props, ents } = await p);
+    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers } = await p);
     let v = vfsCache.get(pakPath);
     if (!v) {
       // assets from every non-level pak, with this level's own files (brush/*.cgf, …) on top
@@ -236,18 +241,24 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     streaming = true;
     const at: [number, number] = [cam.pos[0], cam.pos[1]];
     try {
-      const next = await buildWorldScene(vfs, terrain, objects, at, STREAM_RADIUS, {
-        maxModels: 1500, maxTextureDim: 256, caches: worldCaches, props,
-        onStatus: (s) => { sceneInfo = s; },
-      });
-      if (stopped) return;
-      const items = lodItems(next);
-      models.setModels(items);
-      lodOut = items.map((it) => new Float32Array(it.capacity * 16));
-      lodCounts = items.map(() => 0);
-      scene = next;
-      streamedAt = at;
-      sceneInfo = `${next.models.length} models, ${next.instances.toLocaleString()} instances within ${STREAM_RADIUS} m${next.modelsSkipped ? ` (${next.modelsSkipped} more models over the cap)` : ""}`;
+      // two passes: the nearest models first (shown quickly), then everything in range; the second
+      // pass reuses the first one's loaded models from the cache (the old 1,500-model cap left
+      // dense towns like Rattay missing floors and walls, with their props floating)
+      for (const maxModels of [800, 20000]) {
+        const next = await buildWorldScene(vfs, terrain, objects, at, STREAM_RADIUS, {
+          maxModels, maxTextureDim: 256, caches: worldCaches, props, hiddenLayers,
+          onStatus: (s) => { sceneInfo = s; },
+        });
+        if (stopped) return;
+        const items = lodItems(next);
+        models.setModels(items);
+        lodOut = items.map((it) => new Float32Array(it.capacity * 16));
+        lodCounts = items.map(() => 0);
+        scene = next;
+        streamedAt = at;
+        sceneInfo = `${next.models.length} models, ${next.instances.toLocaleString()} instances within ${STREAM_RADIUS} m${next.modelsSkipped ? ` (loading ${next.modelsSkipped} more…)` : ""}`;
+        if (!next.modelsSkipped) break;
+      }
     } catch (err) {
       sceneInfo = `objects: ${(err as Error).message}`;
     } finally {

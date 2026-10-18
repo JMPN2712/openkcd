@@ -21,6 +21,7 @@ import { parseNpcEntities, parseEntityIndex, propEntities } from "../src/levelEn
 import { Schedules } from "../src/schedule.ts";
 import { NavMesh } from "../src/navmesh.ts";
 import { createAiWorld } from "../src/btWorld.ts";
+import { parseLayerNames, defaultHiddenLayers } from "../src/levelLayers.ts";
 import { NpcAi } from "../src/npcAi.ts";
 import { AnimLibrary } from "../src/mannequin.ts";
 import { LuaHost } from "../src/luaHost.ts";
@@ -36,6 +37,8 @@ const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
 const root = opt("--root", join(homedir(), "kcd1"));
 const radius = Number(opt("--radius", "500"));
+const maxModels = Number(opt("--max-models", "20000"));
+const allLayers = args.includes("--all-layers") ? (args.splice(args.indexOf("--all-layers"), 1), true) : false; // draw every editor layer
 const withNpcs = args.includes("--npcs") ? (args.splice(args.indexOf("--npcs"), 1), true) : false;
 const animTime = Number(opt("--time", "0")); // seconds into the NPC idles
 const noProps = args.includes("--no-props") ? (args.splice(args.indexOf("--no-props"), 1), true) : false;
@@ -81,6 +84,9 @@ const cover = ctc && !args.includes("--no-cover") ? parseCover(await readEntry(l
 let list = views;
 const missionXml = new TextDecoder().decode(await readEntry(levelBlob, levelEntries.find((e) => e.name.toLowerCase() === "objects_mission0.xml")!));
 const entIndex = parseEntityIndex(missionXml);
+const levelData = levelEntries.find((e) => e.name.toLowerCase() === "leveldata.xml");
+const hiddenLayers = allLayers || !levelData ? new Set<number>() : defaultHiddenLayers(parseLayerNames(new TextDecoder().decode(await readEntry(levelBlob, levelData))));
+console.log(`editor layers hidden at game start: ${hiddenLayers.size}`);
 const props = noProps ? [] : propEntities(entIndex);
 console.log(`entity props: ${props.length}`);
 let npcEnts: ReturnType<typeof parseNpcEntities> = [];
@@ -198,7 +204,7 @@ for (const [i, v] of list.entries()) {
   if (!z) z = heightAt(terrain, x, y) + 1.8;
   const cam: FlyCamera = { pos: [x, y, z], yaw: (yaw * Math.PI) / 180, pitch: (pitch * Math.PI) / 180 };
   const t0 = performance.now();
-  const scene = await buildWorldScene(vfs, terrain, objects, [x, y], radius, { maxModels: 1500, caches, props });
+  const scene = await buildWorldScene(vfs, terrain, objects, [x, y], radius, { maxModels, caches, props, hiddenLayers });
   const items = lodItems(scene);
   models.setModels(items);
   const out = items.map((it) => new Float32Array(it.capacity * 16));
