@@ -50,7 +50,14 @@ export async function loadMipChain(vfs: Vfs, stem: string, maxDim: number): Prom
 export async function loadModel(
   vfs: Vfs,
   path: string,
-  opts: { maxTextureDim?: number; onStatus?: (s: string) => void; /** .mtl path overriding the model's own (CDF / database) */ material?: string | null } = {},
+  opts: {
+    maxTextureDim?: number;
+    onStatus?: (s: string) => void;
+    /** .mtl path overriding the model's own (CDF / database) */
+    material?: string | null;
+    /** shared across models (e.g. a model's LODs reuse its textures); keyed by texture and size */
+    textureCache?: Map<string, Promise<MipChain | null>>;
+  } = {},
 ): Promise<LoadedModel> {
   const notes: string[] = [];
   // The fast-load paks hold stub copies without geometry: take the highest-
@@ -100,7 +107,7 @@ export async function loadModel(
     }
   }
 
-  const cache = new Map<string, Promise<MipChain | null>>();
+  const cache = opts.textureCache ?? new Map<string, Promise<MipChain | null>>();
   const slot = async (slotName: string, maxDim: number): Promise<(MipChain | null)[]> => {
     const out: (MipChain | null)[] = [];
     for (const [i, m] of materials.entries()) {
@@ -110,14 +117,15 @@ export async function loadModel(
         continue;
       }
       const stem = textureFile(file);
-      let p = cache.get(stem);
+      const key = `${stem}@${maxDim}`;
+      let p = cache.get(key);
       if (!p) {
         opts.onStatus?.(`Decoding ${stem.slice(stem.lastIndexOf("/") + 1)}…`);
         p = loadMipChain(vfs, stem, maxDim).catch((err) => {
           notes.push(`material ${i} (${m.name}) ${slotName} ${stem}: ${(err as Error).message}`);
           return null;
         });
-        cache.set(stem, p);
+        cache.set(key, p);
       }
       out.push(await p);
     }

@@ -17,13 +17,13 @@ import { parseTerrain, heightAt } from "../src/terrain.ts";
 import { parseLevelObjects } from "../src/levelObjects.ts";
 import { TerrainRenderer, type FlyCamera } from "../src/terrainRenderer.ts";
 import { ModelRenderer } from "../src/renderer.ts";
-import { buildWorldScene } from "../src/world.ts";
+import { buildWorldScene, lodItems, newWorldCaches, selectLods } from "../src/world.ts";
 
 Object.assign(globalThis, globals);
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
 const root = opt("--root", join(homedir(), "kcd1"));
-const radius = Number(opt("--radius", "250"));
+const radius = Number(opt("--radius", "500"));
 const [outDir, ...views] = args;
 if (!outDir) throw new Error("usage: render-world.ts OUT_DIR [x,y,z,yaw,pitch ...]");
 const W = 1280, H = 720;
@@ -90,15 +90,22 @@ function png(w: number, h: number, rgba: Uint8Array): Buffer {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ih), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
 }
 
-const cache = new Map();
+const caches = newWorldCaches();
 for (const [i, v] of list.entries()) {
   let [x, y, z, yaw, pitch] = v.split(",").map(Number);
   if (!z) z = heightAt(terrain, x, y) + 1.8;
   const cam: FlyCamera = { pos: [x, y, z], yaw: (yaw * Math.PI) / 180, pitch: (pitch * Math.PI) / 180 };
   const t0 = performance.now();
-  const scene = await buildWorldScene(vfs, terrain, objects, [x + Math.cos(cam.yaw) * radius * 0.5, y + Math.sin(cam.yaw) * radius * 0.5], radius, { maxModels: 500, cache });
-  models.setModels(scene.items);
+  const scene = await buildWorldScene(vfs, terrain, objects, [x, y], radius, { maxModels: 1500, caches });
+  const items = lodItems(scene);
+  models.setModels(items);
+  const out = items.map((it) => new Float32Array(it.capacity * 16));
+  const counts = items.map(() => 0);
   const vp = TerrainRenderer.viewProj(cam, W / H);
+  for (const mode of ["lod", "full"] as const) {
+  // "full": every instance at LOD 0, no culling, for comparison
+  const st = selectLods(scene, cam.pos, vp, out, counts, mode === "lod" ? {} : { lodScale: 1e9, distanceScale: 1e9 });
+  counts.forEach((n, k) => models.setInstances(k, out[k], n));
   terrainR.prepare(cam, vp);
   models.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
   const enc = device.createCommandEncoder();
@@ -116,10 +123,10 @@ for (const [i, v] of list.entries()) {
   const rgba = new Uint8Array(W * H * 4);
   for (let r = 0; r < H; r++) rgba.set(m.subarray(r * stride, r * stride + W * 4), r * W * 4);
   readback.unmap();
-  const file = join(outDir, `world_${i}.png`);
+  const file = join(outDir, `world_${i}_${mode}.png`);
   await writeFile(file, png(W, H, rgba));
-  console.log(`${file}: camera ${[x, y, z].map((n) => n.toFixed(0))}; ${scene.modelsLoaded} models (${scene.modelsSkipped} over cap, ${scene.failed.size} failed), ${scene.instances} instances, ${(models.stats.triangles / 1e6).toFixed(1)}M model triangles, ${((performance.now() - t0) / 1000).toFixed(1)}s`);
-  for (const [k, e] of [...scene.failed].slice(0, 4)) console.log(`   failed ${k}: ${e}`);
+  console.log(`${file}: ${scene.models.length} models (${scene.modelsSkipped} over cap, ${scene.failed.size} failed), ${scene.instances} instances; drawn ${st.drawn} (per LOD ${st.perLod.map((n) => n ?? 0).join("/")}), culled distance ${st.culledDistance} frustum ${st.culledFrustum}; ${(models.stats.triangles / 1e6).toFixed(2)}M model triangles, ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+  }
 }
 models.destroy();
 terrainR.destroy();

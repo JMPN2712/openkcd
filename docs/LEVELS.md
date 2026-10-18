@@ -144,8 +144,27 @@ elder bushes and branch piles.
 - **Streaming.** The browser view streams objects within 250 m, up to 400
   models with 256 px textures, and rebuilds after the camera moves 120 m.
   Headless: `web/scripts/render-world.ts`.
+- **LODs and culling** (`selectLods`, run per frame on the CPU, about 3 ms for 85k instances):
+  - **LOD files:** models ship `x_lod1.cgf`, `x_lod2.cgf`, …. Only 3,154 of
+    the 11,457 models used in Rataje have them, but those cover 89.6% of the
+    instances: trees, bushes and rocks. A beech goes
+    3,613 → 1,757 → 317 → 11 triangles.
+  - **Node offsets:** LOD files keep the artist-scene node offset (the LODs
+    sat side by side, e.g. `bridge_wooden_01_lod1` +5.4 m,
+    `talmberk_dam_nobridge_lod2` +25.6 m). The loader re-anchors each LOD's
+    root onto the base model's root; without that, bridges and dams vanish at
+    distance.
+  - **Billboard LODs:** the last LOD of trees is a ~10-triangle card for the
+    engine's sprite path. It renders nearly invisible with a generic shader,
+    so LOD chains stop before any LOD under 32 triangles.
+  - **Rules:** LOD k from k × (8r + 10) m; culled beyond (80 + 70r) m or
+    outside the frustum, where r is the instance's bounding radius. Half
+    those distances emptied aerial views of hedgerows and forest.
+  - **Result:** in three test views (aerial, village edge, riverbank) model
+    triangles drop from 17–21M to 0.9–2.5M, and the images match the
+    full-detail renders closely (`render-world.ts` writes both).
+  - **Streaming:** now covers 500 m, up to 1,500 models.
 - **Known gaps:**
-  - no model LODs (`_lod1…` files), so a village view is 10–25M triangles;
   - no water, roads or decals (octree types 7/9/11 not decoded);
   - road and terrain-blend meshes render as flat dark patches;
   - no terrain colour (`cover.ctc`), no shadows.

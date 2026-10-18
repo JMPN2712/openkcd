@@ -7,10 +7,9 @@ import { TerrainRenderer, type FlyCamera } from "./terrainRenderer.ts";
 import type { PakSource } from "./paks.ts";
 import { parseLevelObjects, type LevelObjects } from "./levelObjects.ts";
 import { ModelRenderer } from "./renderer.ts";
-import { buildWorldScene } from "./world.ts";
+import { buildWorldScene, lodItems, newWorldCaches, selectLods, type WorldScene } from "./world.ts";
 import { Vfs } from "./vfs.ts";
 import { ASSET_RE } from "./assets.ts";
-import type { LoadedModel } from "./model.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -22,9 +21,9 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 let stopActive: (() => void) | null = null;
 const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects }>>();
 const vfsCache = new Map<string, Promise<Vfs>>();
-const modelCache = new Map<string, Promise<LoadedModel | null>>();
-const STREAM_RADIUS = 250; // metres of objects around the camera
-const STREAM_STEP = 120; // rebuild after moving this far
+const worldCaches = newWorldCaches();
+const STREAM_RADIUS = 500; // metres of objects around the camera
+const STREAM_STEP = 150; // rebuild after moving this far
 
 export async function showLevel(host: HTMLElement, paks: PakSource[], level: string): Promise<void> {
   stopActive?.();
@@ -99,19 +98,27 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let streamedAt: [number, number] | null = null;
   let streaming = false;
   let sceneInfo = "objects: loading…";
+  let scene: WorldScene | null = null;
+  let lodOut: Float32Array[] = [];
+  let lodCounts: number[] = [];
+  let lodInfo = "";
   const stream = async () => {
     if (streaming) return;
     streaming = true;
     const at: [number, number] = [cam.pos[0], cam.pos[1]];
     try {
-      const scene = await buildWorldScene(vfs, terrain, objects, at, STREAM_RADIUS, {
-        maxModels: 400, maxTextureDim: 256, cache: modelCache,
+      const next = await buildWorldScene(vfs, terrain, objects, at, STREAM_RADIUS, {
+        maxModels: 1500, maxTextureDim: 256, caches: worldCaches,
         onStatus: (s) => { sceneInfo = s; },
       });
       if (stopped) return;
-      models.setModels(scene.items);
+      const items = lodItems(next);
+      models.setModels(items);
+      lodOut = items.map((it) => new Float32Array(it.capacity * 16));
+      lodCounts = items.map(() => 0);
+      scene = next;
       streamedAt = at;
-      sceneInfo = `objects within ${STREAM_RADIUS} m: ${scene.modelsLoaded} models, ${scene.instances.toLocaleString()} instances${scene.modelsSkipped ? ` (${scene.modelsSkipped} more models over the cap)` : ""}`;
+      sceneInfo = `${next.models.length} models, ${next.instances.toLocaleString()} instances within ${STREAM_RADIUS} m${next.modelsSkipped ? ` (${next.modelsSkipped} more models over the cap)` : ""}`;
     } catch (err) {
       sceneInfo = `objects: ${(err as Error).message}`;
     } finally {
@@ -175,6 +182,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const vp = TerrainRenderer.viewProj(cam, target.width / target.height);
     renderer.prepare(cam, vp);
     models.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
+    if (scene) {
+      const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts);
+      lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
+      lodInfo = ` · drawing ${st.drawn.toLocaleString()} (LOD ${st.perLod.map((n) => n ?? 0).join("/")}), culled ${st.culledDistance.toLocaleString()} by distance, ${st.culledFrustum.toLocaleString()} off-screen`;
+    }
     const enc = device.createCommandEncoder();
     const pass = enc.beginRenderPass({
       colorAttachments: [{ view: msaa!.createView(), resolveTarget: target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.70, a: 1 }, loadOp: "clear", storeOp: "discard" }],
@@ -184,7 +196,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     models.draw(pass);
     pass.end();
     device.queue.submit([enc.finish()]);
-    hud.textContent = `x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(1)}M triangles · ${sceneInfo}`;
+    hud.textContent = `x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${sceneInfo}${lodInfo}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();

@@ -144,6 +144,7 @@ export class ModelRenderer {
   private white: GPUTexture;
   private draws: DrawItem[] = [];
   private palettes: ({ buf: GPUBuffer; count: number } | null)[] = [];
+  private itemInst: { buf: GPUBuffer; count: number; capacity: number }[] = [];
   private identityPalette: GPUBuffer;
   private identityInstance: GPUBuffer;
   private owned: (GPUBuffer | GPUTexture)[] = [];
@@ -220,7 +221,15 @@ export class ModelRenderer {
    * depth layer. Models with bone weights and a skeleton get a skinning
    * palette (initially the bind pose), updated with setPalette(index, …).
    */
-  setModels(items: { model: LoadedModel; transform?: Float32Array; layer?: number; instances?: Float32Array }[]): void {
+  setModels(items: {
+    model: LoadedModel;
+    transform?: Float32Array;
+    layer?: number;
+    /** fixed per-instance world matrices (16 floats each) */
+    instances?: Float32Array;
+    /** or: room for this many instances, filled per frame with setInstances() */
+    capacity?: number;
+  }[]): void {
     this.clear();
     this.palettes = items.map(({ model }) => {
       const n = model.skeleton && model.cgf.meshes.some((m) => m.boneIds) ? model.skeleton.bones.length : 0;
@@ -235,13 +244,19 @@ export class ModelRenderer {
     const textures = new Map<MipChain, GPUTexture>();
     const min: Vec3 = [Infinity, Infinity, Infinity];
     const max: Vec3 = [-Infinity, -Infinity, -Infinity];
-    const instBufs = items.map(({ instances }) => {
-      if (!instances?.length) return { buf: this.identityInstance, count: 1 };
+    this.itemInst = items.map(({ instances, capacity }) => {
+      if (capacity !== undefined) {
+        const buf = this.device.createBuffer({ size: Math.max(1, capacity) * 64, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+        this.owned.push(buf);
+        return { buf, count: 0, capacity };
+      }
+      if (!instances?.length) return { buf: this.identityInstance, count: 1, capacity: 1 };
       const buf = this.device.createBuffer({ size: instances.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
       this.device.queue.writeBuffer(buf, 0, instances);
       this.owned.push(buf);
-      return { buf, count: instances.length / 16 };
+      return { buf, count: instances.length / 16, capacity: instances.length / 16 };
     });
+    const instBufs = this.itemInst;
     for (const [itemIndex, { model, transform: partTm, layer = 0 }] of items.entries())
     for (const mesh of model.cgf.meshes) {
       const meshTm = partTm ? multiply(partTm, mesh.transform) : mesh.transform;
@@ -316,7 +331,6 @@ export class ModelRenderer {
         });
         const ib2 = instBufs[itemIndex];
         this.draws.push({ vb, ib, firstIndex: s.firstIndex, count: s.numIndices, bind, item: itemIndex, ubuf, meshTm: mesh.transform, inst: ib2.buf, instCount: ib2.count });
-        this.stats.triangles += (s.numIndices / 3) * ib2.count;
       }
     }
     this.stats.draws = this.draws.length;
@@ -384,13 +398,26 @@ export class ModelRenderer {
   draw(pass: GPURenderPassEncoder): void {
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.camBind);
+    let tris = 0;
     for (const d of this.draws) {
+      const n = this.itemInst[d.item]?.count ?? d.instCount;
+      if (!n) continue;
       pass.setVertexBuffer(0, d.vb);
       pass.setVertexBuffer(1, d.inst);
       pass.setIndexBuffer(d.ib, "uint32");
       pass.setBindGroup(1, d.bind);
-      pass.drawIndexed(d.count, d.instCount, d.firstIndex);
+      pass.drawIndexed(d.count, n, d.firstIndex);
+      tris += (d.count / 3) * n;
     }
+    this.stats.triangles = tris;
+  }
+
+  /** Upload `count` instance matrices for an item created with `capacity`. */
+  setInstances(index: number, matrices: Float32Array, count: number): void {
+    const it = this.itemInst[index];
+    if (!it) return;
+    it.count = Math.min(count, it.capacity);
+    if (it.count) this.device.queue.writeBuffer(it.buf, 0, matrices.subarray(0, it.count * 16));
   }
 
   /** Number of bones in item `index`'s palette (0 = not skinned). */
@@ -416,6 +443,7 @@ export class ModelRenderer {
     this.owned = [];
     this.draws = [];
     this.palettes = [];
+    this.itemInst = [];
     this.stats = { meshes: 0, triangles: 0, vertices: 0, draws: 0, textured: 0 };
   }
 
