@@ -242,6 +242,10 @@ export function evaluate(e: Expr, scope: Scope, host: Host): Value | undefined {
 // ---- nodes ----
 
 const leaf = (f: () => Status): Task => ({ tick: f, abort: () => {} });
+
+/** Loop iterations per tick (While / Loop) and ForEach elements per tick; the rest continue next tick. */
+const LOOP_BUDGET = 4;
+const FOREACH_BUDGET = 16;
 const constant = (s: Status): Task => leaf(() => s);
 
 /** A child slot that (re)creates its task when started again. */
@@ -394,7 +398,9 @@ export class Runner {
         let iterations = 0;
         return {
           tick: () => {
-            for (let guard = 0; guard < 1000; guard++) {
+            // a few iterations per tick: a body that finishes at once (a failed search, …) would
+            // otherwise spin every frame; the loop yields and continues next tick
+            for (let guard = 0; guard < LOOP_BUDGET; guard++) {
               if (!body?.active) {
                 const go = n.tag === "While" ? truthy(c.eval("condition", false)) : (() => { const cnt = num(c.eval("count", -1)); return cnt < 0 || iterations < cnt; })();
                 if (!go) { iterations = 0; return n.tag === "While" && flag("doFail") ? "failure" : "success"; }
@@ -417,7 +423,7 @@ export class Runner {
         let idx: number | null = null;
         return {
           tick: () => {
-            for (let guard = 0; guard < 10000; guard++) {
+            for (let guard = 0; guard < FOREACH_BUDGET; guard++) {
               const arr = scope.get(arrName);
               const list = Array.isArray(arr) ? arr : [];
               if (idx === null) idx = num(c.eval("startIndex", 0));

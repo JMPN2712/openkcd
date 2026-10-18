@@ -145,6 +145,7 @@ export class ModelRenderer {
   private draws: DrawItem[] = [];
   private palettes: ({ buf: GPUBuffer; count: number } | null)[] = [];
   private itemInst: { buf: GPUBuffer; count: number; capacity: number }[] = [];
+  private drawsByItem: Map<number, DrawItem[]> | null = null;
   private identityPalette: GPUBuffer;
   private identityInstance: GPUBuffer;
   private owned: (GPUBuffer | GPUTexture)[] = [];
@@ -313,7 +314,10 @@ export class ModelRenderer {
         u.set(meshTm, 0);
         const col = mat?.diffuse ?? [0.8, 0.8, 0.8];
         u.set([col[0], col[1], col[2], 1], 16);
-        u.set([...(mat?.specular ?? [0.04, 0.04, 0.04]), 0], 20);
+        // Hair-shader Specular (often 1,1,1) drives a subtle anisotropic sheen in the engine; as plain
+        // reflectance it turned lashes and hair partings white, so scale it to a dielectric level
+        const specular = mat?.specular ?? [0.04, 0.04, 0.04];
+        u.set([...(/^hair$/i.test(mat?.shader ?? "") ? specular.map((v) => v * 0.05) : specular), 0], 20);
         u.set([mat?.alphaTest ?? 0, chain ? 1 : 0, specChain ? 1 : 0, layer], 24);
         const cz = mat ? colorizeOf(mat) : null;
         if (cz) {
@@ -430,9 +434,16 @@ export class ModelRenderer {
 
   /** Replace item `index`'s extra transform (e.g. a prop following an animated bone). */
   setItemTransform(index: number, transform: Float32Array): void {
-    for (const d of this.draws) {
-      if (d.item === index) this.device.queue.writeBuffer(d.ubuf, 0, multiply(transform, d.meshTm));
+    // draws of this item (indexed lazily: scanning every draw per item was O(items × draws) per frame)
+    if (!this.drawsByItem) {
+      this.drawsByItem = new Map();
+      for (const d of this.draws) {
+        const list = this.drawsByItem.get(d.item);
+        if (list) list.push(d);
+        else this.drawsByItem.set(d.item, [d]);
+      }
     }
+    for (const d of this.drawsByItem.get(index) ?? []) this.device.queue.writeBuffer(d.ubuf, 0, multiply(transform, d.meshTm));
   }
 
   /** Upload skinning matrices (column-major 4×4 per bone) for item `index`. */
@@ -445,6 +456,7 @@ export class ModelRenderer {
     for (const o of this.owned) o.destroy();
     this.owned = [];
     this.draws = [];
+    this.drawsByItem = null;
     this.palettes = [];
     this.itemInst = [];
     this.stats = { meshes: 0, triangles: 0, vertices: 0, draws: 0, textured: 0 };

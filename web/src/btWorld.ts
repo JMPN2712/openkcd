@@ -419,6 +419,8 @@ export class AiWorld {
   /** Links between entities as the trees change them: AddLink / RemoveLink edit the level's graph. */
   private hasLink(from: number | null, to: number | null, tag: string): boolean {
     const t = tag.toLowerCase();
+    // any source: the target's incoming links (reverse index) instead of scanning every entity
+    if (from === null && to !== null) return (this.parents.get(to) ?? []).some((l) => l.name.split(",").some((x) => x.replace(/\[.*$/, "").trim().toLowerCase() === t));
     const sources = from !== null ? [from] : [...this.o.ents.keys()];
     for (const f of sources) for (const l of this.o.ents.get(f)?.links ?? []) {
       if ((to === null || l.target === to) && l.name.split(",").some((x) => x.replace(/\[.*$/, "").trim().toLowerCase() === t)) return true;

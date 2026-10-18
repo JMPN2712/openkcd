@@ -82,14 +82,45 @@ function samplePos(t: Track, frame: number): Vec3 | null {
   return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
 }
 
+/** 4×4 column-major multiply into `out` (out may not alias a or b). */
+function mulInto(out: Float32Array, o: number, a: Float32Array, ao: number, b: Float32Array, bo: number): void {
+  for (let c = 0; c < 4; c++) {
+    const b0 = b[bo + c * 4], b1 = b[bo + c * 4 + 1], b2 = b[bo + c * 4 + 2], b3 = b[bo + c * 4 + 3];
+    out[o + c * 4] = a[ao] * b0 + a[ao + 4] * b1 + a[ao + 8] * b2 + a[ao + 12] * b3;
+    out[o + c * 4 + 1] = a[ao + 1] * b0 + a[ao + 5] * b1 + a[ao + 9] * b2 + a[ao + 13] * b3;
+    out[o + c * 4 + 2] = a[ao + 2] * b0 + a[ao + 6] * b1 + a[ao + 10] * b2 + a[ao + 14] * b3;
+    out[o + c * 4 + 3] = a[ao + 3] * b0 + a[ao + 7] * b1 + a[ao + 11] * b2 + a[ao + 15] * b3;
+  }
+}
+
+/** Find the key interval for `t`: writes the two key indices and the blend factor into `out`. */
+function keyInto(times: Float32Array, t: number, out: Float64Array): void {
+  const n = times.length;
+  if (n === 1 || t <= times[0]) { out[0] = 0; out[1] = 0; out[2] = 0; return; }
+  if (t >= times[n - 1]) { out[0] = n - 1; out[1] = n - 1; out[2] = 0; return; }
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (times[mid] <= t) lo = mid; else hi = mid;
+  }
+  out[0] = lo; out[1] = hi; out[2] = (t - times[lo]) / (times[hi] - times[lo]);
+}
+
 export class Animator {
   readonly skeleton: Skeleton;
   private localRot: Quat[] = [];
   private localPos: Vec3[] = [];
-  /** model-space bone matrices of the last evaluate() */
+  private parents: Int32Array;
+  /** model-space bone matrices of the last evaluate() (updated in place) */
   readonly world: Float32Array[];
   /** the pelvis/hips: the root's child with the largest subtree (cameras follow it) */
   readonly centerBone: number;
+  /** per clip: each bone's track (resolved once) */
+  private trackCache = new WeakMap<Clip, (Track | undefined)[]>();
+  /** per mesh skeleton: joint index and inverse bind pose of each of its bones, and an output buffer */
+  private plans = new Map<Skeleton, { joints: Int32Array; invBind: Float32Array; out: Float32Array }>();
+  private local = new Float32Array(16);
+  private key = new Float64Array(3);
 
   constructor(skeleton: Skeleton) {
     this.skeleton = skeleton;
@@ -99,7 +130,9 @@ export class Animator {
       this.localRot.push(matToQuat(local));
       this.localPos.push([local[12], local[13], local[14]]);
     }
-    this.world = skeleton.bones.map((b) => b.bindPose);
+    this.parents = Int32Array.from(skeleton.bones, (b) => b.parent);
+    // copies: evaluate() writes into these
+    this.world = skeleton.bones.map((b) => new Float32Array(b.bindPose));
     const size = new Array<number>(skeleton.bones.length).fill(1);
     for (let i = skeleton.bones.length - 1; i > 0; i--) {
       const p = skeleton.bones[i].parent;
@@ -116,20 +149,56 @@ export class Animator {
     return [m[12], m[13], m[14]];
   }
 
+  private tracksOf(clip: Clip): (Track | undefined)[] {
+    let t = this.trackCache.get(clip);
+    if (!t) {
+      t = this.skeleton.bones.map((b) => clip.tracks.get(b.controllerId));
+      this.trackCache.set(clip, t);
+    }
+    return t;
+  }
+
   /**
    * Evaluate the clip at `frame` (null clip = bind pose). Bones are ordered parents-first in CompiledBones.
    * `inPlace` drops the root bone's animated translation (locomotion clips carry their forward
    * motion there: relaxed_walk_medium moves the root 3.03 m over its 65 frames).
+   * Allocation-free: samples into scratch storage and updates `world` in place.
    */
   evaluate(clip: Clip | null, frame: number, inPlace = false): Float32Array[] {
-    const bones = this.skeleton.bones;
-    for (let i = 0; i < bones.length; i++) {
-      const track = clip?.tracks.get(bones[i].controllerId);
-      const rot = (track && sampleRot(track, frame)) ?? this.localRot[i];
-      const pos = (inPlace && bones[i].parent < 0 ? null : track && samplePos(track, frame)) ?? this.localPos[i];
-      const local = quatPosMatrix(rot, pos);
-      const p = bones[i].parent;
-      this.world[i] = p >= 0 ? multiply(this.world[p], local) : local;
+    const n = this.skeleton.bones.length;
+    const tracks = clip ? this.tracksOf(clip) : null;
+    const m = this.local, k = this.key;
+    for (let i = 0; i < n; i++) {
+      const track = tracks?.[i];
+      // rotation (x, y, z, w)
+      let x: number, y: number, z: number, w: number;
+      if (track && track.rotations.length) {
+        keyInto(track.rotTimes, frame, k);
+        const a = track.rotations[k[0]], b = track.rotations[k[1]], f = k[2];
+        const sgn = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3] < 0 ? -1 : 1;
+        x = a[0] + (b[0] * sgn - a[0]) * f; y = a[1] + (b[1] * sgn - a[1]) * f;
+        z = a[2] + (b[2] * sgn - a[2]) * f; w = a[3] + (b[3] * sgn - a[3]) * f;
+      } else {
+        [x, y, z, w] = this.localRot[i];
+      }
+      const l = Math.sqrt(x * x + y * y + z * z + w * w) || 1;
+      x /= l; y /= l; z /= l; w /= l;
+      // translation
+      let px: number, py: number, pz: number;
+      if (track && track.positions.length && !(inPlace && this.parents[i] < 0)) {
+        keyInto(track.posTimes, frame, k);
+        const a = track.positions[k[0]], b = track.positions[k[1]], f = k[2];
+        px = a[0] + (b[0] - a[0]) * f; py = a[1] + (b[1] - a[1]) * f; pz = a[2] + (b[2] - a[2]) * f;
+      } else {
+        [px, py, pz] = this.localPos[i];
+      }
+      m[0] = 1 - 2 * (y * y + z * z); m[1] = 2 * (x * y + z * w); m[2] = 2 * (x * z - y * w); m[3] = 0;
+      m[4] = 2 * (x * y - z * w); m[5] = 1 - 2 * (x * x + z * z); m[6] = 2 * (y * z + x * w); m[7] = 0;
+      m[8] = 2 * (x * z + y * w); m[9] = 2 * (y * z - x * w); m[10] = 1 - 2 * (x * x + y * y); m[11] = 0;
+      m[12] = px; m[13] = py; m[14] = pz; m[15] = 1;
+      const p = this.parents[i];
+      if (p >= 0) mulInto(this.world[i], 0, this.world[p], 0, m, 0);
+      else this.world[i].set(m);
     }
     return this.world;
   }
@@ -137,14 +206,26 @@ export class Animator {
   /**
    * Skinning palette for a mesh weighted to `meshBones` (its own bone list):
    * palette[i] = world(bone) × inverse(bind pose of the mesh's bone i).
+   * Returns a buffer reused by later calls for the same mesh skeleton (upload it right away).
    */
   palette(meshBones: Skeleton): Float32Array {
-    const out = new Float32Array(meshBones.bones.length * 16);
-    meshBones.bones.forEach((b, i) => {
-      const j = this.skeleton.byName.get(b.name.toLowerCase());
-      const m = j === undefined ? new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]) : multiply(this.world[j], invertRigid(b.bindPose));
-      out.set(m, i * 16);
-    });
+    let plan = this.plans.get(meshBones);
+    if (!plan) {
+      const nb = meshBones.bones.length;
+      const joints = new Int32Array(nb), invBind = new Float32Array(nb * 16);
+      meshBones.bones.forEach((b, i) => {
+        joints[i] = this.skeleton.byName.get(b.name.toLowerCase()) ?? -1;
+        invBind.set(invertRigid(b.bindPose), i * 16);
+      });
+      plan = { joints, invBind, out: new Float32Array(nb * 16) };
+      this.plans.set(meshBones, plan);
+    }
+    const { joints, invBind, out } = plan;
+    for (let i = 0; i < joints.length; i++) {
+      const j = joints[i];
+      if (j < 0) { out.fill(0, i * 16, i * 16 + 16); out[i * 16] = out[i * 16 + 5] = out[i * 16 + 10] = out[i * 16 + 15] = 1; }
+      else mulInto(out, i * 16, this.world[j], 0, invBind, i * 16);
+    }
     return out;
   }
 }
