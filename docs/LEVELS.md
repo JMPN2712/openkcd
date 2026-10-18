@@ -250,26 +250,29 @@ elder bushes and branch piles.
   (`LODArea` entities are small interior volumes). The viewer draws
   uber-LODs only when the camera is more than 300 m from their bounds.
 
-## Navigation data (not decoded yet)
+## Navigation data
 
-- **`recast.pak`** (per level) holds `recast/rdnavmesh_<name>_1.{hdr,nav}`
+Decoded by `web/src/navmesh.ts` and `tools/navmesh.py`.
+
+- **Format:** Detour's tile format, version 14, with Warhorse's vertex
+  packing. In world coordinates, z is up.
+- **`recast.pak`** (per level) holds `recast/rdnavmesh_<name>.{hdr,nav}`
   pairs:
-  - `rdnavmesh_1` is the whole level: a 95 MB `.nav` with a 1.1 MB `.hdr`;
-  - plus small layers for quest and event states (burnt farms, the
-    New Homes buildings, …) and `groupcombinations_*.xml`.
-- **`.hdr`:** a tile index of 5 × i32 per tile: (tile x, tile y, byte
-  offset into `.nav`, ?=1, byte size). Offsets chain (60 + 152 = 212,
-  212 + 156 = 368, …).
-- **`.nav`:** a 56-byte prefix (100, 2.0f, 200, 4, 400, 3, 1.0f,
-  cell 0.08f ×3, 4, 22, 4, 45.0f, 1), then tiles. Each tile starts with an
-  i32 (1) and the Detour magic `DNAV`, but **version 14** (stock Detour
-  uses 7), then i32 x, y, layer, userId and counts (e.g. 89, 176, 168, 162,
-  1420, …). These are followed by floats: walkable height 1.76, radius
-  0.32, climb 0.32, 0.8, the tile bounds (16 m tiles, e.g. 3408,1424,127.76
-  → 3424,1440,129.6) and 12.5.
-- **Tile body:** not the stock Detour layout. In a 3,580-byte tile the
-  counts would need far more space as plain floats and 32-byte polygons,
-  and no fixed 32-bit split (x/y in 0..200 cells, z) decodes as vertices.
-  It is a Warhorse-modified, bit-packed format.
-- **`level.pak/ubernav.tmm`** (796 KB): a packed graph with unaligned
-  float positions, probably the coarse long-distance travel network.
+  - `rdnavmesh_1` is the whole level;
+  - small layers cover quest and event states (burnt farms, the New Homes
+    buildings, …).
+- **`.nav`:** build settings, a tile count, then 16 m tiles back to back.
+- **Each tile:**
+  - a Detour-style header with bounds;
+  - vertices, mostly packed into one u32 each and quantised over the tile
+    bounds (11/11/10 bits);
+  - polygons of up to 6 vertices, whose neighbour codes are internal
+    neighbours or links across the tile border;
+  - off-mesh connections.
+- **Check** (`web/scripts/test-navmesh.ts`): Rataje has 58,056 tiles,
+  2.52 M polygons and 4.08 M vertices, and all 5.47 M internal neighbour
+  edges are shared in reverse. The parse ends exactly at the end of the
+  95 MB file.
+- **`level.pak/ubernav.tmm`** (796 KB): a packed graph, probably the coarse
+  long-distance travel network. Not decoded.
+
