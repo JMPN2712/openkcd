@@ -1,0 +1,45 @@
+# --- Game files & extracted assets: NEVER commit ---
+*.pak
+*.bin
+*.exe
+*.dll
+*.pdb
+*.dds
+*.dds.*
+*.cgf
+*.cga
+*.chr
+*.skin
+*.caf
+*.dba
+*.fsb
+*.wem
+*.bnk
+*.bik
+*.usm
+*.ogg
+*.mp3
+*.wav
+/kcd1/
+/game/
+/extracted/
+/assets/
+/dump/
+/out-assets/
+
+# --- Node / build ---
+node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+coverage/
+
+# --- Editor / OS ---
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.log
+.env
+.env.*
