@@ -1,5 +1,6 @@
-// CryEngine .mtl (XML) material reader. Uses a tiny tag tokenizer instead of
-// DOMParser so the same code runs in Node tests and the browser.
+// CryEngine .mtl (XML) material reader.
+
+import { parseXml, type XmlNode } from "./xml.ts";
 
 export interface Material {
   name: string;
@@ -12,35 +13,28 @@ export interface Material {
   opacity: number;
   alphaTest: number;
   nodraw: boolean;
+  /** shader feature flags, e.g. "%COLORIZING%NORMAL_MAP" */
+  genMask: string;
+  /** <PublicParams> shader parameters */
+  params: Record<string, string>;
 }
 
-interface XmlNode {
-  tag: string;
-  attrs: Record<string, string>;
-  children: XmlNode[];
+/** KCD colorizing shader (%COLORIZING / %COLORIZING_WITH_MASK) parameters, hue in degrees. */
+export interface Colorize {
+  withMask: boolean;
+  global: [number, number, number]; // hue, saturation, brightness
+  masks: [number, number, number][]; // per mask channel R, G, B
 }
 
-const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
-const unescape = (s: string) => s.replace(/&(amp|lt|gt|quot|apos);/g, (_, e: string) => ENTITIES[e]);
-
-function parseXml(text: string): XmlNode {
-  const root: XmlNode = { tag: "#root", attrs: {}, children: [] };
-  const stack = [root];
-  const tagRe = /<(\/?)([A-Za-z_][\w.:-]*)((?:\s+[\w.:-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g;
-  const attrRe = /([\w.:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
-  for (const m of text.replace(/<!--[\s\S]*?-->/g, "").matchAll(tagRe)) {
-    const [, close, tag, attrText, selfClose] = m;
-    if (close) {
-      if (stack.length > 1) stack.pop();
-      continue;
-    }
-    const attrs: Record<string, string> = {};
-    for (const a of attrText.matchAll(attrRe)) attrs[a[1]] = unescape(a[2] ?? a[3] ?? "");
-    const node: XmlNode = { tag, attrs, children: [] };
-    stack[stack.length - 1].children.push(node);
-    if (!selfClose) stack.push(node);
-  }
-  return root;
+export function colorizeOf(m: Material): Colorize | null {
+  if (!m.genMask.includes("%COLORIZING")) return null;
+  const num = (k: string, d: number) => (m.params[k] === undefined ? d : Number(m.params[k]));
+  const hsb = (pre: string, suf = ""): [number, number, number] => [num(`${pre}Hue${suf}`, 0), num(`${pre}Saturation${suf}`, 1), num(`${pre}Brightness${suf}`, 1)];
+  return {
+    withMask: m.genMask.includes("%COLORIZING_WITH_MASK"),
+    global: hsb("Colorizing"),
+    masks: [hsb("Mask", "1"), hsb("Mask", "2"), hsb("Mask", "3")],
+  };
 }
 
 function toMaterial(n: XmlNode): Material {
@@ -59,7 +53,10 @@ function toMaterial(n: XmlNode): Material {
     specular: [spec[0] ?? 0.04, spec[1] ?? 0.04, spec[2] ?? 0.04],
     opacity: Number(n.attrs.Opacity ?? 1),
     alphaTest: Number(n.attrs.AlphaTest ?? 0),
-    nodraw: /^nodraw$/i.test(shader),
+    // EYE_AO_OVERLAY is a blended shadow shell over the eyeballs; drawn opaque it hides the eyes
+    nodraw: /^nodraw$/i.test(shader) || (n.attrs.StringGenMask ?? "").includes("%EYE_AO_OVERLAY"),
+    genMask: n.attrs.StringGenMask ?? "",
+    params: { ...(n.children.find((c) => c.tag === "PublicParams")?.attrs ?? {}) },
   };
 }
 

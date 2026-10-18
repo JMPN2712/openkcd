@@ -15,6 +15,18 @@ export const CHUNK = {
   MeshPhysicsData: 0x1018,
 } as const;
 
+/** Compiled character chunks (.chr/.skin). */
+export const CHUNK_SKELETON = {
+  CompiledBones: 0x2000,
+  CompiledPhysicalBones: 0x2001,
+  CompiledMorphTargets: 0x2002,
+  CompiledPhysicalProxies: 0x2003,
+  CompiledIntFaces: 0x2004,
+  CompiledIntSkinVertices: 0x2005,
+  CompiledExt2IntMap: 0x2006,
+  BonesBoxes: 0x3004,
+} as const;
+
 export const STREAM = {
   Positions: 0,
   Normals: 1,
@@ -303,3 +315,4 @@ function decodeNormals(normals: Stream | null, tangents: Stream | null, qtangent
   }
   return null;
 }
+

@@ -1,12 +1,29 @@
-// Model preview panel: loads a .cgf/.cga/.skin/.chr with its materials and
-// renders it with WebGPU. Drag to orbit, right-drag / shift-drag to pan,
-// wheel to zoom, double-click to reset.
+// 3D preview panel: renders a scene of one or more models with WebGPU — a
+// single .cgf/.cga/.skin/.chr, or a character assembled from a .cdf or the
+// game database. Drag to orbit, right-drag / shift-drag to pan, wheel to zoom,
+// double-click to reset.
 
 import { loadModel, type LoadedModel } from "./model.ts";
 import { textureFile } from "./mtl.ts";
 import { ModelRenderer, type Camera } from "./renderer.ts";
 import type { TextureContext } from "./textureView.ts";
+import type { Vfs } from "./vfs.ts";
 import { formatCount } from "./format.ts";
+
+export interface ScenePart {
+  model: LoadedModel;
+  /** depth layer (character clothing: outer layers drawn in front) */
+  layer?: number;
+  label?: string;
+}
+
+export interface Scene {
+  title?: string;
+  parts: ScenePart[];
+  notes: string[];
+}
+
+export type SceneLoader = (vfs: Vfs, onStatus: (s: string) => void) => Promise<Scene>;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -35,28 +52,54 @@ function getDevice(): Promise<GPUDevice> {
 }
 
 let generation = 0;
-let active: { renderer: ModelRenderer; stop: () => void } | null = null;
+let active: { stop: () => void } | null = null;
 
-export async function showModel(
-  host: HTMLElement,
-  ctx: TextureContext,
-  path: string,
-  openTexture: (stem: string) => void,
-): Promise<void> {
+/** Show a single model file. */
+export function showModel(host: HTMLElement, ctx: TextureContext, path: string, openTexture: (stem: string) => void): Promise<void> {
+  return showScene(host, ctx, async (vfs, onStatus) => {
+    const model = await loadModel(vfs, path, { onStatus });
+    return { parts: [{ model }], notes: model.notes };
+  }, openTexture);
+}
+
+function materialList(model: LoadedModel, openTexture: (stem: string) => void): HTMLElement {
+  const dl = el("dl", "meta tex-meta");
+  const used = new Set(model.cgf.meshes.flatMap((m) => m.subsets.map((s) => s.matId)));
+  model.materials.forEach((m, i) => {
+    if (!used.has(i)) return;
+    const dd = el("dd");
+    dd.append(`${m.name || "(unnamed)"} · ${m.shader}${m.nodraw ? " (hidden)" : ""}${m.genMask.includes("%COLORIZING") ? " · colorized" : ""}`);
+    for (const slot of ["Diffuse", "Bumpmap", "Specular"]) {
+      const f = m.textures.get(slot);
+      if (!f) continue;
+      const b = el("button", "link", ` ${slot}`);
+      b.type = "button";
+      b.title = f;
+      b.addEventListener("click", () => openTexture(textureFile(f)));
+      dd.append(" ·", b);
+    }
+    dl.append(el("dt", undefined, `Mat ${i}`), dd);
+  });
+  return dl;
+}
+
+export async function showScene(host: HTMLElement, ctx: TextureContext, load: SceneLoader, openTexture: (stem: string) => void): Promise<void> {
   const gen = ++generation;
   active?.stop();
   active = null;
   const status = el("p", "note", "Indexing assets across all archives…");
   host.replaceChildren(status);
+  const onStatus = (s: string) => { if (gen === generation) status.textContent = s; };
 
-  let model: LoadedModel;
+  let scene: Scene;
   let device: GPUDevice;
   try {
-    const vfs = await ctx.vfs(ctx.includeHd, (d, t) => { if (gen === generation) status.textContent = `Indexing assets across all archives… ${d}/${t}`; });
+    const vfs = await ctx.vfs(ctx.includeHd, (d, t) => onStatus(`Indexing assets across all archives… ${d}/${t}`));
     if (gen !== generation) return;
-    status.textContent = "Loading model…";
-    model = await loadModel(vfs, path, { onStatus: (s) => { if (gen === generation) status.textContent = s; } });
+    onStatus("Loading…");
+    scene = await load(vfs, onStatus);
     if (gen !== generation) return;
+    if (!scene.parts.length) throw new Error(`nothing to draw${scene.notes.length ? `: ${scene.notes.join("; ")}` : ""}`);
     device = await getDevice();
   } catch (err) {
     if (gen === generation) host.replaceChildren(el("p", "error", (err as Error).message));
@@ -66,6 +109,7 @@ export async function showModel(
 
   // ---- layout
   host.replaceChildren();
+  if (scene.title) host.append(el("p", "scene-title", scene.title));
   const stage = el("div", "model-stage");
   const canvas = el("canvas", "model-canvas");
   stage.append(canvas);
@@ -97,8 +141,12 @@ export async function showModel(
   let gpuError: string | null = null;
   const onGpuError = (e: Event) => { gpuError = (e as GPUUncapturedErrorEvent).error.message; };
   device.addEventListener("uncapturederror", onGpuError);
-  const untextured = { ...model, diffuse: model.diffuse.map(() => null), specular: model.specular.map(() => null) };
-  renderer.setModel(model);
+  const items = (textured: boolean) =>
+    scene.parts.map(({ model, layer }) => ({
+      model: textured ? model : { ...model, diffuse: model.diffuse.map(() => null), specular: model.specular.map(() => null) },
+      layer,
+    }));
+  renderer.setModels(items(true));
   let cam: Camera = renderer.defaultCamera();
 
   let raf = 0;
@@ -155,40 +203,36 @@ export async function showModel(
   canvas.addEventListener("dblclick", resetView);
   reset.addEventListener("click", resetView);
   flatCb.addEventListener("change", redraw);
-  texCb.addEventListener("change", () => { renderer.setModel(texCb.checked ? model : untextured); redraw(); });
+  texCb.addEventListener("change", () => { renderer.setModels(items(texCb.checked)); redraw(); });
 
   // ---- info
   const st = renderer.stats;
-  const rows: [string, string | HTMLElement][] = [
-    ["Geometry", `${st.meshes} mesh${st.meshes === 1 ? "" : "es"} · ${formatCount(st.triangles)} triangles · ${formatCount(st.vertices)} vertices · ${st.draws} draws`],
-    ["Source", model.hit.pak.path],
-    ["Material", model.mtlPath ?? "none"],
-  ];
   const size = renderer.bboxMax.map((v, i) => (v - renderer.bboxMin[i]).toFixed(2)).join(" × ");
-  rows.push(["Size", `${size} m`]);
-  if (model.cgf.skippedNodes.length) rows.push(["Hidden nodes", model.cgf.skippedNodes.join(", ")]);
-  for (const [k, v] of rows) info.append(el("dt", undefined, k), typeof v === "string" ? el("dd", undefined, v) : v);
-  const used = new Set(model.cgf.meshes.flatMap((m) => m.subsets.map((s) => s.matId)));
-  model.materials.forEach((m, i) => {
-    if (!used.has(i)) return;
-    const dd = el("dd");
-    dd.append(`${m.name || "(unnamed)"} · ${m.shader}${m.nodraw ? " (hidden)" : ""}`);
-    for (const slot of ["Diffuse", "Bumpmap", "Specular"]) {
-      const f = m.textures.get(slot);
-      if (!f) continue;
-      const b = el("button", "link", ` ${slot}`);
-      b.type = "button";
-      b.title = f;
-      b.addEventListener("click", () => openTexture(textureFile(f)));
-      dd.append(" ·", b);
+  const rows: [string, string][] = [
+    ["Geometry", `${st.meshes} mesh${st.meshes === 1 ? "" : "es"} · ${formatCount(st.triangles)} triangles · ${formatCount(st.vertices)} vertices · ${st.draws} draws`],
+    ["Size", `${size} m`],
+  ];
+  if (scene.parts.length === 1) {
+    const m = scene.parts[0].model;
+    rows.push(["Source", m.hit.pak.path], ["Material", m.mtlPath ?? "none"]);
+    if (m.cgf.skippedNodes.length) rows.push(["Hidden nodes", m.cgf.skippedNodes.join(", ")]);
+  }
+  for (const [k, v] of rows) info.append(el("dt", undefined, k), el("dd", undefined, v));
+  if (scene.parts.length === 1) {
+    host.append(materialList(scene.parts[0].model, openTexture));
+  } else {
+    for (const p of scene.parts) {
+      const d = el("details", "part");
+      const sum = el("summary");
+      sum.append(el("span", undefined, p.label ?? p.model.path), el("span", "dim", ` ${p.model.path.slice(p.model.path.lastIndexOf("/") + 1)}`));
+      d.append(sum, el("p", "dim", `${p.model.hit.pak.path} · ${p.model.mtlPath ?? "no material"}`), materialList(p.model, openTexture));
+      host.append(d);
     }
-    info.append(el("dt", undefined, `Mat ${i}`), dd);
-  });
+  }
   host.append(status);
-  status.textContent = model.notes.join(" · ");
+  status.textContent = scene.notes.join(" · ");
 
   active = {
-    renderer,
     stop: () => {
       ro.disconnect();
       device.removeEventListener("uncapturederror", onGpuError);

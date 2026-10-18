@@ -10,11 +10,15 @@
 // authored normals, and a front_facing flip makes those z-fight visibly.
 
 import type { LoadedModel, MipChain } from "./model.ts";
+import { colorizeOf } from "./mtl.ts";
 import { lookAt, multiply, perspective, transformPoint, type Vec3 } from "./mat4.ts";
 
 const SHADER = /* wgsl */ `
 struct Camera { viewProj: mat4x4f, eye: vec4f, light: vec4f }; // light.w = 1 for flat shading
-struct Draw { model: mat4x4f, color: vec4f, spec: vec4f, params: vec4f }; // params: x alpha test, y diffuse map, z specular map
+// params: x alpha test, y diffuse map, z specular map, w layer
+// colorize: KCD %COLORIZING shader, x/y/z = hue (deg) / saturation / brightness, w = 0 off, 1 global, 2 with mask
+//   (the "Specular" slot then holds the region mask: R/G/B select mask1/2/3)
+struct Draw { model: mat4x4f, color: vec4f, spec: vec4f, params: vec4f, colorize: vec4f, mask1: vec4f, mask2: vec4f, mask3: vec4f };
 @group(0) @binding(0) var<uniform> cam: Camera;
 @group(1) @binding(0) var<uniform> drw: Draw;
 @group(1) @binding(1) var tex: texture_2d<f32>;
@@ -32,16 +36,52 @@ struct VOut {
   var o: VOut;
   let w = drw.model * vec4f(p, 1.0);
   o.pos = cam.viewProj * w;
+  // layered character clothing shares the body's surface: pull outer layers slightly towards the camera
+  o.pos.z = o.pos.z - drw.params.w * 0.00004 * o.pos.w;
   o.n = (drw.model * vec4f(n, 0.0)).xyz;
   o.uv = uv;
   o.wpos = w.xyz;
   return o;
 }
 
+fn rgb2hsv(c: vec3f) -> vec3f {
+  let mx = max(c.r, max(c.g, c.b));
+  let mn = min(c.r, min(c.g, c.b));
+  let d = mx - mn;
+  var h = 0.0;
+  if (d > 1e-5) {
+    if (mx == c.r) { h = (c.g - c.b) / d; } else if (mx == c.g) { h = 2.0 + (c.b - c.r) / d; } else { h = 4.0 + (c.r - c.g) / d; }
+    h = fract(h / 6.0);
+  }
+  return vec3f(h, select(0.0, d / mx, mx > 1e-5), mx);
+}
+
+fn hsv2rgb(c: vec3f) -> vec3f {
+  let k = vec3f(0.0, 4.0, 2.0);
+  let p = clamp(abs(fract(vec3f(c.x) + k / 6.0) * 6.0 - 3.0) - 1.0, vec3f(0.0), vec3f(1.0));
+  return c.z * mix(vec3f(1.0), p, c.y);
+}
+
+// hue shift in degrees, saturation and brightness multipliers, applied in gamma space
+fn adjust(lin: vec3f, hsb: vec3f) -> vec3f {
+  var hsv = rgb2hsv(pow(lin, vec3f(1.0 / 2.2)));
+  hsv = vec3f(fract(hsv.x + hsb.x / 360.0), clamp(hsv.y * hsb.y, 0.0, 1.0), hsv.z * hsb.z);
+  return pow(max(hsv2rgb(hsv), vec3f(0.0)), vec3f(2.2));
+}
+
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let t = textureSample(tex, samp, i.uv);
   let st = textureSample(specTex, samp, i.uv);
   var base = drw.color * select(vec4f(1.0), t, drw.params.y > 0.5);
+  var specMap = select(vec3f(1.0), st.rgb, drw.params.z > 0.5);
+  if (drw.colorize.w > 1.5) {
+    let m = clamp(st.rgb, vec3f(0.0), vec3f(1.0));
+    let rest = max(0.0, 1.0 - m.r - m.g - m.b);
+    let c = base.rgb * rest + adjust(base.rgb, drw.mask1.xyz) * m.r + adjust(base.rgb, drw.mask2.xyz) * m.g + adjust(base.rgb, drw.mask3.xyz) * m.b;
+    base = vec4f(c, base.a);
+    specMap = vec3f(0.04);
+  }
+  if (drw.colorize.w > 0.5) { base = vec4f(adjust(base.rgb, drw.colorize.xyz), base.a); }
   if (drw.params.x > 0.0 && base.a < drw.params.x) { discard; }
   var n = normalize(i.n);
   if (cam.light.w > 0.5) { n = normalize(cross(dpdx(i.wpos), dpdy(i.wpos))); }
@@ -51,7 +91,7 @@ struct VOut {
   let ndl = max(dot(n, l), 0.0);
   let hemi = mix(0.12, 0.35, n.z * 0.5 + 0.5);
   // Blinn-Phong stand-in for the PBR specular colour, plus a flat "environment" term so metals read as metal
-  let specCol = drw.spec.rgb * select(vec3f(1.0), st.rgb, drw.params.z > 0.5);
+  let specCol = drw.spec.rgb * specMap;
   let spec = specCol * (pow(max(dot(n, normalize(l + v)), 0.0), 48.0) * ndl * 2.0 + hemi * 1.2);
   let lin = base.rgb * (hemi + 0.9 * ndl) + spec;
   // target is a non-sRGB format: encode manually
@@ -142,11 +182,18 @@ export class ModelRenderer {
   }
 
   setModel(model: LoadedModel): void {
+    this.setModels([{ model }]);
+  }
+
+  /** Several models drawn together, each with an optional extra transform and depth layer. */
+  setModels(items: { model: LoadedModel; transform?: Float32Array; layer?: number }[]): void {
     this.clear();
     const textures = new Map<MipChain, GPUTexture>();
     const min: Vec3 = [Infinity, Infinity, Infinity];
     const max: Vec3 = [-Infinity, -Infinity, -Infinity];
+    for (const { model, transform: partTm, layer = 0 } of items)
     for (const mesh of model.cgf.meshes) {
+      const meshTm = partTm ? multiply(partTm, mesh.transform) : mesh.transform;
       const nv = mesh.positions.length / 3;
       const verts = new Float32Array(nv * 8);
       for (let i = 0; i < nv; i++) {
@@ -154,7 +201,7 @@ export class ModelRenderer {
         if (mesh.normals) verts.set(mesh.normals.subarray(i * 3, i * 3 + 3), i * 8 + 3);
         else verts[i * 8 + 5] = 1;
         if (mesh.uvs) verts.set(mesh.uvs.subarray(i * 2, i * 2 + 2), i * 8 + 6);
-        const p = transformPoint(mesh.transform, [mesh.positions[i * 3], mesh.positions[i * 3 + 1], mesh.positions[i * 3 + 2]]);
+        const p = transformPoint(meshTm, [mesh.positions[i * 3], mesh.positions[i * 3 + 1], mesh.positions[i * 3 + 2]]);
         for (let c = 0; c < 3; c++) { min[c] = Math.min(min[c], p[c]); max[c] = Math.max(max[c], p[c]); }
       }
       const vb = this.device.createBuffer({ size: verts.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
@@ -179,13 +226,18 @@ export class ModelRenderer {
         const gpuTex = gpu(chain);
         const specTex = gpu(specChain);
         if (chain) this.stats.textured++;
-        const ubuf = this.device.createBuffer({ size: 112, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        const u = new Float32Array(28);
-        u.set(mesh.transform, 0);
+        const ubuf = this.device.createBuffer({ size: 176, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        const u = new Float32Array(44);
+        u.set(meshTm, 0);
         const col = mat?.diffuse ?? [0.8, 0.8, 0.8];
         u.set([col[0], col[1], col[2], 1], 16);
         u.set([...(mat?.specular ?? [0.04, 0.04, 0.04]), 0], 20);
-        u.set([mat?.alphaTest ?? 0, chain ? 1 : 0, specChain ? 1 : 0, 0], 24);
+        u.set([mat?.alphaTest ?? 0, chain ? 1 : 0, specChain ? 1 : 0, layer], 24);
+        const cz = mat ? colorizeOf(mat) : null;
+        if (cz) {
+          u.set([...cz.global, cz.withMask && specChain ? 2 : 1], 28);
+          cz.masks.forEach((m, k) => u.set([...m, 0], 32 + k * 4));
+        }
         this.device.queue.writeBuffer(ubuf, 0, u);
         this.owned.push(ubuf);
         const bind = this.device.createBindGroup({

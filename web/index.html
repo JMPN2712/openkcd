@@ -12,7 +12,10 @@
       <span id="status">Pick your game root (the folder with <code>Data</code> and <code>bin</code>). Files are read locally; nothing is uploaded.</span>
     </header>
     <main>
-      <section id="paks" aria-label="Archives"></section>
+      <section id="paks" aria-label="Archives">
+        <button id="characters" type="button" class="side-action" disabled>Characters (game database)</button>
+        <div id="pak-groups"></div>
+      </section>
       <section id="browser" aria-label="Archive contents">
         <div id="browser-head">
           <span id="pak-title">No archive selected</span>

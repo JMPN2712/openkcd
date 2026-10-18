@@ -6,6 +6,7 @@ import { formatSize } from "./format.ts";
 import { textureStem } from "./texture.ts";
 import { showTexture, type TextureContext } from "./textureView.ts";
 import { showModel } from "./modelView.ts";
+import { showCdf } from "./characterView.ts";
 import { MODEL_RE } from "./model.ts";
 
 const TEXT_EXTS = new Set([
@@ -116,6 +117,14 @@ export async function showPreview(host: HTMLElement, blob: Blob, e: PakEntry, ho
   host.append(head);
   const body = el("div", "preview-body", "Loading…");
   host.append(body);
+
+  if (hooks && e.name.toLowerCase().endsWith(".cdf")) {
+    body.replaceChildren();
+    const view = el("div");
+    body.append(view);
+    await showCdf(view, hooks.textures, e.name.toLowerCase(), hooks.openTexture);
+    return;
+  }
 
   if (hooks && MODEL_RE.test(e.name.toLowerCase())) {
     body.replaceChildren();

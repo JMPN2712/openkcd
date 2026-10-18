@@ -47,7 +47,7 @@ export async function loadMipChain(vfs: Vfs, stem: string, maxDim: number): Prom
 export async function loadModel(
   vfs: Vfs,
   path: string,
-  opts: { maxTextureDim?: number; onStatus?: (s: string) => void } = {},
+  opts: { maxTextureDim?: number; onStatus?: (s: string) => void; /** .mtl path overriding the model's own (CDF / database) */ material?: string | null } = {},
 ): Promise<LoadedModel> {
   const notes: string[] = [];
   // The fast-load paks hold stub copies without geometry: take the highest-
@@ -72,8 +72,8 @@ export async function loadModel(
 
   let materials: Material[] = [];
   let mpath: string | null = null;
-  if (cgf.material) {
-    mpath = mtlPath(cgf.material, path);
+  if (opts.material || cgf.material) {
+    mpath = opts.material ?? mtlPath(cgf.material!, path);
     const mh = vfs.lookup(mpath);
     if (mh) {
       try {

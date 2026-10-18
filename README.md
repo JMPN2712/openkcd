@@ -9,6 +9,7 @@ extracted assets or derived data are ever committed.
 ## Layout
 
 - `docs/RECON.md`: Phase 1 survey of the install (binaries, middleware, pak format quirks).
+- `docs/CHARACTERS.md`: how NPCs are assembled from the database, .cdf files and clothing materials.
 - `tools/`: read-only Python recon scripts (`pe_info.py`, `pak_survey.py`, `pak_report.py`, `pakread.py`).
 - `web/`: browser pak reader (Vite + TypeScript, no backend, no runtime dependencies).
 
@@ -24,8 +25,10 @@ npm run dev        # then open http://localhost:5173/ in Chrome
 npm run test:pak   # Node smoke test against ~/kcd1 (or pass a game root)
 node scripts/test-textures.ts /tmp/tex && python3 -I scripts/compare_pillow.py /tmp/tex   # texture layout + decoder check
 node scripts/test-cgf.ts                         # parse every model, check indices/bounds/normals
+node scripts/test-characters.ts                  # resolve every NPC soul/preset from the database, load a sample
 node scripts/render-model.ts /tmp/renders objects/vehicles/cart/cart_01.cga   # headless WebGPU render to PNG (Dawn)
 ```
 
 Click **Open KCD folder** and pick the game root (the folder containing `Data` and `bin`).
-Click a `.dds*` file for the texture viewer, or a `.cgf/.cga/.skin` for the WebGPU model viewer.
+Click a `.dds*` file for the texture viewer, a `.cgf/.cga/.skin` for the WebGPU model viewer, a `.cdf`
+for a character, or **Characters (game database)** to browse every NPC soul and clothing preset.

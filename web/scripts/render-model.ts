@@ -12,6 +12,7 @@ import type { PakSource } from "../src/paks.ts";
 import { Vfs } from "../src/vfs.ts";
 import { ASSET_RE } from "../src/assets.ts";
 import { loadModel } from "../src/model.ts";
+import { CharacterDb, loadCharacter, parseCdf } from "../src/character.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 
 Object.assign(globalThis, globals);
@@ -20,7 +21,7 @@ const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
 const root = opt("--root", join(homedir(), "kcd1"));
 const [W, H] = opt("--size", "800x600").split("x").map(Number);
-const view = opt("--view", ""); // yaw,pitch,zoom e.g. -1.9,0.35,1
+const view = opt("--view", ""); // yaw,pitch,zoom[,targetZ] e.g. -1.9,0.35,1
 const noTex = args.includes("--notex") ? (args.splice(args.indexOf("--notex"), 1), true) : false;
 const flat = args.includes("--flat") ? (args.splice(args.indexOf("--flat"), 1), true) : false;
 const [outDir, ...models] = args;
@@ -77,16 +78,46 @@ const target = device.createTexture({ size: [W, H], format: "rgba8unorm", usage:
 const stride = Math.ceil((W * 4) / 256) * 256;
 const readback = device.createBuffer({ size: stride * H, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
 
+let db: CharacterDb | undefined;
 for (const path of models) {
   const t0 = performance.now();
-  const model = await loadModel(vfs, path.toLowerCase(), { maxTextureDim: 1024 });
-  if (noTex) model.diffuse = model.diffuse.map(() => null);
-  renderer.setModel(model);
+  const notes: string[] = [];
+  if (/^(soul|preset):|\.cdf$/i.test(path)) {
+    // characters: "soul:<name or id>", "preset:<id or name>" or a .cdf path
+    let spec;
+    if (/\.cdf$/i.test(path)) {
+      const hit = vfs.lookup(path);
+      if (!hit) throw new Error(`${path} not found`);
+      spec = parseCdf(new TextDecoder().decode(await vfs.read(hit)), path);
+    } else {
+      db ??= await CharacterDb.load(vfs);
+      const [kind, q] = [path.slice(0, path.indexOf(":")), path.slice(path.indexOf(":") + 1).toLowerCase()];
+      if (kind === "soul") {
+        const s = db.souls.find((x) => x.id === q || x.name.toLowerCase() === q) ?? db.souls.find((x) => x.name.toLowerCase().includes(q));
+        if (!s) throw new Error(`no soul matching ${q}`);
+        spec = db.soul(s.id);
+      } else {
+        const p = db.presets.find((x) => x.id === q || x.name.toLowerCase() === q) ?? db.presets.find((x) => x.name.toLowerCase().includes(q));
+        if (!p) throw new Error(`no preset matching ${q}`);
+        spec = db.preset(p.id);
+      }
+    }
+    const ch = await loadCharacter(vfs, spec, { maxTextureDim: 1024 });
+    console.log(`  ${spec.name}: ${ch.parts.length}/${spec.parts.length} parts: ${ch.parts.map((x) => `${x.part.kind}:${x.part.label}@${x.part.layer}`).join(", ")}`);
+    notes.push(...ch.notes);
+    renderer.setModels(ch.parts.map(({ model, part }) => ({ model: noTex ? { ...model, diffuse: model.diffuse.map(() => null) } : model, layer: part.layer })));
+  } else {
+    const model = await loadModel(vfs, path.toLowerCase(), { maxTextureDim: 1024 });
+    if (noTex) model.diffuse = model.diffuse.map(() => null);
+    notes.push(...model.notes);
+    renderer.setModel(model);
+  }
   const cam = renderer.defaultCamera();
   cam.flat = flat;
   if (view) {
-    const [yaw, pitch, zoom] = view.split(",").map(Number);
+    const [yaw, pitch, zoom, targetZ] = view.split(",").map(Number);
     Object.assign(cam, { yaw, pitch, distance: cam.distance / (zoom || 1) });
+    if (Number.isFinite(targetZ)) cam.target = [cam.target[0], cam.target[1], targetZ];
   }
   renderer.render(target, cam);
   const enc = device.createCommandEncoder();
@@ -97,10 +128,10 @@ for (const path of models) {
   const rgba = new Uint8Array(W * H * 4);
   for (let y = 0; y < H; y++) rgba.set(mapped.subarray(y * stride, y * stride + W * 4), y * W * 4);
   readback.unmap();
-  const file = join(outDir, basename(path).replace(/\.\w+$/, "") + (noTex ? "_notex" : "") + (view ? "_v" : "") + ".png");
+  const file = join(outDir, basename(path).replace(/[:\s]/g, "_").replace(/\.\w+$/, "") + (noTex ? "_notex" : "") + (view ? "_v" : "") + ".png");
   await writeFile(file, png(W, H, rgba));
-  console.log(`${path}: ${JSON.stringify(renderer.stats)} materials=${model.materials.length} ${Math.round(performance.now() - t0)}ms -> ${file}`);
-  for (const n of model.notes) console.log("   note:", n);
+  console.log(`${path}: ${JSON.stringify(renderer.stats)} ${Math.round(performance.now() - t0)}ms -> ${file}`);
+  for (const n of notes) console.log("   note:", n);
 }
 renderer.destroy();
 device.destroy();

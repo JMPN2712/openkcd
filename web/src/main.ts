@@ -4,6 +4,7 @@ import { buildTree, sortedDirs, sortedFiles, baseName, type TreeDir } from "./tr
 import { classify, looksLikeGameRoot, scanDirectory, OWNER_ORDER, type Owner, type PakSource } from "./paks.ts";
 import { showPreview, type PreviewHooks } from "./preview.ts";
 import { showTexture, type TextureContext } from "./textureView.ts";
+import { showCharacter, showCharacterBrowser } from "./characterView.ts";
 import { ASSET_RE } from "./assets.ts";
 import { Vfs } from "./vfs.ts";
 import { formatCount, formatSize } from "./format.ts";
@@ -16,7 +17,8 @@ declare global {
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const statusEl = $<HTMLSpanElement>("status");
-const paksEl = $<HTMLElement>("paks");
+const paksEl = $<HTMLElement>("pak-groups");
+const charactersBtn = $<HTMLButtonElement>("characters");
 const treeEl = $<HTMLDivElement>("tree");
 const previewEl = $<HTMLElement>("preview");
 const titleEl = $<HTMLSpanElement>("pak-title");
@@ -105,6 +107,7 @@ $<HTMLButtonElement>("open").addEventListener("click", async () => {
     vfsCache.clear();
     allPaks = paks;
     textures.hasHd = paks.some((p) => p.path.toLowerCase().includes("_hd"));
+    charactersBtn.disabled = false;
     renderPakList(paks);
     const total = paks.reduce((s, p) => s + p.size, 0);
     setStatus(`${root.name}: ${paks.length} archives, ${formatSize(total)}. Read locally, nothing uploaded.`);
@@ -114,6 +117,24 @@ $<HTMLButtonElement>("open").addEventListener("click", async () => {
 });
 
 // ---------- pak list ----------
+
+// ---------- characters (game database) ----------
+
+charactersBtn.addEventListener("click", () => {
+  document.querySelectorAll(".pak.active").forEach((b) => b.classList.remove("active"));
+  charactersBtn.classList.add("active");
+  current = null;
+  titleEl.textContent = "Characters: NPC souls and clothing presets, assembled from Libs/Tables";
+  filterEl.value = "";
+  filterEl.disabled = true;
+  void showCharacterBrowser(treeEl, textures, (name, resolve) => {
+    const head = el("div", "preview-head");
+    head.append(el("div", "preview-path", name));
+    const body = el("div", "preview-body");
+    previewEl.replaceChildren(head, body);
+    void showCharacter(body, textures, resolve, hooks.openTexture);
+  });
+});
 
 function renderPakList(paks: PakSource[]): void {
   paksEl.replaceChildren();
@@ -140,6 +161,7 @@ function renderPakList(paks: PakSource[]): void {
       btn.title = p.path;
       btn.append(el("span", "pak-name", p.path), el("span", "dim", formatSize(p.size)));
       btn.addEventListener("click", () => {
+        charactersBtn.classList.remove("active");
         paksEl.querySelectorAll(".pak.active").forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
         void openPak(p);
