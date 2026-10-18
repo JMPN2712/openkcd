@@ -11,7 +11,8 @@ import { ModelRenderer } from "./renderer.ts";
 import { WaterRenderer } from "./waterRenderer.ts";
 import { buildWorldScene, lodItems, newWorldCaches, selectLods, type WorldScene } from "./world.ts";
 import { Vfs } from "./vfs.ts";
-import { parseNpcEntities, type NpcEntity } from "./levelEntities.ts";
+import { parseNpcEntities, parseEntityIndex, type NpcEntity } from "./levelEntities.ts";
+import { Schedules } from "./schedule.ts";
 import { NpcWorld, npcItems, animateNpcs, type WorldNpc } from "./npcs.ts";
 import { ASSET_RE } from "./assets.ts";
 
@@ -23,12 +24,13 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 }
 
 let stopActive: (() => void) | null = null;
-const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[] }>>();
+const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules }>>();
 const vfsCache = new Map<string, Promise<Vfs>>();
 const worldCaches = newWorldCaches();
 const STREAM_RADIUS = 500; // metres of objects around the camera
 const STREAM_STEP = 150; // rebuild after moving this far
-const NPC_RADIUS = 120, NPC_MAX = 40, NPC_STEP = 40;
+const NPC_RADIUS = 120, NPC_MAX = 40;
+const SPEEDS: [string, number][] = [["paused", 0], ["×15 (game speed)", 15], ["×60", 60], ["×720 (1 h per 5 s)", 720]];
 
 export async function showLevel(host: HTMLElement, paks: PakSource[], level: string): Promise<void> {
   stopActive?.();
@@ -45,6 +47,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let objects: LevelObjects;
   let cover: Cover | undefined;
   let npcEntities: NpcEntity[];
+  let schedules: Schedules;
   let vfs: Vfs;
   let device: GPUDevice;
   try {
@@ -66,13 +69,15 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         const cover = ctc ? parseCover(await readEntry(blob, ctc), terrain.size) : undefined;
         const mission = entries.find((e) => e.name.toLowerCase() === "objects_mission0.xml");
         status.textContent = "Reading NPC placements…";
-        const npcEntities = mission ? parseNpcEntities(new TextDecoder().decode(await readEntry(blob, mission))) : [];
-        return { terrain, objects, cover, npcEntities };
+        const xml = mission ? new TextDecoder().decode(await readEntry(blob, mission)) : "";
+        const npcEntities = parseNpcEntities(xml);
+        const schedules = new Schedules(npcEntities, parseEntityIndex(xml));
+        return { terrain, objects, cover, npcEntities, schedules };
       })();
       p.catch(() => terrainCache.delete(pakPath));
       terrainCache.set(pakPath, p);
     }
-    ({ terrain, objects, cover, npcEntities } = await p);
+    ({ terrain, objects, cover, npcEntities, schedules } = await p);
     let v = vfsCache.get(pakPath);
     if (!v) {
       // assets from every non-level pak, with this level's own files (brush/*.cgf, …) on top
@@ -102,7 +107,18 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   fullBtn.type = "button";
   const marketBtn = el("button", "level-full-btn level-goto-btn", "Go to Rataje market");
   marketBtn.type = "button";
-  stage.append(canvas, fullBtn, marketBtn, hud);
+  // game clock: time of day drives where NPCs are (their schedules)
+  const clockBar = el("div", "level-clock");
+  const clockLabel = el("span", "level-clock-time");
+  const clockRange = el("input");
+  clockRange.type = "range";
+  clockRange.min = "0";
+  clockRange.max = "1439";
+  clockRange.step = "1";
+  const speedSel = el("select");
+  for (const [label, v] of SPEEDS) speedSel.append(new Option(label, String(v), v === 15, v === 15));
+  clockBar.append(el("span", "dim", "Time"), clockLabel, clockRange, speedSel);
+  stage.append(canvas, fullBtn, marketBtn, clockBar, hud);
   host.replaceChildren(
     el("p", "scene-title", `${level}: ${terrain.size} × ${terrain.size} m terrain, ${objects.brushName.length.toLocaleString()} brushes, ${objects.vegGroup.length.toLocaleString()} vegetation instances`),
     stage,
@@ -129,22 +145,31 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const models = new ModelRenderer(device, format, 4);
   const water = new WaterRenderer(device, format, objects.water);
   const npcR = new ModelRenderer(device, format, 4);
-  const npcWorld = new NpcWorld(vfs, npcEntities);
+  const npcWorld = new NpcWorld(vfs, npcEntities, schedules, (x, y) => heightAt(terrain, x, y));
   let npcs: WorldNpc[] = [];
-  let npcsAt: [number, number, number] | null = null;
+  let npcKey = "";
   let npcBusy = false;
+  let npcCheckedAt = -Infinity;
   let npcInfo = `NPCs: ${npcEntities.length} in level`;
-  const streamNpcs = async () => {
+  let minute = 10 * 60; // game time of day, minutes
+  clockRange.value = String(minute);
+  clockRange.addEventListener("input", () => { minute = Number(clockRange.value); npcCheckedAt = -Infinity; });
+  // re-place NPCs when the set around the camera (or where they are) changes
+  const updateNpcs = async () => {
     if (npcBusy) return;
     npcBusy = true;
     const at: [number, number, number] = [...cam.pos];
+    const m = Math.floor(minute);
     try {
-      const next = await npcWorld.near(at, NPC_RADIUS, NPC_MAX, (s) => { npcInfo = s; });
+      const key = NpcWorld.key(await npcWorld.select(at, NPC_RADIUS, NPC_MAX, m));
+      if (key === npcKey || stopped) return;
+      const next = await npcWorld.near(at, NPC_RADIUS, NPC_MAX, m, (s) => { npcInfo = s; });
       if (stopped) return;
       npcR.setModels(npcItems(next));
       npcs = next;
-      npcsAt = at;
-      npcInfo = `${next.length} NPCs within ${NPC_RADIUS} m`;
+      npcKey = key;
+      const asleep = next.filter((n) => n.placement.pose === "sleep").length;
+      npcInfo = `${next.length} NPCs within ${NPC_RADIUS} m${asleep ? ` (${asleep} asleep)` : ""}`;
     } catch (err) {
       npcInfo = `NPCs: ${(err as Error).message}`;
     } finally {
@@ -230,7 +255,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (cam.pos[2] < ground + 1.7) cam.pos[2] = ground + 1.7;
     if (!canvas.width) return;
     if (!streamedAt || Math.hypot(cam.pos[0] - streamedAt[0], cam.pos[1] - streamedAt[1]) > STREAM_STEP) void stream();
-    if (streamedAt && (!npcsAt || Math.hypot(cam.pos[0] - npcsAt[0], cam.pos[1] - npcsAt[1], cam.pos[2] - npcsAt[2]) > NPC_STEP)) void streamNpcs();
+    minute = (minute + (dt * Number(speedSel.value)) / 60) % 1440;
+    const hh = Math.floor(minute / 60), mm = Math.floor(minute % 60);
+    clockLabel.textContent = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+    if (document.activeElement !== clockRange) clockRange.value = String(Math.floor(minute));
+    if (streamedAt && now - npcCheckedAt > 500) { npcCheckedAt = now; void updateNpcs(); }
     const target = ctx.getCurrentTexture();
     if (!depth || depth.width !== target.width || depth.height !== target.height) {
       depth?.destroy();

@@ -36,7 +36,8 @@ node scripts/render-terrain.ts /tmp/t "1500,1800,0,30,-8"   # headless 3D terrai
 node scripts/test-level-objects.ts               # parse Rataje's object octree (brushes, vegetation), check against terrain
 node scripts/render-world.ts /tmp/w "2192,1050,0,90,-3"   # headless terrain + objects around a point
 node scripts/test-npcs.ts                        # NPC placements from objects_mission0.xml, matched to souls
-node scripts/render-world.ts /tmp/w --at-npc rat_guard8 --npc-dist 11 --npcs   # world with idling NPCs, framed on one
+node scripts/test-schedule.ts                    # where every NPC is at 03:00/07:00/12:00/19:00 (schedules, beds, areas)
+node scripts/render-world.ts /tmp/w --at-npc rat_baker --npc-dist 6 --npcs --clock 12:00   # world with NPCs placed by their schedules, framed on one
 node scripts/render-model.ts /tmp/r soul:henry --anim <clip.caf | db.dba#anim.caf> --frames 0,20,40   # animated headless renders
 node scripts/render-model.ts /tmp/renders objects/vehicles/cart/cart_01.cga   # headless WebGPU render to PNG (Dawn)
 ```

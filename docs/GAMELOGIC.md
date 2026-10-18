@@ -102,6 +102,45 @@ The world view assembles the nearest 40 NPCs within 120 m from their souls
 `relaxed_idle` from `male_general.dba` / `female_general.dba` with a random
 phase. Test: `web/scripts/test-npcs.ts`.
 
+## Daily schedules
+
+- **Authoring.** Schedules are written as Storm rules
+  (`Libs/Storm/schedules/**`, plus custom operations in
+  `common/schedules.xml`). Example from `base.xml`: every valid open-world
+  NPC gets morning 06:30, work 08:00, eat 12:30, work 14:30 and sleep
+  20:30, each with a `scatter`. Other rules override this by social class,
+  shop ownership, faction, name and so on.
+- **Runtime data.** The resolved result is **baked into the soul table**
+  (`activity_0..8`, `time_0..8`), with the scatter already applied: e.g.
+  `rat_guard8` has work 7:56, sleep 20:56. A runtime doesn't need a Storm
+  interpreter for schedules.
+  - Activities across all souls: work 4,747, sleep 2,234, eat 1,902,
+    morning 1,670, dummyWait 1,457, fun 616, leaveLevel 479, plus a few
+    monastery and quest specials.
+- **Where an activity happens** comes from the NPC entity's links:
+  - `Work[…]` and `Home` point at `SmartAreaShape` polygons (points
+    relative to the entity, rotated by its `Rotate`; 202 of 6,770 areas
+    are rotated);
+  - `preferedBed`/`owner` point at `Bed` entities.
+- **Area sizes.** Work areas range from a workshop (median 19 m) to huge
+  regions (10% are over 4 km across). In the real game, the behaviour
+  trees choose a smart object inside them (a stall, a guard post).
+- **Beds.** The `Bed` smart-object class (`Libs/SmartObjects.xml`) has its
+  `lying` helper at the entity origin with identity rotation, so a sleeper
+  lies at the bed's own transform, playing `sleeping_bed_idle.caf`.
+- **The viewer's approximation** (`web/src/schedule.ts`):
+  - activity from the soul schedule;
+  - sleep → own bed (explicit links, then the beds inside the home polygon
+    shared out among its residents: 651 of 952 NPCs get a bed);
+  - work → work area;
+  - morning, eat, fun → home area;
+  - inside an area, use the spawn point if it lies in that area (about
+    half do), else a stable pseudo-random point.
+
+  Rataje at 03:00: 577 in bed, 204 at work (night shifts). At 12:00: 637
+  at work, 188 at home. No walking yet: NPCs jump when their activity
+  changes.
+
 ## What this means for the port
 
 1. **Don't emulate WHGame.dll.** It's 33 MB of x86-64 code tied to D3D11,

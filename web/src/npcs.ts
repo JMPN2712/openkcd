@@ -1,6 +1,7 @@
 // NPCs in the world view: assembles the characters near a point from their
-// souls (entity name = soul_name), places them at their entity transform and
-// plays a relaxed idle with a random phase. Behaviour (schedules) comes later.
+// souls (entity name = soul_name), places them where their daily schedule puts
+// them at the given time (src/schedule.ts) and plays a relaxed idle, or the
+// sleeping clip in bed, with a random phase.
 
 import { CharacterDb, loadCharacter, poseMatrix, type LoadedCharacter } from "./character.ts";
 import { parseSkeleton, type Skeleton } from "./skeleton.ts";
@@ -8,17 +9,25 @@ import { Dba } from "./dba.ts";
 import { Animator } from "./pose.ts";
 import type { Clip } from "./anim.ts";
 import type { NpcEntity } from "./levelEntities.ts";
+import type { Placement, Pose, Schedules } from "./schedule.ts";
 import type { LoadedModel } from "./model.ts";
 import type { Vfs } from "./vfs.ts";
 import { multiply } from "./mat4.ts";
 
-const IDLES: Record<"male" | "female", [string, string[]]> = {
-  male: ["animations/humans/male/male_general.dba", ["animations/humans/male/locomotion/relaxed_idle.caf", "animations/humans/male/behavior/_relaxed_idle_both.caf"]],
-  female: ["animations/humans/female/female_general.dba", ["animations/humans/female/locomotion/relaxed_idle.caf"]],
+const CLIPS: Record<"male" | "female", [string, Record<Pose, string[]>]> = {
+  male: ["animations/humans/male/male_general.dba", {
+    stand: ["animations/humans/male/locomotion/relaxed_idle.caf", "animations/humans/male/behavior/_relaxed_idle_both.caf"],
+    sleep: ["animations/humans/male/behavior/sleeping_bed_idle.caf"],
+  }],
+  female: ["animations/humans/female/female_general.dba", {
+    stand: ["animations/humans/female/locomotion/relaxed_idle.caf"],
+    sleep: ["animations/humans/female/behavior/sleeping_bed_idle.caf"],
+  }],
 };
 
 export interface WorldNpc {
   entity: NpcEntity;
+  placement: Placement;
   character: LoadedCharacter;
   /** entity world matrix (column-major) */
   world: Float32Array;
@@ -37,7 +46,7 @@ export interface NpcRenderItem {
 
 interface Rig {
   skeleton: Skeleton;
-  clip: Clip | null;
+  clips: Record<Pose, Clip | null>;
 }
 
 export class NpcWorld {
@@ -46,9 +55,13 @@ export class NpcWorld {
   private chars = new Map<number, Promise<LoadedCharacter | null>>();
   private vfs: Vfs;
   readonly entities: NpcEntity[];
-  constructor(vfs: Vfs, entities: NpcEntity[]) {
+  private schedules: Schedules | null;
+  private groundAt: (x: number, y: number) => number;
+  constructor(vfs: Vfs, entities: NpcEntity[], schedules: Schedules | null = null, groundAt: (x: number, y: number) => number = () => 0) {
     this.vfs = vfs;
     this.entities = entities;
+    this.schedules = schedules;
+    this.groundAt = groundAt;
   }
 
   private rig(skeletonPath: string, female: boolean): Promise<Rig | null> {
@@ -59,33 +72,54 @@ export class NpcWorld {
         const hit = this.vfs.lookup(skeletonPath);
         const skeleton = hit ? parseSkeleton(await this.vfs.read(hit)) : null;
         if (!skeleton) return null;
-        let clip: Clip | null = null;
-        const [dbPath, names] = IDLES[female ? "female" : "male"];
+        const clips: Record<Pose, Clip | null> = { stand: null, sleep: null };
+        const [dbPath, names] = CLIPS[female ? "female" : "male"];
         const dh = this.vfs.lookup(dbPath);
         if (dh) {
           const dba = new Dba(await this.vfs.read(dh));
-          const name = names.find((n) => dba.anims.some((a) => a.name === n));
-          if (name) clip = dba.clip(name);
+          for (const pose of ["stand", "sleep"] as const) {
+            const name = names[pose].find((n) => dba.anims.some((a) => a.name === n));
+            if (name) clips[pose] = dba.clip(name);
+          }
         }
-        return { skeleton, clip };
+        return { skeleton, clips };
       })().catch(() => null);
       this.rigs.set(key, r);
     }
     return r;
   }
 
-  /** Assemble up to `max` NPCs within `radius` of a point, nearest first. */
-  async near(center: [number, number, number], radius: number, max: number, onStatus?: (s: string) => void): Promise<WorldNpc[]> {
+  /** The NPCs (with their placement at `minute`) within `radius` of a point, nearest first. Cheap: no loading. */
+  async select(center: [number, number, number], radius: number, max: number, minute: number): Promise<{ e: NpcEntity; p: Placement }[]> {
     this.db ??= CharacterDb.load(this.vfs);
     const db = await this.db;
-    const souls = new Map(db.souls.map((s) => [s.name, s.id]));
-    const candidates = this.entities
-      .map((e) => ({ e, d: Math.hypot(e.pos[0] - center[0], e.pos[1] - center[1], e.pos[2] - center[2]) }))
-      .filter((c) => c.d <= radius && souls.has(c.e.name))
+    const souls = new Map(db.souls.map((s) => [s.name, s]));
+    return this.entities
+      .flatMap((e) => {
+        const soul = souls.get(e.name);
+        if (!soul) return [];
+        const p: Placement = this.schedules
+          ? this.schedules.place(e, soul.schedule, minute, this.groundAt)
+          : { activity: "", where: "spawn", pos: e.pos, rot: e.rot, pose: "stand" };
+        const d = Math.hypot(p.pos[0] - center[0], p.pos[1] - center[1], p.pos[2] - center[2]);
+        return d <= radius ? [{ e, p, d }] : [];
+      })
       .sort((a, b) => a.d - b.d)
       .slice(0, max);
+  }
+
+  /** Identifies a selection: changes when an NPC enters/leaves it or moves to another place. */
+  static key(sel: { e: NpcEntity; p: Placement }[]): string {
+    return sel.map(({ e, p }) => `${e.id}:${p.where}:${p.pose}`).sort().join(" ");
+  }
+
+  /** Assemble up to `max` NPCs within `radius` of a point at time `minute` (0–1439), nearest first. */
+  async near(center: [number, number, number], radius: number, max: number, minute = 720, onStatus?: (s: string) => void): Promise<WorldNpc[]> {
+    const db = await (this.db ??= CharacterDb.load(this.vfs));
+    const souls = new Map(db.souls.map((s) => [s.name, s.id]));
+    const candidates = await this.select(center, radius, max, minute);
     const out: WorldNpc[] = [];
-    for (const [k, { e }] of candidates.entries()) {
+    for (const [k, { e, p: placement }] of candidates.entries()) {
       let p = this.chars.get(e.id);
       if (!p) {
         onStatus?.(`Assembling NPC ${k + 1}/${candidates.length}: ${e.name}`);
@@ -98,10 +132,11 @@ export class NpcWorld {
       if (!rig) continue;
       out.push({
         entity: e,
+        placement,
         character,
-        world: poseMatrix(e.pos, e.rot),
+        world: poseMatrix(placement.pos, placement.rot),
         animator: new Animator(rig.skeleton),
-        clip: rig.clip,
+        clip: rig.clips[placement.pose] ?? rig.clips.stand,
         phase: Math.random() * 1000,
         items: [],
       });

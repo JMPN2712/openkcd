@@ -17,7 +17,10 @@ import { parseTerrain, heightAt } from "../src/terrain.ts";
 import { parseLevelObjects } from "../src/levelObjects.ts";
 import { parseCover } from "../src/cover.ts";
 import { WaterRenderer } from "../src/waterRenderer.ts";
-import { parseNpcEntities } from "../src/levelEntities.ts";
+import { parseNpcEntities, parseEntityIndex } from "../src/levelEntities.ts";
+import { Schedules } from "../src/schedule.ts";
+import { loadModel } from "../src/model.ts";
+import { poseMatrix } from "../src/character.ts";
 import { NpcWorld, npcItems, animateNpcs } from "../src/npcs.ts";
 import { TerrainRenderer, type FlyCamera } from "../src/terrainRenderer.ts";
 import { ModelRenderer } from "../src/renderer.ts";
@@ -30,9 +33,13 @@ const root = opt("--root", join(homedir(), "kcd1"));
 const radius = Number(opt("--radius", "500"));
 const withNpcs = args.includes("--npcs") ? (args.splice(args.indexOf("--npcs"), 1), true) : false;
 const animTime = Number(opt("--time", "0")); // seconds into the NPC idles
+const withBeds = args.includes("--beds") ? (args.splice(args.indexOf("--beds"), 1), true) : false; // debug: draw Bed entities near the camera
 const npcsOnly = args.includes("--npcs-only") ? (args.splice(args.indexOf("--npcs-only"), 1), true) : false; // debug: skip world geometry
 const atNpc = opt("--at-npc", ""); // frame the camera on a named NPC, in front of them and facing them
 const npcDist = Number(opt("--npc-dist", "4"));
+const clock = opt("--clock", ""); // HH:MM: place NPCs by their schedules (default: at their spawn points)
+const [clockH, clockM] = (clock || "12:00").split(":").map(Number);
+const minute = clockH * 60 + clockM;
 const [outDir, ...views] = args;
 if (!outDir) throw new Error("usage: render-world.ts OUT_DIR [x,y,z,yaw,pitch ...]");
 const W = 1280, H = 720;
@@ -65,20 +72,14 @@ const cover = ctc && !args.includes("--no-cover") ? parseCover(await readEntry(l
 
 let list = views;
 let npcEnts: ReturnType<typeof parseNpcEntities> = [];
+let schedules: Schedules | null = null;
+let entIndex: ReturnType<typeof parseEntityIndex> | null = null;
 if (withNpcs || atNpc) {
   const mission = levelEntries.find((e) => e.name.toLowerCase() === "objects_mission0.xml")!;
-  npcEnts = parseNpcEntities(new TextDecoder().decode(await readEntry(levelBlob, mission)));
-}
-if (atNpc) {
-  const n = npcEnts.find((e) => e.name === atNpc);
-  if (!n) throw new Error(`no NPC entity named ${atNpc}`);
-  // entity forward is +Y rotated by the quaternion (w,x,y,z)
-  const [w, qx, qy, qz] = n.rot;
-  const fx = 2 * (qx * qy - w * qz), fy = 1 - 2 * (qx * qx + qz * qz);
-  const cx = n.pos[0] + npcDist * fx, cy = n.pos[1] + npcDist * fy;
-  const yaw = (Math.atan2(-fy, -fx) * 180) / Math.PI;
-  list = [`${cx},${cy},${n.pos[2] + 1.6 + npcDist * 0.15},${yaw},-12`];
-  console.log(`framing ${atNpc} at ${n.pos.map((v) => v.toFixed(1))} from camera ${list[0]}`);
+  const xml = new TextDecoder().decode(await readEntry(levelBlob, mission));
+  npcEnts = parseNpcEntities(xml);
+  entIndex = parseEntityIndex(xml);
+  if (clock) schedules = new Schedules(npcEnts, entIndex);
 }
 if (!list.length) {
   const cells = new Map<number, number>();
@@ -106,8 +107,22 @@ console.log(`water: ${objects.water.length} volumes, ${water.triangles} triangle
 const npcR = new ModelRenderer(device, "rgba8unorm", 4);
 let npcWorld: NpcWorld | null = null;
 if (withNpcs || atNpc) {
-  npcWorld = new NpcWorld(vfs, npcEnts);
+  npcWorld = new NpcWorld(vfs, npcEnts, schedules, (x, y) => heightAt(terrain, x, y));
   console.log(`NPC entities: ${npcEnts.length}`);
+}
+if (atNpc) {
+  const n = npcEnts.find((e) => e.name === atNpc);
+  if (!n) throw new Error(`no NPC entity named ${atNpc}`);
+  // where the schedule puts them at --clock (or the spawn point)
+  const sel = await npcWorld!.select(n.pos, 1e9, 1e9, minute);
+  const p = sel.find((x) => x.e === n)?.p ?? { pos: n.pos, rot: n.rot, where: "spawn", activity: "" };
+  // entity forward is +Y rotated by the quaternion (w,x,y,z)
+  const [w, qx, qy, qz] = p.rot;
+  const fx = 2 * (qx * qy - w * qz), fy = 1 - 2 * (qx * qx + qz * qz);
+  const cx = p.pos[0] + npcDist * fx, cy = p.pos[1] + npcDist * fy;
+  const yaw = (Math.atan2(-fy, -fx) * 180) / Math.PI;
+  list = [`${cx},${cy},${p.pos[2] + 1.6 + npcDist * 0.15},${yaw},-12`];
+  console.log(`framing ${atNpc} (${p.activity || "no schedule"} at ${p.where}) at ${p.pos.map((v) => v.toFixed(1))} from camera ${list[0]}`);
 }
 const models = new ModelRenderer(device, "rgba8unorm", 4);
 const target = device.createTexture({ size: [W, H], format: "rgba8unorm", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
@@ -145,11 +160,18 @@ for (const [i, v] of list.entries()) {
   counts.forEach((n, k) => models.setInstances(k, out[k], n));
   terrainR.prepare(cam, vp);
   if (npcWorld) {
-    const npcs = await npcWorld.near(cam.pos, 120, 40);
-    npcR.setModels(npcItems(npcs));
+    const npcs = await npcWorld.near(cam.pos, 120, 40, minute);
+    const extra = [];
+    if (withBeds && entIndex) {
+      for (const b of entIndex.values()) {
+        if (b.cls !== "Bed" || !b.model || Math.hypot(b.pos[0] - cam.pos[0], b.pos[1] - cam.pos[1]) > 30) continue;
+        extra.push({ model: await loadModel(vfs, b.model.toLowerCase(), { maxTextureDim: 256 }), transform: poseMatrix(b.pos, b.rot), layer: 0 });
+      }
+    }
+    npcR.setModels([...npcItems(npcs), ...extra]);
     animateNpcs(npcs, animTime, (k, m) => npcR.setPalette(k, m), (k) => npcR.paletteSize(k));
     npcR.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
-    console.log(`  NPCs drawn: ${npcs.length} (${npcs.slice(0, 6).map((n) => n.entity.name).join(", ")}${npcs.length > 6 ? ", …" : ""}); idle clip ${npcs[0]?.clip ? "ok" : "missing"}`);
+    console.log(`  NPCs drawn: ${npcs.length} (${npcs.slice(0, 6).map((n) => `${n.entity.name} ${n.placement.activity}@${n.placement.where}`).join(", ")}${npcs.length > 6 ? ", …" : ""}); idle clip ${npcs[0]?.clip ? "ok" : "missing"}`);
   }
   models.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
   water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);

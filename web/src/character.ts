@@ -72,6 +72,23 @@ export interface SoulInfo {
   name: string;
   gender: "male" | "female" | "horse";
   presetId: string;
+  /** daily schedule baked into the soul row by Storm (activity_N / time_N), sorted by start minute */
+  schedule: ScheduleItem[];
+}
+
+export interface ScheduleItem {
+  /** minutes after midnight */
+  start: number;
+  activity: string;
+}
+
+export function parseSchedule(r: Row): ScheduleItem[] {
+  const out: ScheduleItem[] = [];
+  for (let i = 0; i < 9; i++) {
+    const activity = r[`activity_${i}`], m = /^(\d+):(\d+)$/.exec(r[`time_${i}`] ?? "");
+    if (activity && m) out.push({ start: Number(m[1]) * 60 + Number(m[2]), activity });
+  }
+  return out.sort((a, b) => a.start - b.start);
 }
 
 export interface PresetInfo {
@@ -124,7 +141,7 @@ export class CharacterDb {
     for (const r of soul) {
       const b = db.body.get(r.character_body_id);
       const gender = b?.race_id === "1" ? "horse" : b?.gender_id === "2" ? "female" : "male";
-      db.souls.push({ id: r.soul_id, name: r.soul_name, gender, presetId: r.initial_clothing_preset_id });
+      db.souls.push({ id: r.soul_id, name: r.soul_name, gender, presetId: r.initial_clothing_preset_id, schedule: parseSchedule(r) });
     }
     db.souls.sort((a, b) => a.name.localeCompare(b.name));
     for (const r of presets) db.presets.push({ id: r.clothing_preset_id, name: r.clothing_preset_name, gender: r.gender_id === "2" ? "female" : "male" });

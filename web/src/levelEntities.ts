@@ -46,3 +46,49 @@ export function parseNpcEntities(xml: string): NpcEntity[] {
   }
   return out;
 }
+
+/** Any entity, reduced to what placement needs. Area shapes keep their polygon (relative to `pos`). */
+export interface EntityInfo {
+  id: number;
+  cls: string;
+  name: string;
+  pos: [number, number, number];
+  rot: [number, number, number, number];
+  /** area polygon, x/y pairs relative to pos (AreaShape, SmartAreaShape, …) */
+  points?: number[];
+  /** the entity's own mesh (Properties object_Model), e.g. a bed's .cgf */
+  model?: string;
+}
+
+/** Index every entity in the mission XML by EntityId (Rataje: 55k entities, ~0.5 s). */
+export function parseEntityIndex(xml: string): Map<number, EntityInfo> {
+  const out = new Map<number, EntityInfo>();
+  const attr = (s: string, k: string) => new RegExp(`\\b${k}="([^"]*)"`).exec(s)?.[1];
+  const re = /<Entity\s([^>]*)>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml))) {
+    const head = m[1];
+    const id = Number(attr(head, "EntityId"));
+    if (!Number.isFinite(id)) continue;
+    const cls = attr(head, "EntityClass") ?? "";
+    const info: EntityInfo = {
+      id, cls, name: attr(head, "Name") ?? "",
+      pos: num(attr(head, "Pos"), 3, [0, 0, 0]) as [number, number, number],
+      rot: num(attr(head, "Rotate"), 4, [1, 0, 0, 0]) as [number, number, number, number],
+    };
+    const end = xml.indexOf("</Entity>", re.lastIndex);
+    const body = xml.slice(re.lastIndex, end < 0 ? undefined : end);
+    const model = /<Properties\b[^>]*\bobject_Model="([^"]+)"/.exec(body)?.[1];
+    if (model) info.model = model;
+    if (cls.endsWith("AreaShape")) {
+      const pts = body.slice(body.indexOf("<Points>"), body.indexOf("</Points>"));
+      info.points = [];
+      for (const p of pts.matchAll(/<Point\s+Pos="([^"]*)"/g)) {
+        const [x, y] = p[1].split(",").map(Number);
+        info.points.push(x, y);
+      }
+    }
+    out.set(id, info);
+  }
+  return out;
+}
