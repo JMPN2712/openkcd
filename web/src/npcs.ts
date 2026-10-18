@@ -30,6 +30,9 @@ const CLIPS: Record<"male" | "female", [string, Record<Pose, string[]>]> = {
   }],
 };
 
+/** Selection advantage (m) of NPCs already shown, see NpcWorld.select. */
+const SHOWN_BONUS = 25;
+
 /** Walking speed (m/s) of relaxed_walk_medium: its root moves 3.03 m in 65 frames (male), 2.63 m in 61 (female) at 30 fps. */
 const WALK_SPEED = { male: 1.40, female: 1.29 };
 
@@ -118,7 +121,14 @@ export class NpcWorld {
       : { activity: "", where: "spawn", pos: e.pos, rot: e.rot, pose: "stand" };
   }
 
-  /** The NPCs (with their placement at `minute`) within `radius` of a point, nearest first. Cheap: no loading. */
+  /** NPCs returned by the last near(): they keep their place in later selections (see select). */
+  private shown = new Set<number>();
+
+  /**
+   * The NPCs (with their placement at `minute`) within `radius` of a point, nearest first. Cheap: no loading.
+   * NPCs already shown count as SHOWN_BONUS metres nearer and stay up to SHOWN_BONUS beyond the radius,
+   * so a full selection doesn't swap a visible NPC for one barely nearer (they vanished mid-street).
+   */
   async select(center: [number, number, number], radius: number, max: number, minute: number): Promise<{ e: NpcEntity; p: Placement }[]> {
     this.db ??= CharacterDb.load(this.vfs);
     const db = await this.db;
@@ -128,7 +138,8 @@ export class NpcWorld {
         const soul = souls.get(e.name);
         if (!soul) return [];
         const p = this.placeAt(e, soul.schedule, minute);
-        const d = Math.hypot(p.pos[0] - center[0], p.pos[1] - center[1], p.pos[2] - center[2]);
+        const bonus = this.shown.has(e.id) ? SHOWN_BONUS : 0;
+        const d = Math.hypot(p.pos[0] - center[0], p.pos[1] - center[1], p.pos[2] - center[2]) - bonus;
         return d <= radius ? [{ e, p, d }] : [];
       })
       .sort((a, b) => a.d - b.d)
@@ -175,6 +186,7 @@ export class NpcWorld {
         items: [],
       });
     }
+    this.shown = new Set(out.map((n) => n.entity.id));
     return out;
   }
 }
