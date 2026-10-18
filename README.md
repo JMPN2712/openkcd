@@ -22,6 +22,7 @@ cd web
 npm install
 npm run dev        # then open http://localhost:5173/ in Chrome
 npm run test:pak   # Node smoke test against ~/kcd1 (or pass a game root)
+node scripts/test-textures.ts /tmp/tex && python3 -I scripts/compare_pillow.py /tmp/tex   # texture layout + decoder check
 ```
 
 Click **Open KCD folder** and pick the game root (the folder containing `Data` and `bin`).

@@ -178,7 +178,52 @@ The single game level is `Data/Levels/rataje/`: `level.pak` has 148,697 entries,
 plus `svo.pak` (voxel GI) and `recast.pak` (navmesh). DLC4 adds an overlay level,
 `rataje_dlc4`.
 
-## 5. Full pak table
+## 5. Textures (verified while building the texture preview)
+
+Checked against all 42,542 texture headers in the install by `web/scripts/test-textures.ts`.
+Decoders verified against Pillow 12 by `web/scripts/compare_pillow.py`: 25 samples
+per format, exact match for BC1/BC3/BC4/BC5/BC7/DXT1/3/5/ATI2/L8/RGB(A), and
+BC6H within 1/255.
+
+- **Split layout.**
+  - `foo.dds` holds the DDS header (with a DX10 extension for most) plus the
+    smallest mips (the tail; usually 16², 8² and 4²).
+  - `foo.dds.1 … foo.dds.K` hold one mip each, **numbered from the small end**:
+    `.1` is mip K−1 and `.K` is mip 0.
+  - **K must be derived from the header** (mip count minus the tail mips that
+    fit in the header file), not from which parts exist. The 1.3–1.7 patches
+    re-ship lower-resolution header-only versions (e.g. 1024² where the base
+    pak has a 2048² header and parts up to `.7`), which leaves the top parts
+    unused.
+- **Attached alpha.** `foo.dds.a` is a second texture, usually a BC4 gloss
+  channel for `_ddna` normal maps. Its header has **no `DDS ` magic**, and its
+  parts are named `foo.dds.1a … .Ka`.
+- **CryEngine header fields.** `dwReserved1` carries CryEngine data (flags,
+  average brightness, min/max colour as floats), and `dwReserved2` holds the
+  `CRYF` marker. 13 engine cubemaps append an 8-byte trailer.
+- **Cubemaps are never split.** 26,383 of them are complete in their header
+  file, mostly BC6H HDR environment probes. Faces are stored face-major.
+- **Mips span paks.**
+  - The HD Texture Pack ships a new header plus only the new top mip; the
+    lower mips stay in the base pak.
+  - A working load order is base < DLC < patches (by version) < HD <
+    HD patches. Patches can't outrank HD, because they re-ship 1024² headers
+    for textures whose 2048² HD header has no HD patch.
+  - Rank alone isn't sufficient. `_fastload/startup_characters_hd.pak` has
+    stale 4096² headers (e.g. `johanka_body_diff`) whose top mip exists in no
+    pak, while the 1.9 patch has a complete 2048² set.
+  - **Resolution rule:** pick the highest-ranked header version whose parts
+    all exist at the right sizes. 55 textures need this fallback.
+  - 39 textures (rain puddles, some defaults) have no complete version at all
+    and ship without their top mip.
+- **Format mix (unique headers):**
+  - 23,973 BC6H cubemaps.
+  - Block-compressed: BC1 sRGB 5,097; BC4 4,717; BC5 4,454; BC3 sRGB 2,184;
+    DXT5 1,064; BC7 270.
+  - Plus a long tail of legacy DX9 formats (DXT1/3, ATI2, L8, A8, RGB
+    24/32-bit, G16R16F, A16B16G16R16F) and DXGI A8 / R16G16.
+
+## 6. Full pak table
 
 | Pak | Size (MiB) | Files | Uncompressed (MiB) | Methods | ZIP64 | Owner |
 |---|---:|---:|---:|---|---|---|

@@ -3,6 +3,8 @@
 
 import { readEntry, type PakEntry } from "./zip.ts";
 import { formatSize } from "./format.ts";
+import { textureStem } from "./texture.ts";
+import { showTexture, type TextureContext } from "./textureView.ts";
 
 const TEXT_EXTS = new Set([
   "xml", "lua", "cfg", "txt", "json", "ini", "mtl", "cdf", "adb", "chrparams", "animevents",
@@ -87,7 +89,13 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 
 let generation = 0;
 
-export async function showPreview(host: HTMLElement, blob: Blob, e: PakEntry): Promise<void> {
+export interface PreviewHooks {
+  textures: TextureContext;
+  /** show a texture by header path (used for the attached-alpha link) */
+  openTexture(stem: string): void;
+}
+
+export async function showPreview(host: HTMLElement, blob: Blob, e: PakEntry, hooks?: PreviewHooks): Promise<void> {
   const gen = ++generation;
   host.replaceChildren();
   const head = el("div", "preview-head");
@@ -106,6 +114,16 @@ export async function showPreview(host: HTMLElement, blob: Blob, e: PakEntry): P
   host.append(head);
   const body = el("div", "preview-body", "Loading…");
   host.append(body);
+
+  const stem = textureStem(e.name);
+  if (stem && hooks) {
+    body.replaceChildren();
+    if (stem !== e.name.toLowerCase()) body.append(el("p", "note", `Part of ${stem.slice(stem.lastIndexOf("/") + 1)}; showing the assembled texture.`));
+    const view = el("div");
+    body.append(view);
+    await showTexture(view, hooks.textures, stem, hooks.openTexture);
+    return;
+  }
 
   try {
     const ext = extOf(e.name);

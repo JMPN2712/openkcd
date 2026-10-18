@@ -2,7 +2,10 @@ import "./style.css";
 import { readCentralDirectory, type PakEntry } from "./zip.ts";
 import { buildTree, sortedDirs, sortedFiles, baseName, type TreeDir } from "./tree.ts";
 import { classify, looksLikeGameRoot, scanDirectory, OWNER_ORDER, type Owner, type PakSource } from "./paks.ts";
-import { showPreview } from "./preview.ts";
+import { showPreview, type PreviewHooks } from "./preview.ts";
+import { showTexture, type TextureContext } from "./textureView.ts";
+import { TEXTURE_RE } from "./texture.ts";
+import { Vfs } from "./vfs.ts";
 import { formatCount, formatSize } from "./format.ts";
 
 declare global {
@@ -32,6 +35,39 @@ interface LoadedPak {
 const cache = new Map<string, Promise<LoadedPak>>();
 let current: LoadedPak | null = null;
 let selectedRow: HTMLElement | null = null;
+let allPaks: PakSource[] = [];
+
+// Texture VFS over every pak, built on first texture preview.
+const vfsCache = new Map<boolean, Promise<Vfs>>();
+const textures: TextureContext = {
+  hasHd: false,
+  includeHd: true,
+  setIncludeHd(v) {
+    this.includeHd = v;
+  },
+  vfs(includeHd, onProgress) {
+    let v = vfsCache.get(includeHd);
+    if (!v) {
+      v = Vfs.build(allPaks, { filter: (n) => TEXTURE_RE.test(n), includeHd, onProgress });
+      v.catch(() => vfsCache.delete(includeHd));
+      vfsCache.set(includeHd, v);
+    }
+    return v;
+  },
+};
+
+const hooks: PreviewHooks = {
+  textures,
+  openTexture(stem) {
+    selectedRow?.classList.remove("selected");
+    selectedRow = null;
+    const head = el("div", "preview-head");
+    head.append(el("div", "preview-path", stem));
+    const body = el("div", "preview-body");
+    previewEl.replaceChildren(head, body);
+    void showTexture(body, textures, stem, hooks.openTexture);
+  },
+};
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -66,6 +102,9 @@ $<HTMLButtonElement>("open").addEventListener("click", async () => {
     }
     const paks = await scanDirectory(root);
     cache.clear();
+    vfsCache.clear();
+    allPaks = paks;
+    textures.hasHd = paks.some((p) => p.path.toLowerCase().includes("_hd"));
     renderPakList(paks);
     const total = paks.reduce((s, p) => s + p.size, 0);
     setStatus(`${root.name}: ${paks.length} archives, ${formatSize(total)}. Read locally, nothing uploaded.`);
@@ -214,7 +253,7 @@ function fileRow(e: PakEntry, depth: number, label: string): HTMLLIElement {
     selectedRow?.classList.remove("selected");
     row.classList.add("selected");
     selectedRow = row;
-    if (current) void showPreview(previewEl, current.blob, e);
+    if (current) void showPreview(previewEl, current.blob, e, hooks);
   });
   li.append(row);
   return li;
