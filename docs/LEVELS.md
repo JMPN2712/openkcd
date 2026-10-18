@@ -222,3 +222,27 @@ elder bushes and branch piles.
 ## Not yet decoded
 
 - Merged-mesh sectors and the `layers/*.xml` entities.
+
+## Entity props, light shafts and uber-LODs
+
+- **Entity props.** Furniture and other interactive props are not in the
+  `terrain.dat` octree. They are entities in `objects_mission0.xml` with a
+  `Properties object_Model` (and an optional `Scale`). Rataje has 4,250
+  drawable ones: chests and shelves (`Stash`), beds, chairs, bird nests,
+  alchemy tables, grindstones, and so on, in `.cgf` and `.cga` format
+  (`.cga` geometry loads like `.cgf`).
+- **Skipped entities** (`web/src/levelEntities.ts` `propEntities`):
+  - trigger and area classes, whose models are editor shapes
+    (`objects/default/primitive_cylinder.cgf` ×858, `box_nodraw`);
+  - `.cdf`/`.chr` entities (doors: 792 `AnimDoor`; wells, flags), which
+    are animated characters and not drawn yet.
+- **Light shafts.** `objects/lightshafts/*` brushes use the `Geometrybeam`
+  and `Templbeamproc` shaders, which are additive volumetric beams.
+  Drawn opaque, they came out as black shards in interiors, so their
+  materials are now hidden (`mtl.ts`).
+- **Uber-LODs.** `objects/uberlods/<town>/*` are single simplified meshes
+  standing in for whole town blocks, placed as ordinary brushes. Drawn
+  next to the detailed buildings, they overlapped them: blank walls in
+  Rataje's market. The engine's switching rule is code, not data
+  (`LODArea` entities are small interior volumes). The viewer draws
+  uber-LODs only when the camera is more than 300 m from their bounds.

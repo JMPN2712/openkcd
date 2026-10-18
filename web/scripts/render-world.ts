@@ -17,10 +17,8 @@ import { parseTerrain, heightAt } from "../src/terrain.ts";
 import { parseLevelObjects } from "../src/levelObjects.ts";
 import { parseCover } from "../src/cover.ts";
 import { WaterRenderer } from "../src/waterRenderer.ts";
-import { parseNpcEntities, parseEntityIndex } from "../src/levelEntities.ts";
+import { parseNpcEntities, parseEntityIndex, propEntities } from "../src/levelEntities.ts";
 import { Schedules } from "../src/schedule.ts";
-import { loadModel } from "../src/model.ts";
-import { poseMatrix } from "../src/character.ts";
 import { NpcWorld, npcItems, animateNpcs } from "../src/npcs.ts";
 import { TerrainRenderer, type FlyCamera } from "../src/terrainRenderer.ts";
 import { ModelRenderer } from "../src/renderer.ts";
@@ -33,7 +31,7 @@ const root = opt("--root", join(homedir(), "kcd1"));
 const radius = Number(opt("--radius", "500"));
 const withNpcs = args.includes("--npcs") ? (args.splice(args.indexOf("--npcs"), 1), true) : false;
 const animTime = Number(opt("--time", "0")); // seconds into the NPC idles
-const withBeds = args.includes("--beds") ? (args.splice(args.indexOf("--beds"), 1), true) : false; // debug: draw Bed entities near the camera
+const noProps = args.includes("--no-props") ? (args.splice(args.indexOf("--no-props"), 1), true) : false;
 const npcsOnly = args.includes("--npcs-only") ? (args.splice(args.indexOf("--npcs-only"), 1), true) : false; // debug: skip world geometry
 const atNpc = opt("--at-npc", ""); // frame the camera on a named NPC, in front of them and facing them
 const npcDist = Number(opt("--npc-dist", "4"));
@@ -71,14 +69,14 @@ const objects = parseLevelObjects(bytes, terrain.objectsOffset);
 const cover = ctc && !args.includes("--no-cover") ? parseCover(await readEntry(levelBlob, ctc), terrain.size) : undefined;
 
 let list = views;
+const missionXml = new TextDecoder().decode(await readEntry(levelBlob, levelEntries.find((e) => e.name.toLowerCase() === "objects_mission0.xml")!));
+const entIndex = parseEntityIndex(missionXml);
+const props = noProps ? [] : propEntities(entIndex);
+console.log(`entity props: ${props.length}`);
 let npcEnts: ReturnType<typeof parseNpcEntities> = [];
 let schedules: Schedules | null = null;
-let entIndex: ReturnType<typeof parseEntityIndex> | null = null;
 if (withNpcs || atNpc) {
-  const mission = levelEntries.find((e) => e.name.toLowerCase() === "objects_mission0.xml")!;
-  const xml = new TextDecoder().decode(await readEntry(levelBlob, mission));
-  npcEnts = parseNpcEntities(xml);
-  entIndex = parseEntityIndex(xml);
+  npcEnts = parseNpcEntities(missionXml);
   if (clock) schedules = new Schedules(npcEnts, entIndex);
 }
 if (!list.length) {
@@ -148,7 +146,7 @@ for (const [i, v] of list.entries()) {
   if (!z) z = heightAt(terrain, x, y) + 1.8;
   const cam: FlyCamera = { pos: [x, y, z], yaw: (yaw * Math.PI) / 180, pitch: (pitch * Math.PI) / 180 };
   const t0 = performance.now();
-  const scene = await buildWorldScene(vfs, terrain, objects, [x, y], radius, { maxModels: 1500, caches });
+  const scene = await buildWorldScene(vfs, terrain, objects, [x, y], radius, { maxModels: 1500, caches, props });
   const items = lodItems(scene);
   models.setModels(items);
   const out = items.map((it) => new Float32Array(it.capacity * 16));
@@ -161,14 +159,7 @@ for (const [i, v] of list.entries()) {
   terrainR.prepare(cam, vp);
   if (npcWorld) {
     const npcs = await npcWorld.near(cam.pos, 120, 40, minute);
-    const extra = [];
-    if (withBeds && entIndex) {
-      for (const b of entIndex.values()) {
-        if (b.cls !== "Bed" || !b.model || Math.hypot(b.pos[0] - cam.pos[0], b.pos[1] - cam.pos[1]) > 30) continue;
-        extra.push({ model: await loadModel(vfs, b.model.toLowerCase(), { maxTextureDim: 256 }), transform: poseMatrix(b.pos, b.rot), layer: 0 });
-      }
-    }
-    npcR.setModels([...npcItems(npcs), ...extra]);
+    npcR.setModels(npcItems(npcs));
     animateNpcs(npcs, animTime, (k, m) => npcR.setPalette(k, m), (k) => npcR.paletteSize(k));
     npcR.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
     console.log(`  NPCs drawn: ${npcs.length} (${npcs.slice(0, 6).map((n) => `${n.entity.name} ${n.placement.activity}@${n.placement.where}`).join(", ")}${npcs.length > 6 ? ", …" : ""}); idle clip ${npcs[0]?.clip ? "ok" : "missing"}`);

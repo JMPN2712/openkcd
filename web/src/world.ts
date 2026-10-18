@@ -1,8 +1,10 @@
 // Builds a renderable scene of a level's static objects around a point:
-// groups vegetation and brush instances by model, loads each model and its
+// groups vegetation, brush and entity-prop (chests, beds, …) instances by model, loads each model and its
 // LOD chain (x_lod1.cgf, x_lod2.cgf, …) once, and each frame picks a LOD per
 // instance by distance, culling by view distance and frustum.
 
+import type { EntityInfo } from "./levelEntities.ts";
+import { poseMatrix } from "./character.ts";
 import { loadModel, type LoadedModel, type MipChain } from "./model.ts";
 import { vegetationMatrix, type LevelObjects } from "./levelObjects.ts";
 import type { Terrain } from "./terrain.ts";
@@ -10,7 +12,7 @@ import type { Vfs } from "./vfs.ts";
 
 export interface WorldModel {
   path: string;
-  kind: "vegetation" | "brush";
+  kind: "vegetation" | "brush" | "prop";
   /** LOD 0 (the base model), then _lod1, _lod2, … as present */
   lods: LoadedModel[];
   /** model-space bounding sphere */
@@ -20,6 +22,8 @@ export interface WorldModel {
   matrices: Float32Array; // 16 per instance
   /** per instance: world-space sphere centre (xyz) and radius */
   spheres: Float32Array; // 4 per instance
+  /** an uber-LOD (town-block stand-in), drawn only from afar */
+  uber: boolean;
 }
 
 export interface WorldScene {
@@ -121,7 +125,11 @@ export async function buildWorldScene(
   objects: LevelObjects,
   center: [number, number],
   radius: number,
-  opts: { maxModels?: number; maxTextureDim?: number; onStatus?: (s: string) => void; caches?: WorldCaches } = {},
+  opts: {
+    maxModels?: number; maxTextureDim?: number; onStatus?: (s: string) => void; caches?: WorldCaches;
+    /** entity props (src/levelEntities.ts propEntities) */
+    props?: EntityInfo[];
+  } = {},
 ): Promise<WorldScene> {
   const groups = new Map<string, Group>();
   const r2 = radius * radius;
@@ -145,6 +153,12 @@ export async function buildWorldScene(
     if (Math.abs(m[12] - center[0]) > radius || Math.abs(m[13] - center[1]) > radius) continue;
     const name = terrain.brushNames[objects.brushName[i]];
     if (name && !HIDDEN_BRUSH.test(name)) add(resolveLevelPath(name), "brush", m, m[12], m[13]);
+  }
+  for (const e of opts.props ?? []) {
+    if (Math.abs(e.pos[0] - center[0]) > radius || Math.abs(e.pos[1] - center[1]) > radius) continue;
+    const m = poseMatrix(e.pos, e.rot);
+    if (e.scale) for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) m[c * 4 + r] *= e.scale[c];
+    add(e.model!.toLowerCase().replace(/\\/g, "/"), "prop", m, e.pos[0], e.pos[1]);
   }
 
   const ordered = [...groups.values()].sort((a, b) => a.nearest - b.nearest);
@@ -171,7 +185,7 @@ export async function buildWorldScene(
       spheres[i * 4 + 2] = m[2] * c[0] + m[6] * c[1] + m[10] * c[2] + m[14];
       spheres[i * 4 + 3] = r * Math.max(Math.hypot(m[0], m[1], m[2]), Math.hypot(m[4], m[5], m[6]), Math.hypot(m[8], m[9], m[10]));
     }
-    models.push({ path: g.path, kind: g.kind, lods, center: c, radius: r, count, matrices, spheres });
+    models.push({ path: g.path, kind: g.kind, lods, center: c, radius: r, count, matrices, spheres, uber: g.path.startsWith("objects/uberlods/") });
     instances += count;
   }
   return { models, instances, modelsSkipped: Math.max(0, ordered.length - max), failed };
@@ -196,6 +210,9 @@ export interface LodStats {
  * (Tuned on headless renders: half these distances emptied aerial views of
  * hedgerows and forest.)
  */
+/** Uber-LOD meshes (objects/uberlods/…) are drawn only beyond this distance from their bounds. */
+const UBER_NEAR = 300;
+
 export function selectLods(
   scene: WorldScene,
   eye: [number, number, number],
@@ -223,6 +240,9 @@ export function selectLods(
       const x = wm.spheres[i * 4], y = wm.spheres[i * 4 + 1], z = wm.spheres[i * 4 + 2], r = wm.spheres[i * 4 + 3];
       const d = Math.hypot(x - eye[0], y - eye[1], z - eye[2]);
       if (d - r > (80 + 70 * r) * distScale) { stats.culledDistance++; continue; }
+      // uber-LODs are simplified stand-ins for whole town blocks: far views only, else they
+      // overlap the detailed buildings they replace
+      if (wm.uber && d - r < UBER_NEAR * distScale) { stats.culledDistance++; continue; }
       let inside = true;
       for (const p of planes) if (p[0] * x + p[1] * y + p[2] * z + p[3] < -r) { inside = false; break; }
       if (!inside) { stats.culledFrustum++; continue; }

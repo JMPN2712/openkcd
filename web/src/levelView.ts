@@ -11,7 +11,7 @@ import { ModelRenderer } from "./renderer.ts";
 import { WaterRenderer } from "./waterRenderer.ts";
 import { buildWorldScene, lodItems, newWorldCaches, selectLods, type WorldScene } from "./world.ts";
 import { Vfs } from "./vfs.ts";
-import { parseNpcEntities, parseEntityIndex, type NpcEntity } from "./levelEntities.ts";
+import { parseNpcEntities, parseEntityIndex, propEntities, type EntityInfo, type NpcEntity } from "./levelEntities.ts";
 import { Schedules } from "./schedule.ts";
 import { NpcWorld, npcItems, animateNpcs, type WorldNpc } from "./npcs.ts";
 import { ASSET_RE } from "./assets.ts";
@@ -24,7 +24,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 }
 
 let stopActive: (() => void) | null = null;
-const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules }>>();
+const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules; props: EntityInfo[] }>>();
 const vfsCache = new Map<string, Promise<Vfs>>();
 const worldCaches = newWorldCaches();
 const STREAM_RADIUS = 500; // metres of objects around the camera
@@ -48,6 +48,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let cover: Cover | undefined;
   let npcEntities: NpcEntity[];
   let schedules: Schedules;
+  let props: EntityInfo[];
   let vfs: Vfs;
   let device: GPUDevice;
   try {
@@ -68,16 +69,17 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         status.textContent = "Reading terrain colour…";
         const cover = ctc ? parseCover(await readEntry(blob, ctc), terrain.size) : undefined;
         const mission = entries.find((e) => e.name.toLowerCase() === "objects_mission0.xml");
-        status.textContent = "Reading NPC placements…";
+        status.textContent = "Reading entities (NPCs, furniture)…";
         const xml = mission ? new TextDecoder().decode(await readEntry(blob, mission)) : "";
         const npcEntities = parseNpcEntities(xml);
-        const schedules = new Schedules(npcEntities, parseEntityIndex(xml));
-        return { terrain, objects, cover, npcEntities, schedules };
+        const ents = parseEntityIndex(xml);
+        const schedules = new Schedules(npcEntities, ents);
+        return { terrain, objects, cover, npcEntities, schedules, props: propEntities(ents) };
       })();
       p.catch(() => terrainCache.delete(pakPath));
       terrainCache.set(pakPath, p);
     }
-    ({ terrain, objects, cover, npcEntities, schedules } = await p);
+    ({ terrain, objects, cover, npcEntities, schedules, props } = await p);
     let v = vfsCache.get(pakPath);
     if (!v) {
       // assets from every non-level pak, with this level's own files (brush/*.cgf, …) on top
@@ -191,7 +193,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const at: [number, number] = [cam.pos[0], cam.pos[1]];
     try {
       const next = await buildWorldScene(vfs, terrain, objects, at, STREAM_RADIUS, {
-        maxModels: 1500, maxTextureDim: 256, caches: worldCaches,
+        maxModels: 1500, maxTextureDim: 256, caches: worldCaches, props,
         onStatus: (s) => { sceneInfo = s; },
       });
       if (stopped) return;

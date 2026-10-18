@@ -56,8 +56,9 @@ function toMaterial(n: XmlNode): Material {
     alphaTest: Math.max(Number(n.attrs.AlphaTest ?? 0), (n.attrs.StringGenMask ?? "").includes("%DECAL") ? 0.5 : 0),
     // hidden: Nodraw shader, the NODRAW flag (0x400), helper textures, physics/shadow proxy
     // sub-materials (proxy_mat_*, shadowproxy: present in render meshes, never
-    // drawn), and EYE_AO_OVERLAY (a blended shadow shell over the eyeballs)
-    nodraw: /^nodraw$/i.test(shader) || (Number(n.attrs.MtlFlags ?? 0) & 0x400) !== 0 ||
+    // drawn), EYE_AO_OVERLAY (a blended shadow shell over the eyeballs), and volumetric
+    // light-shaft shaders (Geometrybeam, Templbeamproc: additive beams, black when drawn opaque)
+    nodraw: /^(nodraw|geometrybeam|templbeamproc)$/i.test(shader) || (Number(n.attrs.MtlFlags ?? 0) & 0x400) !== 0 ||
       // Materials/special/: collision/barrier/raycast proxies, replace-me placeholders
       /^materials[\\/]special[\\/]/i.test(textures.get("Diffuse") ?? "") ||
       /(^|_)proxy|shadowproxy/i.test(n.attrs.Name ?? "") || (n.attrs.StringGenMask ?? "").includes("%EYE_AO_OVERLAY"),
