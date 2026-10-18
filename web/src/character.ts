@@ -29,6 +29,8 @@ export interface CharacterPart {
   layer: number;
   /** rigid geometry pinned to a bone (CDF CA_BONE); `skin` is then a .cgf */
   attach?: BoneAttachment;
+  /** headwear that covers the top and back of the head (the hair is hidden under it) */
+  coversHair?: boolean;
 }
 
 export interface BoneAttachment {
@@ -112,6 +114,8 @@ export class CharacterDb {
   private presetItems = new Map<string, Row[]>();
   private itemAttachments = new Map<string, Row[]>();
   private archetypeLayer = new Map<string, number>();
+  /** armour archetypes that cover the top and back of the head (hoods, cloth caps, chain coifs) */
+  private coversHair = new Set<string>();
   private presetRows = new Map<string, Row>();
 
   static async load(vfs: Vfs): Promise<CharacterDb> {
@@ -134,10 +138,17 @@ export class CharacterDb {
     db.presetRows = indexBy(presets, "clothing_preset_id");
     // a clothing piece's layer is the outermost body layer its archetype covers
     const layerOrder = new Map(layers.map((r) => [r.body_layer_id, Number(r.layer_order)]));
+    const subparts = new Map<string, Set<string>>();
     for (const r of arch) {
       const o = layerOrder.get(r.body_layer_id) ?? 1;
       db.archetypeLayer.set(r.armor_archetype_id, Math.max(db.archetypeLayer.get(r.armor_archetype_id) ?? 0, o));
+      const set = subparts.get(r.armor_archetype_id) ?? new Set<string>();
+      set.add(r.body_subpart_id);
+      subparts.set(r.armor_archetype_id, set);
     }
+    // body_subpart 24 = head_up, 25 = head_back: headwear covering both hides the hair. The engine
+    // shrinks the hair with its "#A_shrink" morph target instead (compressed morphs, not decoded yet)
+    for (const [id, set] of subparts) if (set.has("24") && set.has("25")) db.coversHair.add(id);
     for (const r of soul) {
       const b = db.body.get(r.character_body_id);
       const gender = b?.race_id === "1" ? "horse" : b?.gender_id === "2" ? "female" : "male";
@@ -166,7 +177,7 @@ export class CharacterDb {
           continue;
         }
         const layer = BASE_LAYER.cloth - 1 + (this.archetypeLayer.get(c.armor_archetype_id) ?? 1);
-        parts.push({ kind: "cloth", label: c.clothing_name, layer, ...partPaths("cloth", c.model, c.material, c.race_id) });
+        parts.push({ kind: "cloth", label: c.clothing_name, layer, coversHair: this.coversHair.has(c.armor_archetype_id) || undefined, ...partPaths("cloth", c.model, c.material, c.race_id) });
       }
       for (const a of this.itemAttachments.get(link.armor_id) ?? []) {
         const att = this.attachment.get(a.clothing_attachment_id);
@@ -196,6 +207,11 @@ export class CharacterDb {
     add("hair", this.hair, r.character_hair_id);
     add("beard", this.beard, r.character_beard_id);
     if (r.initial_clothing_preset_id) parts.push(...this.presetParts(r.initial_clothing_preset_id, notes));
+    const cap = parts.find((p) => p.coversHair);
+    if (cap) {
+      const i = parts.findIndex((p) => p.kind === "hair");
+      if (i >= 0) { parts.splice(i, 1); notes.push(`hair hidden under ${cap.label}`); }
+    }
     const body = this.body.get(r.character_body_id);
     const skeleton = body?.race_id === "1" ? SKELETON.horse : body?.gender_id === "2" ? SKELETON.female : SKELETON.male;
     return { name: r.soul_name, skeleton, parts, notes };
