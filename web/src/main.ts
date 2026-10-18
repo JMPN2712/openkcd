@@ -4,7 +4,7 @@ import { buildTree, sortedDirs, sortedFiles, baseName, type TreeDir } from "./tr
 import { classify, looksLikeGameRoot, scanDirectory, OWNER_ORDER, type Owner, type PakSource } from "./paks.ts";
 import { showPreview, type PreviewHooks } from "./preview.ts";
 import { showTexture, type TextureContext } from "./textureView.ts";
-import { TEXTURE_RE } from "./texture.ts";
+import { ASSET_RE } from "./assets.ts";
 import { Vfs } from "./vfs.ts";
 import { formatCount, formatSize } from "./format.ts";
 
@@ -37,7 +37,7 @@ let current: LoadedPak | null = null;
 let selectedRow: HTMLElement | null = null;
 let allPaks: PakSource[] = [];
 
-// Texture VFS over every pak, built on first texture preview.
+// Asset VFS (textures, models, materials) over every pak, built on first use.
 const vfsCache = new Map<boolean, Promise<Vfs>>();
 const textures: TextureContext = {
   hasHd: false,
@@ -48,7 +48,7 @@ const textures: TextureContext = {
   vfs(includeHd, onProgress) {
     let v = vfsCache.get(includeHd);
     if (!v) {
-      v = Vfs.build(allPaks, { filter: (n) => TEXTURE_RE.test(n), includeHd, onProgress });
+      v = Vfs.build(allPaks, { filter: (n) => ASSET_RE.test(n), includeHd, onProgress });
       v.catch(() => vfsCache.delete(includeHd));
       vfsCache.set(includeHd, v);
     }

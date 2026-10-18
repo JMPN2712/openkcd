@@ -23,6 +23,9 @@ npm install
 npm run dev        # then open http://localhost:5173/ in Chrome
 npm run test:pak   # Node smoke test against ~/kcd1 (or pass a game root)
 node scripts/test-textures.ts /tmp/tex && python3 -I scripts/compare_pillow.py /tmp/tex   # texture layout + decoder check
+node scripts/test-cgf.ts                         # parse every model, check indices/bounds/normals
+node scripts/render-model.ts /tmp/renders objects/vehicles/cart/cart_01.cga   # headless WebGPU render to PNG (Dawn)
 ```
 
 Click **Open KCD folder** and pick the game root (the folder containing `Data` and `bin`).
+Click a `.dds*` file for the texture viewer, or a `.cgf/.cga/.skin` for the WebGPU model viewer.

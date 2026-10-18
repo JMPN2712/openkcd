@@ -7,7 +7,7 @@ import type { Vfs } from "./vfs.ts";
 import { formatSize } from "./format.ts";
 
 export interface TextureContext {
-  /** Texture VFS over all paks, built on first use; cached per HD setting. */
+  /** Asset VFS over all paks, built on first use; cached per HD setting. */
   vfs(includeHd: boolean, onProgress: (done: number, total: number) => void): Promise<Vfs>;
   hasHd: boolean;
   includeHd: boolean;
@@ -87,12 +87,12 @@ let generation = 0;
  */
 export async function showTexture(host: HTMLElement, ctx: TextureContext, stem: string, openOther: (stem: string) => void): Promise<void> {
   const gen = ++generation;
-  host.replaceChildren(el("p", "note", "Indexing textures across all archives…"));
+  host.replaceChildren(el("p", "note", "Indexing assets across all archives…"));
   let vfs: Vfs;
   let tex: Texture;
   try {
     vfs = await ctx.vfs(ctx.includeHd, (done, total) => {
-      if (gen === generation) host.replaceChildren(el("p", "note", `Indexing textures across all archives… ${done}/${total}`));
+      if (gen === generation) host.replaceChildren(el("p", "note", `Indexing assets across all archives… ${done}/${total}`));
     });
     if (gen !== generation) return;
     tex = await openTexture(vfs, stem);

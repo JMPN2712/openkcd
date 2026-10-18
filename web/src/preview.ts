@@ -5,6 +5,8 @@ import { readEntry, type PakEntry } from "./zip.ts";
 import { formatSize } from "./format.ts";
 import { textureStem } from "./texture.ts";
 import { showTexture, type TextureContext } from "./textureView.ts";
+import { showModel } from "./modelView.ts";
+import { MODEL_RE } from "./model.ts";
 
 const TEXT_EXTS = new Set([
   "xml", "lua", "cfg", "txt", "json", "ini", "mtl", "cdf", "adb", "chrparams", "animevents",
@@ -114,6 +116,14 @@ export async function showPreview(host: HTMLElement, blob: Blob, e: PakEntry, ho
   host.append(head);
   const body = el("div", "preview-body", "Loading…");
   host.append(body);
+
+  if (hooks && MODEL_RE.test(e.name.toLowerCase())) {
+    body.replaceChildren();
+    const view = el("div");
+    body.append(view);
+    await showModel(view, hooks.textures, e.name.toLowerCase(), hooks.openTexture);
+    return;
+  }
 
   const stem = textureStem(e.name);
   if (stem && hooks) {

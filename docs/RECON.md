@@ -223,7 +223,78 @@ BC6H within 1/255.
   - Plus a long tail of legacy DX9 formats (DXT1/3, ATI2, L8, A8, RGB
     24/32-bit, G16R16F, A16B16G16R16F) and DXGI A8 / R16G16.
 
-## 6. Full pak table
+## 6. Models (verified while building the model viewer)
+
+Checked by `web/scripts/test-cgf.ts` over all 52,247 `.cgf/.cga/.skin/.chr`
+files (86.7M triangles), and visually via headless WebGPU renders from
+`web/scripts/render-model.ts`, which uses Dawn through the `webgpu` npm package.
+
+- **Container.** `CrCh` signature, version 0x746, with 16-byte chunk table
+  entries {u16 type, u16 version, u32 id, u32 size, u32 offset}. Chunks carry
+  no inline header.
+- **Chunk types used:**
+
+  | Type | Chunk | Version |
+  |---|---|---|
+  | 0x1000 | Mesh | 0x801 |
+  | 0x1001 | Helper | 0x744 |
+  | 0x100b | Node | 0x824 |
+  | 0x100e | Timing | 0x918 |
+  | 0x1013 | SourceInfo | |
+  | 0x1014 | MtlName | 0x802 |
+  | 0x1015 | ExportFlags | |
+  | 0x1016 | DataStream | 0x800 |
+  | 0x1017 | MeshSubsets | 0x800 |
+  | 0x1018 | MeshPhysicsData | 0x800 |
+  | 0x3009 | BspTreeData | |
+  | 0x1003, 0x1005 | | rare |
+
+  31 character files use older variants (a `CryTek` 0x744/0x745 header, or
+  another node version) and are not supported yet.
+- **Streams.** `{flags, type, count, elemSize, reserved[2]}` followed by data:
+  - Positions: half-float ×4 (w = 1.0), **absolute** model-space metres.
+  - UVs: float32 ×2.
+  - Indices: u16 or u32, absolute (not relative to the subset's first vertex).
+  - Tangents: `SPipTangents`, int16×4 tangent + int16×4 bitangent; the
+    normal is (t × b) · sign(t.w).
+  - Shape-deformation streams (type 8) appear on characters.
+- **Subsets.** A 16-byte header, then 36 bytes per subset. Flag 0x4 appends
+  one float (texel density) per subset.
+- **Node transform.**
+  - Stored as an affine 4×4 with **the 4th column zeroed** (`tm[15] == 0`),
+    so it must be fixed up before use.
+  - Its **translation is in centimetres** while vertices are in metres (the
+    `cart_01.cga` wheels sit at 62.3/71.2 for a 0.69 m radius).
+  - Nodes named `$physics_proxy…` are collision meshes.
+- **Fast-load stubs.** `_fastload/startup_*.pak` hold about 20,000 stub
+  copies of models: real chunk tables and bounding boxes but empty mesh
+  chunks. Rank them lowest and take the highest-priority version that has
+  geometry.
+- **Winding and normals.**
+  - Counter-clockwise front faces: decoded normals agree with face winding
+    on 98.7% of triangles. The rest are foliage with hand-authored normals.
+  - Many meshes contain layered duplicate triangles; the windmill roof has
+    1,946 identical and 214 reversed. Some, like that windmill's floors, also
+    have authored non-geometric normals.
+  - A renderer should disable culling and flip normals toward the viewer.
+    Flipping by `front_facing` makes the duplicates z-fight.
+- **Materials (`.mtl`, plain XML).**
+  - `SubMaterials` are indexed by the subset material ID; `Shader="Nodraw"`
+    marks proxies.
+  - Texture paths use `.tif` and map to `.dds` in the paks.
+  - The material name is relative to the model's folder when bare, or to the
+    game root when it contains `/`.
+  - PBR conventions: metals have near-black diffuse. When a `Specular` map is
+    present, the `Specular` attribute is a multiplier, typically 1,1,1.
+  - Characters get their materials from `.cdf` files; their skins reference a
+    placeholder `wh_geometry.mtl` that doesn't exist.
+- **Known viewer limitations.**
+  - Clothing and armour use a zone-mask/palette shader (the "diffuse" is a
+    mask), so they render garish.
+  - Billboard LODs (`_lod3` trees) need an impostor shader.
+  - No normal maps, detail maps, blend layers, second UV set or skinning yet.
+
+## 7. Full pak table
 
 | Pak | Size (MiB) | Files | Uncompressed (MiB) | Methods | ZIP64 | Owner |
 |---|---:|---:|---:|---|---|---|

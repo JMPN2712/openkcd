@@ -19,10 +19,14 @@ export interface VfsHit {
  * ipl_patch_010700b) override base and DLC, and HD paks override everything
  * non-HD: the 1.4–1.7 patches re-ship 1024² headers for textures whose 2048²
  * HD header has no HD patch, so patches can't outrank the HD pack.
+ * Callers still pick the best *complete* version (texture.ts, model.ts).
  */
 export function pakRank(path: string): number {
   const p = path.toLowerCase();
   const hd = p.includes("_hd") ? 1_000_000 : 0;
+  // _fastload/startup_*.pak hold stub models without geometry and early copies
+  // of texture headers: lowest priority within their group
+  if (p.includes("_fastload/")) return hd - 1;
   const m = /patch_(\d{6})(b?)/.exec(p);
   if (m) return hd + 1000 + Number(m[1]) * 10 + (p.includes("ipl_") ? 1 : 0) + (m[2] ? 2 : 0);
   if (/dlc\d/.test(p)) return hd + 100;
