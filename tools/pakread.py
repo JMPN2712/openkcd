@@ -30,7 +30,8 @@ def entries(path):
         f.seek(cd_off)
         cd = f.read(cd_size)
     o = 0
-    for _ in range(n):
+    # n (EOCD count) wraps mod 65536 in KCD's biggest paks: walk the bytes instead
+    while o + 46 <= len(cd) and cd[o:o + 4] == b"PK\x01\x02":
         (flag, method, crc, csize, usize, nlen, xlen, clen, lho) = struct.unpack_from(
             "<8xHH4xIII HHH8xI".replace(" ", ""), cd, o)
         e = Entry()

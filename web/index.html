@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KCD Pak Browser</title>
+  </head>
+  <body>
+    <header>
+      <h1>KCD Pak Browser</h1>
+      <button id="open" type="button">Open KCD folder</button>
+      <span id="status">Pick your game root (the folder with <code>Data</code> and <code>bin</code>). Files are read locally; nothing is uploaded.</span>
+    </header>
+    <main>
+      <section id="paks" aria-label="Archives"></section>
+      <section id="browser" aria-label="Archive contents">
+        <div id="browser-head">
+          <span id="pak-title">No archive selected</span>
+          <input id="filter" type="search" placeholder="Filter paths in this pak…" disabled />
+        </div>
+        <div id="tree"></div>
+      </section>
+      <section id="preview" aria-label="Preview"></section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

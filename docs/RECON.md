@@ -106,7 +106,7 @@ There's no single "CryEngine x.y" banner. The evidence points to **CryEngine
 
 ## 4. Pak archives
 
-**141 `.pak` files, 73.6 GiB on disk, 1,250,675 entries, 106 GiB uncompressed.**
+**141 `.pak` files, 73.6 GiB on disk, 1,250,598 files, 106 GiB uncompressed.** (Plus 77 directory entries; `ipl_patch_010300.pak` writes those with `\` even in the central directory, so normalise `\` to `/` before checking for a trailing slash.)
 
 They're standard ZIP archives, with these quirks:
 
@@ -114,6 +114,7 @@ They're standard ZIP archives, with these quirks:
 |---|---|
 | Compression | Only method **0 (stored)** (756k entries) and **8 (deflate)** (494k). No LZ4, zstd or Oodle at the pak level |
 | Encryption | **None.** No general-purpose flag bit 0, no CryEngine custom-encryption EOCD comment (all comments empty), no methods 11–13 |
+| **Entry count overflow** | 5 paks have more than 65,535 entries (`rataje/level.pak` 148,697; `English.pak`, `French.pak`, `German.pak`, `Japanese-part0.pak`) but **no ZIP64 record**. The EOCD's 16-bit entry count holds the true count mod 65,536 (e.g. 17,625 for `level.pak`). **Ignore the count and walk the central directory until `cd_size` bytes are used up** |
 | ZIP64 | **Not used.** Paks are split into `-partN` files at about 1.86 GiB to stay under 2 GiB. Largest single entry is 1.29 GiB (`cin_9017_navsteva_racka.usm`) |
 | Flags | `0x0008` (data descriptor) on 40,972 entries, all in the 1.8/1.9 patch paks; `0x0002` (max deflate) on 15. Harmless if you read sizes from the central directory |
 | Extra fields | Only `0x000a` (NTFS timestamps) |
