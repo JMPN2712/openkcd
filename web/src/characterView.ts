@@ -38,7 +38,7 @@ export function showCharacter(
     const ch = await loadCharacter(vfs, spec, { onStatus });
     return {
       title: `${spec.name} · ${ch.parts.length}/${spec.parts.length} parts`,
-      parts: ch.parts.map(({ part, model }) => ({ model, layer: part.layer, label: `${part.kind}: ${part.label}` })),
+      parts: ch.parts.map(({ part, model, transform }) => ({ model, transform, layer: part.layer, label: `${part.kind}: ${part.label}` })),
       notes: ch.notes,
     };
   }, openTexture);

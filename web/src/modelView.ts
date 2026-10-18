@@ -12,6 +12,8 @@ import { formatCount } from "./format.ts";
 
 export interface ScenePart {
   model: LoadedModel;
+  /** extra model-to-scene transform (bone attachments) */
+  transform?: Float32Array;
   /** depth layer (character clothing: outer layers drawn in front) */
   layer?: number;
   label?: string;
@@ -142,7 +144,8 @@ export async function showScene(host: HTMLElement, ctx: TextureContext, load: Sc
   const onGpuError = (e: Event) => { gpuError = (e as GPUUncapturedErrorEvent).error.message; };
   device.addEventListener("uncapturederror", onGpuError);
   const items = (textured: boolean) =>
-    scene.parts.map(({ model, layer }) => ({
+    scene.parts.map(({ model, layer, transform }) => ({
+      transform,
       model: textured ? model : { ...model, diffuse: model.diffuse.map(() => null), specular: model.specular.map(() => null) },
       layer,
     }));

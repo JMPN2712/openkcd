@@ -32,9 +32,17 @@ viewer (`web/src/character.ts`, `characterView.ts`). Verified with
    - `<Model File=…chr>` names the skeleton.
    - `CA_SKIN` attachments give a `Binding` (`.skin`) and a `Material`
      override.
-   - `CA_BONE` attachments pin props or weapons to a bone, using either an
-     absolute `Position`/`Rotation` (w, x, y, z) or a bone-relative
-     `RelPosition`/`RelRotation`. They are not drawn yet.
+   - `CA_BONE` attachments pin props or weapons (`.cgf`) to a bone, using
+     either an absolute model-space `Position`/`Rotation` or a bone-relative
+     `RelPosition`/`RelRotation` (world = bone bind pose × relative).
+     Quaternions are **w, x, y, z**.
+   - Checked on 401 absolute attachments: 371 sit exactly on their bone's
+     parsed bind position, and 368 rotations match the w, x, y, z order
+     (105 would match the conjugate). That validates the skeleton parser.
+   - Only 32 bone attachments carry geometry. Nested `.cdf` bindings (2) are
+     not supported.
+   - Some test `.cdf`s (`male_halberd`, `male_sword_shield`) reference files
+     that aren't shipped.
 
 ## Geometry
 

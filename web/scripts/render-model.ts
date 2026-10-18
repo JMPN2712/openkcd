@@ -105,7 +105,7 @@ for (const path of models) {
     const ch = await loadCharacter(vfs, spec, { maxTextureDim: 1024 });
     console.log(`  ${spec.name}: ${ch.parts.length}/${spec.parts.length} parts: ${ch.parts.map((x) => `${x.part.kind}:${x.part.label}@${x.part.layer}`).join(", ")}`);
     notes.push(...ch.notes);
-    renderer.setModels(ch.parts.map(({ model, part }) => ({ model: noTex ? { ...model, diffuse: model.diffuse.map(() => null) } : model, layer: part.layer })));
+    renderer.setModels(ch.parts.map(({ model, part, transform }) => ({ model: noTex ? { ...model, diffuse: model.diffuse.map(() => null) } : model, layer: part.layer, transform })));
   } else {
     const model = await loadModel(vfs, path.toLowerCase(), { maxTextureDim: 1024 });
     if (noTex) model.diffuse = model.diffuse.map(() => null);

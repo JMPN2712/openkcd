@@ -14,8 +14,10 @@ import { parseXml, type XmlNode } from "./xml.ts";
 import { readTable, indexBy, groupBy, type Row } from "./tables.ts";
 import type { Vfs } from "./vfs.ts";
 import { loadModel, type LoadedModel } from "./model.ts";
+import { parseSkeleton, type Skeleton } from "./skeleton.ts";
+import { multiply } from "./mat4.ts";
 
-export type PartKind = "body" | "head" | "hair" | "beard" | "cloth" | "attachment";
+export type PartKind = "body" | "head" | "hair" | "beard" | "cloth" | "attachment" | "prop";
 
 export interface CharacterPart {
   kind: PartKind;
@@ -25,6 +27,17 @@ export interface CharacterPart {
   material: string | null;
   /** draw layer: outer layers are nudged towards the camera to win depth ties */
   layer: number;
+  /** rigid geometry pinned to a bone (CDF CA_BONE); `skin` is then a .cgf */
+  attach?: BoneAttachment;
+}
+
+export interface BoneAttachment {
+  bone: string;
+  /** "abs": transform is in model space (default pose); "rel": relative to the bone */
+  mode: "abs" | "rel";
+  pos: [number, number, number];
+  /** quaternion w, x, y, z (CryEngine order) */
+  rot: [number, number, number, number];
 }
 
 export interface CharacterSpec {
@@ -43,7 +56,7 @@ export const SKELETON = {
 
 // Layer for parts that are not clothing. Hair sits just above the head and
 // below hoods (cloth layers start at 1).
-const BASE_LAYER: Record<PartKind, number> = { body: 0, head: 0, beard: 0.5, hair: 0.5, cloth: 1, attachment: 9.5 };
+const BASE_LAYER: Record<PartKind, number> = { body: 0, head: 0, beard: 0.5, hair: 0.5, cloth: 1, attachment: 9.5, prop: 0 };
 
 function partRoot(name: string, race: string | undefined): string {
   return race === "1" || /^sh\d/i.test(name) ? "objects/characters/animals/horse" : "objects/characters/humans";
@@ -186,7 +199,7 @@ export class CharacterDb {
   }
 }
 
-/** Character definition (.cdf): skeleton plus CA_SKIN attachments. Bone attachments are ignored (no geometry). */
+/** Character definition (.cdf): skeleton, CA_SKIN attachments and CA_BONE attachments that carry a .cgf. */
 export function parseCdf(text: string, name: string): CharacterSpec {
   const root = parseXml(text).children.find((c) => c.tag === "CharacterDefinition");
   if (!root) throw new Error("no <CharacterDefinition> element");
@@ -197,6 +210,27 @@ export function parseCdf(text: string, name: string): CharacterSpec {
   const norm = (p: string) => p.replaceAll("\\", "/").toLowerCase();
   for (const a of list as XmlNode[]) {
     const { Type: type, AName: aname = "", Binding: binding, Material: material } = a.attrs;
+    if (type === "CA_BONE" && binding) {
+      if (!/\.cgf$/i.test(binding)) {
+        notes.push(`bone attachment ${aname}: ${binding} (nested ${binding.split(".").pop()} not supported)`);
+        continue;
+      }
+      const nums = (v: string | undefined, n: number, d: number[]) => {
+        const xs = (v ?? "").split(",").map(Number);
+        return xs.length === n && xs.every(Number.isFinite) ? xs : d;
+      };
+      const rel = "RelPosition" in a.attrs || "RelRotation" in a.attrs;
+      parts.push({
+        kind: "prop", label: aname, skin: norm(binding), material: material ? norm(material).replace(/(\.mtl)?$/, ".mtl") : null, layer: 0,
+        attach: {
+          bone: a.attrs.BoneName ?? "",
+          mode: rel ? "rel" : "abs",
+          pos: nums(a.attrs[rel ? "RelPosition" : "Position"], 3, [0, 0, 0]) as [number, number, number],
+          rot: nums(a.attrs[rel ? "RelRotation" : "Rotation"], 4, [1, 0, 0, 0]) as [number, number, number, number],
+        },
+      });
+      continue;
+    }
     if (type !== "CA_SKIN") continue;
     if (!binding) {
       notes.push(`attachment ${aname} has no binding`);
@@ -211,8 +245,22 @@ export function parseCdf(text: string, name: string): CharacterSpec {
 
 export interface LoadedCharacter {
   spec: CharacterSpec;
-  parts: { part: CharacterPart; model: LoadedModel }[];
+  /** `transform` places bone attachments; skins need none (bind pose, model space) */
+  parts: { part: CharacterPart; model: LoadedModel; transform?: Float32Array }[];
   notes: string[];
+}
+
+/** Column-major 4×4 from a translation and a (w, x, y, z) quaternion. */
+export function poseMatrix(pos: [number, number, number], q: [number, number, number, number]): Float32Array {
+  const [w, x, y, z] = q;
+  const l = Math.hypot(w, x, y, z) || 1;
+  const [W, X, Y, Z] = [w / l, x / l, y / l, z / l];
+  return new Float32Array([
+    1 - 2 * (Y * Y + Z * Z), 2 * (X * Y + Z * W), 2 * (X * Z - Y * W), 0,
+    2 * (X * Y - Z * W), 1 - 2 * (X * X + Z * Z), 2 * (Y * Z + X * W), 0,
+    2 * (X * Z + Y * W), 2 * (Y * Z - X * W), 1 - 2 * (X * X + Y * Y), 0,
+    pos[0], pos[1], pos[2], 1,
+  ]);
 }
 
 /** Load every part's .skin with its material override. Missing parts become notes. */
@@ -223,11 +271,28 @@ export async function loadCharacter(
 ): Promise<LoadedCharacter> {
   const notes = [...spec.notes];
   const parts: LoadedCharacter["parts"] = [];
+  let skeleton: Skeleton | null | undefined;
   for (const part of spec.parts) {
     opts.onStatus?.(`Loading ${part.kind} ${part.label}…`);
     try {
+      let transform: Float32Array | undefined;
+      if (part.attach) {
+        const at = part.attach;
+        const local = poseMatrix(at.pos, at.rot);
+        if (at.mode === "abs") {
+          transform = local;
+        } else {
+          if (skeleton === undefined) {
+            const hit = vfs.lookup(spec.skeleton);
+            skeleton = hit ? parseSkeleton(await vfs.read(hit)) : null;
+          }
+          const bi = skeleton?.byName.get(at.bone.toLowerCase());
+          if (bi === undefined) throw new Error(`bone ${at.bone} not in ${spec.skeleton}`);
+          transform = multiply(skeleton!.bones[bi].bindPose, local);
+        }
+      }
       const model = await loadModel(vfs, part.skin, { ...opts, material: part.material });
-      parts.push({ part, model });
+      parts.push({ part, model, transform });
       for (const n of model.notes) notes.push(`${part.label}: ${n}`);
     } catch (err) {
       notes.push(`${part.kind} ${part.label} (${part.skin}): ${(err as Error).message}`);
