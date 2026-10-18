@@ -133,11 +133,32 @@ The octree follows the terrain tree and runs exactly to the end of
   - Instances sit on the decoded terrain: height above ground has a median
     of −2 cm and p5–p95 of −6 to +1 cm. That's an independent check of the
     heightmap decoding.
-- **Not decoded yet:** decals (7), water volumes (9), roads (11) and type 23.
-  They are variable-length, and 129 MiB of them remain unread.
+- **Decal (type 7):** a fixed 116 bytes. Skipped for now.
+- **Water volume (type 9):**
+  - Fields: type, AABB, `u64 id` (+44), `i32 material` (+52; mostly
+    `materials/terrain/river/river_sazava_02`, plus marshland and pond
+    water), `f32 fogDensity`, `Vec3 fogColor`, `Plane fogPlane` (+72),
+    caustic and texture parameters, `u32 nVertices` (+124), `u32 nContour`
+    (+136), physics parameters, then `Vec3 vertices[nVertices]` from +208,
+    then `Vec3 contour[nContour]`. Size = 208 + 12·(nVertices + nContour).
+  - The vertices are an absolute outline at the water height, and rivers
+    slope, so each vertex keeps its own z.
+  - Rataje has 282 volumes of 4–67 vertices, all inside their AABBs. With
+    decal and water sizes known, 190,389 blocks parse to their exact end.
+- **Type order is not strict.** 123 blocks break ascending type order.
+  Parsing through decals and water found **3,999 more vegetation
+  instances** that had been hidden behind decals.
+- **Not decoded yet:** roads (11) and type 23, both variable-length.
+  Size formulas based on the road's vertex and index counts (e.g. 108 + 12v
+  + 2i) don't reproduce where the next record starts, so parsing a block
+  stops at them.
+- **Water rendering** (`web/src/waterRenderer.ts`): outlines are ear-clipped
+  in XY and drawn in a blended pass after the opaque geometry, with a
+  fog-colour tint, Fresnel sky reflection and a sun glint. That's 2,109
+  triangles for the whole level.
 
-**Rataje totals:** 212,879 brushes (12,436 distinct meshes) and 1,479,226
-vegetation instances. The most common are soil stones, modular rocks,
+**Rataje totals:** 212,879 brushes (12,436 distinct meshes), 1,483,225
+vegetation instances, 20,212 decals and 282 water volumes. The most common are soil stones, modular rocks,
 elder bushes and branch piles.
 
 ## Rendering (`web/src/terrainRenderer.ts`)
@@ -194,7 +215,7 @@ elder bushes and branch piles.
     full-detail renders closely (`render-world.ts` writes both).
   - **Streaming:** now covers 500 m, up to 1,500 models.
 - **Known gaps:**
-  - no water, roads or decals (octree types 7/9/11 not decoded);
+  - no roads or decals (octree types 7 and 11 are not drawn);
   - road and terrain-blend meshes render as flat dark patches;
   - no shadows; terrain detail materials (the 26 surface types) aren't blended in.
 

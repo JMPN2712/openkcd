@@ -16,6 +16,7 @@ import { readCentralDirectory, readEntry } from "../src/zip.ts";
 import { parseTerrain, heightAt } from "../src/terrain.ts";
 import { parseLevelObjects } from "../src/levelObjects.ts";
 import { parseCover } from "../src/cover.ts";
+import { WaterRenderer } from "../src/waterRenderer.ts";
 import { TerrainRenderer, type FlyCamera } from "../src/terrainRenderer.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 import { buildWorldScene, lodItems, newWorldCaches, selectLods } from "../src/world.ts";
@@ -77,6 +78,8 @@ const device = await adapter.requestDevice({ requiredFeatures: adapter.features.
 device.addEventListener("uncapturederror", (e) => console.log("GPU ERROR:", (e as GPUUncapturedErrorEvent).error.message));
 const terrainR = new TerrainRenderer(device, "rgba8unorm", terrain, cover);
 console.log(`terrain colour: ${terrainR.coverMode}`);
+const water = new WaterRenderer(device, "rgba8unorm", objects.water);
+console.log(`water: ${objects.water.length} volumes, ${water.triangles} triangles`);
 const models = new ModelRenderer(device, "rgba8unorm", 4);
 const target = device.createTexture({ size: [W, H], format: "rgba8unorm", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
 const msaa = device.createTexture({ size: [W, H], format: "rgba8unorm", sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
@@ -113,6 +116,7 @@ for (const [i, v] of list.entries()) {
   counts.forEach((n, k) => models.setInstances(k, out[k], n));
   terrainR.prepare(cam, vp);
   models.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
+  water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
   const enc = device.createCommandEncoder();
   const pass = enc.beginRenderPass({
     colorAttachments: [{ view: msaa.createView(), resolveTarget: target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.70, a: 1 }, loadOp: "clear", storeOp: "discard" }],
@@ -120,6 +124,7 @@ for (const [i, v] of list.entries()) {
   });
   terrainR.draw(pass);
   models.draw(pass);
+  water.draw(pass);
   pass.end();
   enc.copyTextureToBuffer({ texture: target }, { buffer: readback, bytesPerRow: stride }, [W, H]);
   device.queue.submit([enc.finish()]);

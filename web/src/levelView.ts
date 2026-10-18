@@ -8,6 +8,7 @@ import type { PakSource } from "./paks.ts";
 import { parseLevelObjects, type LevelObjects } from "./levelObjects.ts";
 import { parseCover, type Cover } from "./cover.ts";
 import { ModelRenderer } from "./renderer.ts";
+import { WaterRenderer } from "./waterRenderer.ts";
 import { buildWorldScene, lodItems, newWorldCaches, selectLods, type WorldScene } from "./world.ts";
 import { Vfs } from "./vfs.ts";
 import { ASSET_RE } from "./assets.ts";
@@ -110,6 +111,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   ctx.configure({ device, format, alphaMode: "opaque" });
   const renderer = new TerrainRenderer(device, format, terrain, cover);
   const models = new ModelRenderer(device, format, 4);
+  const water = new WaterRenderer(device, format, objects.water);
   let depth: GPUTexture | null = null;
   let msaa: GPUTexture | null = null;
   let streamedAt: [number, number] | null = null;
@@ -199,6 +201,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const vp = TerrainRenderer.viewProj(cam, target.width / target.height);
     renderer.prepare(cam, vp);
     models.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
+    water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
     if (scene) {
       const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts);
       lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
@@ -211,6 +214,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     });
     renderer.draw(pass);
     models.draw(pass);
+    water.draw(pass);
     pass.end();
     device.queue.submit([enc.finish()]);
     hud.textContent = `x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${sceneInfo}${lodInfo}`;
@@ -222,6 +226,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     stopped = true;
     cancelAnimationFrame(raf);
     models.destroy();
+    water.destroy();
     depth?.destroy();
     msaa?.destroy();
     ro.disconnect();
