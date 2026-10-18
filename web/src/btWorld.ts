@@ -1,0 +1,552 @@
+// The world side of behaviour trees: the smart-object graph (level entities and
+// their links), the AI database (smart-object / smart-area behaviours), and the
+// world-facing nodes the interpreter delegates to its host.
+//
+// Chain (Rataje's tailor): NPC rat_tailor works at area rat_sa_tailory (Work
+// link) → the area's template behaviour "tailor" = final/sa_tailory.xml#tailor →
+// GraphSearch finds the area's linked work spots by category → CallBehavior
+// "use" on the tailor's table → its smart-object type so_tailor_measuring maps
+// "use" to final/so_tailor_measuring.xml#use → walk there, play TailorIn /
+// Tailor / TailorOut.
+//
+// Movement and animation are actions reported to the caller (`act`); they
+// complete after a time estimate here. Semantics are approximations
+// (docs/GAMELOGIC.md); guesses are marked ASSUMPTION.
+
+import type { BtNode, BtTree } from "./bt.ts";
+import { Runner, Scope, type Context, type Host, type Status, type Task, type Value } from "./btRuntime.ts";
+import type { EntityInfo } from "./levelEntities.ts";
+import type { Row } from "./tables.ts";
+
+/** A smart-object helper (Libs/SmartObjects.xml): a spot relative to the object, for some animations. */
+export interface SoHelper {
+  name: string;
+  pos: [number, number, number];
+  /** quaternion w, x, y, z */
+  rot: [number, number, number, number];
+  description: string;
+}
+
+/** Helpers by class name, from Libs/SmartObjects.xml (<Helper className= name= pos= rot= description=>). */
+export function parseSmartObjectHelpers(xml: string): Map<string, SoHelper[]> {
+  const out = new Map<string, SoHelper[]>();
+  const un = (s: string) => s.replace(/&apos;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+  for (const m of xml.matchAll(/<Helper\s([^>]*)\/?>/g)) {
+    const a = (k: string) => new RegExp(`\\b${k}="([^"]*)"`).exec(m[1])?.[1] ?? "";
+    const nums = (v: string, n: number, d: number[]) => { const x = v.split(",").map(Number); return x.length === n && x.every(Number.isFinite) ? x : d; };
+    const cls = a("className").toLowerCase();
+    const list = out.get(cls) ?? [];
+    list.push({ name: a("name"), pos: nums(a("pos"), 3, [0, 0, 0]) as [number, number, number], rot: nums(a("rot"), 4, [1, 0, 0, 0]) as [number, number, number, number], description: un(a("description")) });
+    out.set(cls, list);
+  }
+  return out;
+}
+
+export interface Behaviour {
+  name: string;
+  file: string;
+  tree: string;
+  maxInstances: number;
+}
+
+/** AI tables: behaviours of smart-object types and smart-area templates. */
+export class AiDb {
+  readonly so = new Map<string, Behaviour[]>();
+  readonly sa = new Map<string, Behaviour[]>();
+  constructor(t: { soTag: Row[]; so2tag: Row[]; saTag: Row[]; sa2tag: Row[] }) {
+    const soTags = new Map(t.soTag.map((r) => [r.so_behaviour_tag_id, r]));
+    for (const r of t.so2tag) {
+      const tag = soTags.get(r.so_behaviour_tag_id);
+      if (!tag) continue;
+      const list = this.so.get(r.so_smart_object_id) ?? [];
+      list.push({ name: tag.so_behaviour_tag_name, file: tag.tree_file.toLowerCase().replaceAll("\\", "/"), tree: tag.tree_name.toLowerCase(), maxInstances: Number(tag.max_instances || -1) });
+      this.so.set(r.so_smart_object_id, list);
+    }
+    const saTags = new Map(t.saTag.map((r) => [r.sa_behaviour_tag_id, r]));
+    for (const r of t.sa2tag) {
+      const tag = saTags.get(r.sa_behaviour_tag_id);
+      if (!tag) continue;
+      const list = this.sa.get(r.sa_smart_area_id) ?? [];
+      list.push({ name: tag.sa_behaviour_tag_name, file: tag.tree_file.toLowerCase().replaceAll("\\", "/"), tree: tag.tree_name.toLowerCase(), maxInstances: -1 });
+      this.sa.set(r.sa_smart_area_id, list);
+    }
+  }
+  static TABLES = { soTag: "ai/so_behaviour_tag", so2tag: "ai/so_smart_object2so_behaviour_tag", saTag: "ai/sa_behaviour_tag", sa2tag: "ai/sa_smart_area2sa_behaviour_tag" } as const;
+}
+
+/** Something a tree asks the world to do. */
+export interface Action {
+  kind: "move" | "animation";
+  npc: number;
+  /** move: target position; animation: fragment name (e.g. "TailorIn") */
+  target: [number, number, number] | string;
+  /** helper/smart object involved, if any */
+  object?: number;
+}
+
+export interface WorldOptions {
+  ents: Map<number, EntityInfo>;
+  ai: AiDb;
+  /** smart-object helpers by class (parseSmartObjectHelpers) */
+  helpers?: Map<string, SoHelper[]>;
+  trees: (file: string, name: string) => BtTree | undefined;
+  gameTime: () => number;
+  realTime: () => number;
+  random?: () => number;
+  /** an action starts; return its duration in real seconds (default: estimates) */
+  act?: (a: Action) => number | void;
+  trace?: (msg: string) => void;
+  /** whether NPCs run their detailed behaviour (else the LOD branch); default true */
+  detail?: boolean;
+}
+
+const wuid = (v: Value | undefined): number | null => {
+  if (typeof v === "number") return v;
+  if (v && typeof v === "object" && !Array.isArray(v) && typeof (v as Record<string, Value>).id === "number") return (v as Record<string, Value>).id as number;
+  return null;
+};
+
+export class AiWorld {
+  readonly o: WorldOptions;
+  readonly runner: Runner;
+  /** reverse links (for "parent" edges) */
+  private parents = new Map<number, { target: number; name: string }[]>();
+  /** active behaviour instances per "entity/behaviour" (max_instances) */
+  private reservations = new Map<string, number>();
+  /** TryCatch handlers active during the current tick (innermost last) */
+  private catchers: ((reason: string) => void)[] = [];
+  private current: { npc: number } = { npc: -1 };
+  /** where each NPC is (updated by moves); starts at the entity position */
+  readonly positions = new Map<number, [number, number, number]>();
+  /** semaphores and external locks by scoped name */
+  private semaphores = new Map<string, Set<object>>();
+  private locks = new Map<string, boolean>();
+
+  constructor(o: WorldOptions) {
+    this.o = o;
+    for (const e of o.ents.values()) for (const l of e.links ?? []) {
+      const list = this.parents.get(l.target) ?? [];
+      list.push({ target: e.id, name: l.name });
+      this.parents.set(l.target, list);
+    }
+    const host: Host = {
+      gameTime: o.gameTime,
+      realTime: o.realTime,
+      random: o.random ?? Math.random,
+      tree: o.trees,
+      node: (n, c) => this.node(n, c),
+      report: (w) => o.trace?.(`[unsupported] ${w}`),
+    };
+    this.runner = new Runner(host);
+  }
+
+  private trace(msg: string) {
+    this.o.trace?.(msg);
+  }
+
+  /**
+   * System variables of a tree instance: this, __area, __object, __player, … Area behaviours
+   * normally run under the NPC's daily-cycle brain (final/sb_daycycles.xml#root), which owns the
+   * t_* parameters they read ($t_timeChanged, $t_nextBehavior, …): until that brain runs here, its
+   * declared variables are provided with their initial values.
+   */
+  private globals(npc: number, extra: Record<string, Value> = {}): Scope {
+    const g = new Scope();
+    for (const v of this.o.trees("final/sb_daycycles.xml", "root")?.variables ?? []) g.declare(v);
+    g.vars.set("this", { id: npc });
+    g.vars.set("__player", { id: -1 });
+    for (const [k, v] of Object.entries(extra)) g.vars.set(k, v);
+    return g;
+  }
+
+  /** Start an NPC's smart-area behaviour (e.g. its workplace): the area template's behaviour `name`. */
+  startAreaBehaviour(npc: number, area: number, name: string): Task | null {
+    const a = this.o.ents.get(area);
+    const b = a?.saTemplate ? this.o.ai.sa.get(a.saTemplate)?.find((x) => x.name.toLowerCase() === name.toLowerCase()) : undefined;
+    const tree = b && this.o.trees(b.file, b.tree);
+    if (!tree) { this.trace(`no area behaviour "${name}" for ${a?.name ?? area}`); return null; }
+    this.trace(`npc ${npc}: area ${a!.name} behaviour "${b!.name}" → ${b!.file}#${b!.tree}`);
+    const { task } = this.runner.instantiate(tree, this.globals(npc, { __area: { id: area } }));
+    return this.bind(npc, task);
+  }
+
+  /** Wrap a task so world nodes know which NPC is ticking. */
+  private bind(npc: number, task: Task): Task {
+    return {
+      tick: () => { const prev = this.current; this.current = { npc }; try { return task.tick(); } finally { this.current = prev; } },
+      abort: () => task.abort(),
+    };
+  }
+
+  // ---- graph search ----
+
+  private edges(id: number, pruned: Set<string>): { to: number; tags: string[] }[] {
+    const out: { to: number; tags: string[] }[] = [];
+    for (const l of this.o.ents.get(id)?.links ?? []) out.push({ to: l.target, tags: l.name.split(",").map((t) => t.replace(/\[.*$/, "").trim()).filter(Boolean) });
+    // ASSUMPTION: reverse links are "parent" edges (the area containing an object, …)
+    if (!pruned.has("parent")) for (const l of this.parents.get(id) ?? []) out.push({ to: l.target, tags: ["parent"] });
+    return out.filter((e) => !e.tags.some((t) => pruned.has(t)));
+  }
+
+  private graphSearch(n: BtNode, c: Context): Status {
+    const origin = wuid(this.ref(n, c, "Origin"));
+    if (origin === null) { this.trace("GraphSearch: no origin"); return "failure"; }
+    const depth = Number(c.eval("depth", 1));
+    const pruned = new Set(String(c.eval("EdgePruning", "")).split(",").map((s) => s.trim()).filter(Boolean));
+    const or = String(c.eval("SetOperationChoice", "")).startsWith("Union");
+    const filters = n.children.filter((k) => k.tag !== "Nodalyzer");
+    const nodalyzers = n.children.filter((k) => k.tag === "Nodalyzer");
+    const found: { parent: number; child: number }[] = [];
+    const seen = new Set<number>([origin]);
+    let frontier = [origin];
+    for (let d = 0; (depth < 0 || d < depth) && frontier.length; d++) {
+      const next: number[] = [];
+      for (const p of frontier) for (const e of this.edges(p, pruned)) {
+        if (seen.has(e.to)) continue;
+        seen.add(e.to);
+        const results = filters.map((f) => this.filter(f, c, p, e.to, e.tags));
+        const ok = filters.length === 0 || (or ? results.some(Boolean) : results.every(Boolean));
+        if (ok) found.push({ parent: p, child: e.to });
+        // ASSUMPTION: a failing filter with prune="true" stops the walk below that child
+        if (ok || !filters.some((f, k) => !results[k] && this.prop(f, "prune") === "true")) next.push(e.to);
+      }
+      frontier = next;
+    }
+    if (truthyProp(c.eval("includeOrigin", false))) found.unshift({ parent: origin, child: origin });
+    for (const z of nodalyzers) {
+      const childVar = this.prop(z, "Child"), all = this.prop(z, "Quantifiers") !== "Exists";
+      if (childVar) {
+        const cur = c.scope.get(childVar);
+        c.scope.set(childVar, all || Array.isArray(cur) ? found.map((f) => f.child) : (found[0]?.child ?? null));
+      }
+    }
+    this.trace(`npc ${this.current.npc}: GraphSearch from ${this.name(origin)} → [${found.map((f) => this.name(f.child)).join(", ")}]`);
+    return found.length || !truthyProp(c.eval("failOnEmpty", true)) ? "success" : "failure";
+  }
+
+  private prop(n: BtNode, k: string): string {
+    const v = n.props[k];
+    return v === undefined ? "" : v.startsWith('"') && v.endsWith('"') ? v.slice(1, -1) : v;
+  }
+
+  private filter(f: BtNode, c: Context, parent: number, child: number, tags: string[]): boolean {
+    const evalIn = (k: string) => {
+      const q = this.prop(f, k);
+      return q.startsWith("$") ? String(c.scope.get(q.slice(1).split(".")[0]) !== undefined ? this.lookupPath(c.scope, q.slice(1)) : "") : q;
+    };
+    const subject = this.prop(f, "Source") === "Parent" ? parent : child;
+    let ok: boolean;
+    switch (f.tag) {
+      case "CategoryFilter": {
+        const cats = evalIn("categories").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+        ok = cats.includes((this.o.ents.get(subject)?.category ?? "").toLowerCase());
+        break;
+      }
+      case "LinkTagFilter": ok = tags.map((t) => t.toLowerCase()).includes(evalIn("tag").toLowerCase()); break;
+      // no inventories or item slots are modelled yet: item filters match nothing
+      case "SlotClassFilter": case "ItemClassFilter": ok = false; break;
+      case "HasBehaviorFilter": {
+        const names = evalIn("BehaviorList").split(",").map((s) => s.trim().toLowerCase());
+        const t = this.o.ents.get(subject)?.soType;
+        const bs = t ? this.o.ai.so.get(t) ?? [] : [];
+        ok = bs.some((b) => names.includes(b.name.toLowerCase()) && (this.prop(f, "FilterChoice") !== "Available" || this.available(subject, b)));
+        break;
+      }
+      default:
+        this.runner.report(`graph filter ${f.tag}`);
+        ok = true;
+    }
+    const bindChild = this.prop(f, "Child"), bindParent = this.prop(f, "Parent");
+    if (ok && bindChild) c.scope.set(bindChild, child);
+    if (ok && bindParent) c.scope.set(bindParent, parent);
+    return ok;
+  }
+
+  private lookupValue(scope: Scope, path: string): Value | undefined {
+    let v: Value | undefined = scope.get(path.split(".")[0]);
+    for (const f of path.split(".").slice(1)) v = v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, Value>)[f] : undefined;
+    return v;
+  }
+
+  private lookupPath(scope: Scope, path: string): string {
+    const v = this.lookupValue(scope, path);
+    return v === undefined || v === null ? "" : String(v);
+  }
+
+  /** A reference property (Origin, Target, SmartObject, …): a variable path written with or without "$". */
+  private ref(n: BtNode, c: Context, prop: string): Value | undefined {
+    const q = this.prop(n, prop).trim();
+    if (!q) return undefined;
+    return q.startsWith("$") ? c.eval(prop, null) : this.lookupValue(c.scope, q);
+  }
+
+  private name(id: number): string {
+    return this.o.ents.get(id)?.name.replace(/_[0-9a-f]{8}-[0-9a-f-]{27}$/, "") ?? `#${id}`;
+  }
+
+  // ---- smart-object behaviours ----
+
+  private behaviour(target: number, name: string): Behaviour | undefined {
+    const t = this.o.ents.get(target)?.soType;
+    return t ? this.o.ai.so.get(t)?.find((b) => b.name.toLowerCase() === name.toLowerCase()) : undefined;
+  }
+
+  private available(target: number, b: Behaviour): boolean {
+    return b.maxInstances < 0 || (this.reservations.get(`${target}/${b.name}`) ?? 0) < b.maxInstances;
+  }
+
+  private reserve(target: number, b: Behaviour, delta: number) {
+    const k = `${target}/${b.name}`;
+    this.reservations.set(k, Math.max(0, (this.reservations.get(k) ?? 0) + delta));
+  }
+
+  private emit(reason: string) {
+    this.catchers[this.catchers.length - 1]?.(reason);
+  }
+
+  /** CallBehavior: run the target smart object's behaviour tree with __object = target. */
+  private callBehaviour(n: BtNode, c: Context): Task {
+    let inner: Task | null = null;
+    let held: { target: number; b: Behaviour } | null = null;
+    const release = () => { if (held) { this.reserve(held.target, held.b, -1); held = null; } };
+    return {
+      tick: () => {
+        if (!inner) {
+          const target = wuid(this.ref(n, c, "Target"));
+          const name = String(c.eval("BehaviorName", ""));
+          const b = target === null ? undefined : this.behaviour(target, name);
+          const tree = b && this.o.trees(b.file, b.tree);
+          if (target === null || !b || !tree) { this.trace(`npc ${this.current.npc}: CallBehavior "${name}" on ${target === null ? "nothing" : this.name(target)}: not found`); this.emit("BehFail"); return "failure"; }
+          if (!this.available(target, b)) { this.emit("MaxInstance"); return "failure"; }
+          this.reserve(target, b, 1);
+          held = { target, b };
+          this.trace(`npc ${this.current.npc}: CallBehavior "${b.name}" on ${this.name(target)} → ${b.file}#${b.tree}`);
+          this.emit("RequestOK");
+          inner = this.runner.instantiate(tree, this.globals(this.current.npc, { __object: { id: target } })).task;
+        }
+        const s = inner.tick();
+        if (s !== "running") { inner = null; release(); this.emit(s === "success" ? "BehSucces" : "BehFail"); }
+        return s;
+      },
+      abort: () => { inner?.abort(); inner = null; release(); },
+    };
+  }
+
+  // ---- host nodes ----
+
+  private pos(id: number): [number, number, number] | null {
+    return this.positions.get(id) ?? this.o.ents.get(id)?.pos ?? null;
+  }
+
+  /** Scope a lock/semaphore name: Local (this tree instance), Intellect (this NPC), Global. */
+  private lockKey(n: BtNode, c: Context, nameProp: string): string {
+    const kind = this.prop(n, "LockManagerType");
+    const name = String(c.eval(nameProp, ""));
+    return kind === "Global" ? `G/${name}` : kind === "Local" ? `L/${scopeId(c.scope)}/${name}` : `I/${this.current.npc}/${name}`;
+  }
+
+  /** ActionHelperMapper: the object's helper offering `animation`, as a world transform. */
+  private helperFor(object: number, animation: string): { id: number; pos: [number, number, number]; rot: [number, number, number, number] } | null {
+    const e = this.o.ents.get(object);
+    if (!e) return null;
+    const list = this.o.helpers?.get((e.soHelpers ?? "").toLowerCase()) ?? [];
+    const k = Math.max(0, list.findIndex((h) => animation && h.description.includes(`'${animation}'`)));
+    const h = list[k];
+    if (!h) return { id: -1, pos: e.pos, rot: e.rot };
+    const [w, x, y, z] = e.rot;
+    const [px, py, pz] = h.pos;
+    // rotate the helper offset by the object's rotation: v + 2w(q×v) + 2q×(q×v), then translate
+    const tx = 2 * (y * pz - z * py), ty = 2 * (z * px - x * pz), tz = 2 * (x * py - y * px);
+    const pos: [number, number, number] = [
+      e.pos[0] + px + w * tx + (y * tz - z * ty),
+      e.pos[1] + py + w * ty + (z * tx - x * tz),
+      e.pos[2] + pz + w * tz + (x * ty - y * tx),
+    ];
+    const [hw, hx, hy, hz] = h.rot;
+    const rot: [number, number, number, number] = [w * hw - x * hx - y * hy - z * hz, w * hx + x * hw + y * hz - z * hy, w * hy - x * hz + y * hw + z * hx, w * hz + x * hy - y * hx + z * hw];
+    return { id: k, pos, rot };
+  }
+
+  private node(n: BtNode, c: Context): Task | undefined {
+    const kids = n.children;
+    const leaf = (f: () => Status): Task => ({ tick: f, abort: () => {} });
+    const setVar = (prop: string, v: Value) => { const name = this.prop(n, prop); if (name) assignVar(c.scope, name, v); };
+    switch (n.tag) {
+      case "InstantSendMessageToNPC": case "SendMessageToNPC": case "InstantMultiSendMessageToNPC":
+        return leaf(() => { this.trace(`npc ${this.current.npc}: message ${n.props.type ?? ""} to ${n.props.target ?? ""}`); return "success"; });
+      case "Synchronize": {
+        // a semaphore: running until SemaphoreCount participants are inside, then the child runs
+        const me = {};
+        let key: string | null = null;
+        let body: Task | null = null;
+        const leave = () => { if (key) this.semaphores.get(key)?.delete(me); key = null; };
+        return {
+          tick: () => {
+            if (!body) {
+              key ??= this.lockKey(n, c, "SemaphoreName");
+              const set = this.semaphores.get(key) ?? new Set<object>();
+              set.add(me);
+              this.semaphores.set(key, set);
+              if (set.size < Number(c.eval("SemaphoreCount", 2))) return this.prop(n, "RunLogic") === "Halt" ? (leave(), "failure") : "running";
+              body = kids[0] ? this.runner.make(kids[0], c.scope) : null;
+              if (!body) { leave(); return "success"; }
+            }
+            const s = body.tick();
+            if (s !== "running") { body = null; leave(); }
+            return s;
+          },
+          abort: () => { body?.abort(); body = null; leave(); },
+        };
+      }
+      case "SetExternalLock":
+        return leaf(() => { this.locks.set(this.lockKey(n, c, "LockName"), c.eval("Locked", true) === true || c.eval("Locked", true) === "true"); return "success"; });
+      case "ExternalLock": {
+        // runs its child once the named lock is free (KeepRunning waits, Halt fails)
+        let body: Task | null = null;
+        return {
+          tick: () => {
+            if (!body) {
+              if (this.locks.get(this.lockKey(n, c, "SemaphoreName"))) return this.prop(n, "RunLogic") === "Halt" ? "failure" : "running";
+              body = kids[0] ? this.runner.make(kids[0], c.scope) : null;
+              if (!body) return "success";
+            }
+            const s = body.tick();
+            if (s !== "running") body = null;
+            return s;
+          },
+          abort: () => { body?.abort(); body = null; },
+        };
+      }
+      case "GetSpatialInfo":
+        return leaf(() => {
+          const id = wuid(this.ref(n, c, "In"));
+          const p = id === null ? null : this.pos(id);
+          if (!p) return "failure";
+          const what = this.prop(n, "What");
+          const rot = this.o.ents.get(id!)?.rot ?? [1, 0, 0, 0];
+          setVar("Out", what === "Transform" ? { pos: [...p], rot: [...rot] } : what === "Orientation" ? [...rot] : what === "Velocity" ? [0, 0, 0] : [...p]);
+          return "success";
+        });
+      case "ActionHelperMapper":
+        return leaf(() => {
+          const obj = wuid(this.ref(n, c, "SmartObject"));
+          const h = obj === null ? null : this.helperFor(obj, String(c.eval("animation", "")));
+          if (!h) return "failure";
+          this.trace(`npc ${this.current.npc}: helper ${h.id} of ${this.name(obj!)} for "${String(c.eval("animation", ""))}" at ${h.pos.map((v) => v.toFixed(1)).join(",")}`);
+          setVar("HelperId", h.id);
+          setVar("PositionOut", { pos: h.pos, rot: h.rot });
+          setVar("OutputHeleprs", h.id);
+          return "success";
+        });
+      case "CreateItem": case "RemoveItem": case "DetachObject": case "AbortAllAnimations": case "ForceIdleState": case "SetSpatialInfo":
+        return leaf(() => { this.trace(`npc ${this.current.npc}: ${n.tag}`); return "success"; });
+      case "GraphSearch": return leaf(() => this.graphSearch(n, c));
+      case "CallBehavior": return this.callBehaviour(n, c);
+      case "LODGuardian": {
+        const branch = kids.find((k) => k.tag === ((this.o.detail ?? true) ? "Detail" : "LOD"));
+        return branch?.children[0] ? this.runner.make(branch.children[0], c.scope) : leaf(() => "success");
+      }
+      case "TryCatch": {
+        const body = kids.find((k) => k.tag === "Subtree")?.children[0];
+        const catches = kids.filter((k) => k.tag === "BehaviorTagCatch");
+        const inner = body ? this.runner.make(body, c.scope) : null;
+        const onEvent = (reason: string) => {
+          const k = catches.find((x) => this.prop(x, "Reason") === reason);
+          if (k?.children[0]) {
+            // ASSUMPTION: catch handlers are instant (Expression nodes in practice)
+            const t = this.runner.make(k.children[0], c.scope);
+            for (let i = 0; i < 16 && t.tick() === "running"; i++);
+          }
+        };
+        return {
+          tick: () => {
+            if (!inner) return "success";
+            this.catchers.push(onEvent);
+            try {
+              const s = inner.tick();
+              // ASSUMPTION: a caught behaviour outcome ends the TryCatch successfully
+              return s === "failure" ? "success" : s;
+            } finally { this.catchers.pop(); }
+          },
+          abort: () => inner?.abort(),
+        };
+      }
+      case "ReserveBehavior": {
+        const search = kids.find((k) => k.tag === "Search")?.children[0];
+        const exec = kids.find((k) => k.tag === "Exec")?.children[0];
+        const searchTask = search ? this.runner.make(search.tag === "ReserveBehaviorSearch" ? search.children[0] : search, c.scope) : null;
+        let execTask: Task | null = null;
+        return {
+          tick: () => {
+            if (!execTask) {
+              const s = searchTask ? searchTask.tick() : "success";
+              if (s !== "success") return s;
+              execTask = exec ? this.runner.make(exec, c.scope) : null;
+              if (!execTask) return "success";
+            }
+            const s = execTask.tick();
+            if (s !== "running") execTask = null;
+            return s;
+          },
+          abort: () => { execTask?.abort(); execTask = null; },
+        };
+      }
+      case "Move": case "MoveAndAct": case "PlayAnimation": {
+        let until: number | null = null;
+        return {
+          tick: () => {
+            if (until === null) {
+              const npc = this.current.npc;
+              let a: Action;
+              if (n.tag === "PlayAnimation") {
+                a = { kind: "animation", npc, target: String(c.eval("animation", "")), object: wuid(this.ref(n, c, "SmartObject")) ?? undefined };
+              } else {
+                const dest = this.ref(n, c, "destinationSpecification");
+                let p = Array.isArray(dest) && dest.length === 3 ? (dest as number[]) : wuid(dest) !== null ? this.pos(wuid(dest)!) : null;
+                // MoveAndAct without a destination goes to a helper of the smart object it acts on
+                const obj = wuid(c.scope.get("__object"));
+                if (!p && n.tag === "MoveAndAct" && obj !== null) p = this.helperFor(obj, String(c.eval("AnimationToPlay", "")))?.pos ?? null;
+                if (!p) this.trace(`npc ${npc}: ${n.tag} destination "${this.prop(n, "destinationSpecification")}" unresolved`);
+                a = { kind: "move", npc, target: (p ? [...p] : this.pos(npc) ?? [0, 0, 0]) as [number, number, number], object: wuid(c.scope.get("__object")) ?? undefined };
+              }
+              const t = a.target;
+              this.trace(`npc ${npc}: ${a.kind} ${typeof t === "string" ? t : `to ${t.map((v) => v.toFixed(1)).join(",")}`}${a.object !== undefined ? ` (${this.name(a.object)})` : ""}`);
+              // ASSUMPTION: without a world simulation, moves take distance / 1.4 m/s and animations 4 s (real time)
+              const from = this.pos(npc);
+              const d = this.o.act?.(a) ?? (a.kind === "move" && from && typeof t !== "string" ? Math.hypot(t[0] - from[0], t[1] - from[1]) / 1.4 : 4);
+              if (a.kind === "move" && typeof t !== "string") this.positions.set(npc, t);
+              until = this.o.realTime() + d;
+            }
+            if (this.o.realTime() < until) return "running";
+            until = null;
+            return "success";
+          },
+          abort: () => { until = null; },
+        };
+      }
+    }
+    return undefined;
+  }
+}
+
+const truthyProp = (v: Value | undefined) => v === true || v === "true" || (typeof v === "number" && v !== 0);
+
+const scopeIds = new WeakMap<Scope, number>();
+let nextScopeId = 1;
+function scopeId(s: Scope): number {
+  let id = scopeIds.get(s);
+  if (!id) { id = nextScopeId++; scopeIds.set(s, id); }
+  return id;
+}
+
+/** Assign to a variable named by a property: "name", "name.field" or "name['key']". */
+function assignVar(scope: Scope, target: string, v: Value): void {
+  const m = /^([A-Za-z_]\w*)(?:\[\s*'?([^'\]]*)'?\s*\]|\.(\w+))?$/.exec(target.trim());
+  if (!m) return;
+  const [, name, key, field] = m;
+  const sub = key ?? field;
+  if (sub === undefined) { scope.set(name, v); return; }
+  let o = scope.get(name);
+  if (o === null || o === undefined || typeof o !== "object" || Array.isArray(o)) { o = {}; scope.set(name, o); }
+  (o as Record<string, Value>)[sub] = v;
+}

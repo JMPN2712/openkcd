@@ -59,6 +59,15 @@ export interface EntityInfo {
   /** the entity's own mesh (Properties object_Model), e.g. a bed's .cgf */
   model?: string;
   scale?: [number, number, number];
+  /** outgoing EntityLinks: target id and the link name (tags, e.g. "Home,owner", "Lean", "inside") */
+  links?: { target: number; name: string }[];
+  /** AI category (Properties sWH_AI_EntityCategory), e.g. "tailor_measuring", "Seat", "Bed" */
+  category?: string;
+  /** smart-object type (guidSmartObjectType) or smart-area template (guidSmartAreaTemplate) */
+  soType?: string;
+  saTemplate?: string;
+  /** smart-object helper class (soclasses_SmartObjectHelpers), e.g. "tailorTable", "Bed" */
+  soHelpers?: string;
 }
 
 /** Index every entity in the mission XML by EntityId (Rataje: 55k entities, ~0.5 s). */
@@ -81,6 +90,21 @@ export function parseEntityIndex(xml: string): Map<number, EntityInfo> {
     const body = xml.slice(re.lastIndex, end < 0 ? undefined : end);
     const model = /<Properties\b[^>]*\bobject_Model="([^"]+)"/.exec(body)?.[1];
     if (model) info.model = model;
+    const linkText = body.slice(0, body.indexOf("</EntityLinks>") + 1);
+    if (linkText) {
+      info.links = [];
+      for (const l of linkText.matchAll(/<Link\s+TargetId="(\d+)"[^>]*?Name="([^"]*)"/g)) {
+        info.links.push({ target: Number(l[1]), name: l[2].replace(/&apos;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&") });
+      }
+    }
+    const props = /<Properties\b([^>]*)>/.exec(body)?.[1] ?? "";
+    const pa = (k: string) => new RegExp(`\\b${k}="([^"]+)"`).exec(props)?.[1];
+    const category = pa("sWH_AI_EntityCategory"), soType = pa("guidSmartObjectType"), saTemplate = pa("guidSmartAreaTemplate");
+    if (category) info.category = category;
+    if (soType) info.soType = soType;
+    if (saTemplate) info.saTemplate = saTemplate;
+    const soHelpers = pa("soclasses_SmartObjectHelpers");
+    if (soHelpers) info.soHelpers = soHelpers;
     const scale = attr(head, "Scale");
     if (scale) info.scale = num(scale, 3, [1, 1, 1]) as [number, number, number];
     if (cls.endsWith("AreaShape")) {

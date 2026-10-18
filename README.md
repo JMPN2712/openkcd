@@ -40,6 +40,7 @@ node scripts/test-schedule.ts                    # where every NPC is at six tim
 node scripts/test-navmesh.ts                     # Rataje navmesh: routes stay on the mesh
 node scripts/test-bt.ts                          # parse all 4,911 behaviour trees and their expressions, resolve includes
 node scripts/test-btrun.ts                       # behaviour-tree interpreter: node semantics + a real game tree
+node scripts/test-btworld.ts                     # Rataje's tailor at work: area behaviour → work spot → table's use behaviour → move + animation (trace)
 node scripts/render-world.ts /tmp/w --at-npc rat_baker --npc-dist 6 --npcs --clock 12:00   # world with NPCs placed by their schedules, framed on one
 node scripts/render-model.ts /tmp/r soul:henry --anim <clip.caf | db.dba#anim.caf> --frames 0,20,40   # animated headless renders
 node scripts/render-model.ts /tmp/renders objects/vehicles/cart/cart_01.cga   # headless WebGPU render to PNG (Dawn)

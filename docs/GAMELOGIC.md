@@ -116,6 +116,64 @@ check against the game later.
   the whole tailor tree shows what the world side must provide next:
   GraphSearch over the smart-object graph, and Lua.
 
+### Smart objects and the world host (`web/src/btWorld.ts`)
+
+**The data chain**, using Rataje's tailor as the example:
+
+- **Smart-object graph.** It is the level's entity links (`EntityLinks` in
+  `objects_mission0.xml`); link names are the edge tags (`Lean`, `inside`,
+  `Home,owner`). Each entity's AI category is
+  `Properties sWH_AI_EntityCategory` (14,125 entities); its smart-object
+  type is `guidSmartObjectType`, its area template `guidSmartAreaTemplate`.
+- **NPC → area.** `rat_tailor` → link `Work['tailor']` → `rat_sa_tailory`, a
+  SmartAreaShape. The area links to the tailor's table (category
+  `tailor_measuring`), two seats, two lean spots and a shop.
+- **Area behaviours.** The area template → `sa_smart_area2sa_behaviour_tag`
+  → `sa_behaviour_tag`: behaviour `tailor` = tree
+  `final/sa_tailory.xml#tailor` (plus `tailor_setParams`). It includes the
+  shared `final/sa_templates.xml#commonWorkplace`.
+- **Smart-object behaviours.** The table's type `so_tailor_measuring` →
+  `so_smart_object2so_behaviour_tag` → `so_behaviour_tag`: `use`,
+  `use_default` and `setParams`, with tree file and name, `max_instances`
+  (1 for `use`) and success/fail actions.
+- **Helpers.** Positions and animations per smart-object class
+  (`soclasses_SmartObjectHelpers`) are in `Libs/SmartObjects.xml`. For
+  example `tailorTable` has one helper, `entry`, 0.5 m in front and turned
+  180°, for `TailorIn` / `Tailor` / `TailorOut` (Mannequin fragment names).
+- **Daily-cycle brain.** Area behaviours read `t_*` parameters
+  (`$t_timeChanged`, …) owned by the NPC's daily-cycle brain
+  `final/sb_daycycles.xml#root`. Until that brain runs here, its declared
+  variables are provided with their initial values.
+
+**World nodes.** The host implements:
+
+- `GraphSearch` (depth, edge pruning, And/Or) with `CategoryFilter`,
+  `LinkTagFilter`, `HasBehaviorFilter`, and `Nodalyzer` (ForAll / Exists
+  into variables);
+- `CallBehavior` (runs the target object's behaviour tree with `__object`,
+  respecting `max_instances`, and raises `RequestOK` / `MaxInstance` /
+  `BehSucces` / `BehFail` to `TryCatch` / `BehaviorTagCatch`);
+- `ReserveBehavior`, `LODGuardian` (Detail by default), `Synchronize`
+  semaphores and external locks (Local / Intellect / Global scopes),
+  `ActionHelperMapper`, `GetSpatialInfo`, NPC messages (traced);
+- `Move` / `MoveAndAct` / `PlayAnimation` as timed actions: walking at
+  1.4 m/s, animations 4 s for now. `MoveAndAct` without a destination goes
+  to the object's helper.
+
+The runtime gained FuseBox, Switch, IfGate, SuppressFailure, AtomicDecorator,
+VariableExistsGate, Concatenation and animation-event listeners. Unset
+struct fields compare equal to their defaults ('' / 0 / false / null),
+because struct schemas aren't loaded yet.
+
+**Result** (`scripts/test-btworld.ts`): from `rat_tailor`'s work link alone,
+the game's trees find the table, call its `use` behaviour, walk 2.9 m to
+its `entry` helper, hand over to `use_default` and play `Tailor`, then take
+the configured break at the area's bench.
+
+**Still missing:** Lua, the daily-cycle brain itself, Mannequin fragment →
+clip mapping, inventories and items, and HandCheck, For, LODLock / LODCheck,
+NotNearPlayer, IsLoadedGate, RemoveLink.
+
 ## Quests (`Libs/Quests/flowgraphs`)
 
 - **Scope.** 287 graphs, one per quest, using only 16 node classes:

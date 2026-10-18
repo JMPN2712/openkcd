@@ -122,7 +122,12 @@ const num = (v: Value | undefined): number => {
   if (typeof v === "string" && v.trim() !== "") return isNaN(Number(v)) ? seconds(v.trim()) ?? 0 : Number(v);
   return 0;
 };
-const eq = (a: Value | undefined, b: Value | undefined) => (a ?? null) === (b ?? null) || (typeof a !== "object" && typeof b !== "object" && a != null && b != null && String(a) === String(b));
+// ASSUMPTION: struct fields are typed and default-initialised in the game ('' / 0 / false / null);
+// without the struct schemas, an unset value compares equal to any of those defaults
+const isDefault = (v: Value | undefined) => v === undefined || v === null || v === "" || v === 0 || v === false;
+const eq = (a: Value | undefined, b: Value | undefined) =>
+  (a === undefined && isDefault(b)) || (b === undefined && isDefault(a)) ||
+  (a ?? null) === (b ?? null) || (typeof a !== "object" && typeof b !== "object" && a != null && b != null && String(a) === String(b));
 
 function lookup(scope: Scope, path: string[], host: Host): Value | undefined {
   const [head, ...rest] = path;
@@ -259,7 +264,7 @@ export class Runner {
     return { task: this.make(root, scope), scope };
   }
 
-  private ctx(scope: Scope, n: BtNode): Context {
+  ctx(scope: Scope, n: BtNode): Context {
     return {
       host: this.host,
       scope,
@@ -453,6 +458,111 @@ export class Runner {
           abort: () => { inner?.abort(); inner = null; },
         };
       }
+      case "FuseBox": {
+        // Child, then OnSuccess / OnFail as clean-up; StatusPropagation: Child | Success | CleanUp
+        const body = only(child("Child")), onOk = only(child("OnSuccess")), onFail = only(child("OnFail"));
+        let result: Status | null = null;
+        let cleanup: Slot | null = null;
+        const prop = text("StatusPropagation");
+        return {
+          tick: () => {
+            if (result === null) {
+              const s = body ? body.tick() : "success";
+              if (s === "running") return s;
+              result = s;
+              cleanup = s === "success" ? onOk : onFail;
+            }
+            const cs = cleanup ? cleanup.tick() : "success";
+            if (cs === "running") return cs;
+            const r = prop === "Success" ? "success" : prop === "CleanUp" ? cs : result;
+            result = null; cleanup = null;
+            return r;
+          },
+          abort: () => {
+            body?.abort();
+            // ASSUMPTION: an aborted FuseBox runs its OnFail branch as clean-up (bounded)
+            if (result === null && onFail) for (let i = 0; i < 16 && onFail.tick() === "running"; i++);
+            cleanup?.abort(); result = null; cleanup = null;
+          },
+        };
+      }
+      case "Switch": {
+        // the first IfCondition child whose condition holds runs its child; else DefaultBranch
+        let chosen: Slot | null = null;
+        return {
+          tick: () => {
+            if (!chosen) {
+              const hit = kids.find((k) => k.tag !== "DefaultBranch" && truthy(this.ctx(scope, k).eval("condition", false)));
+              const k = hit ?? child("DefaultBranch");
+              if (!k) return "failure";
+              chosen = k.children[0] ? new Slot(() => this.make(k.children[0], scope)) : null;
+              if (!chosen) return "success";
+            }
+            const s = chosen.tick();
+            if (s !== "running") chosen = null;
+            return s;
+          },
+          abort: () => { chosen?.abort(); chosen = null; },
+        };
+      }
+      case "IfGate": {
+        // KeepRunning: wait until the condition holds, then run the child; Halt: fail if it does not hold
+        const body = only(kids[0]);
+        let open = false;
+        return {
+          tick: () => {
+            if (!open) {
+              if (!truthy(c.eval("condition", false))) return text("RunLogic") === "Halt" ? "failure" : "running";
+              open = true;
+            }
+            const s = body ? body.tick() : "success";
+            if (s !== "running") open = false;
+            return s;
+          },
+          abort: () => { body?.abort(); open = false; },
+        };
+      }
+      case "SuppressFailure": case "AtomicDecorator": {
+        const body = only(kids[0]);
+        return {
+          tick: () => { const s = body ? body.tick() : "success"; return n.tag === "SuppressFailure" && s === "failure" ? "success" : s; },
+          abort: () => body?.abort(),
+        };
+      }
+      case "VariableExistsGate": {
+        const yes = only(child("Then")), no = only(child("Else"));
+        let chosen: Slot | null | undefined;
+        return {
+          tick: () => {
+            if (chosen === undefined) {
+              let v: Value | undefined;
+              try { v = evaluate(compile("$" + text("VarToTest")), scope, this.host); } catch { v = undefined; }
+              chosen = v !== undefined && v !== null ? yes : no;
+              if (!chosen) { chosen = undefined; return flag("FailSubtMissing") ? "failure" : "success"; }
+            }
+            const s = chosen!.tick();
+            if (s !== "running") chosen = undefined;
+            return s;
+          },
+          abort: () => { chosen?.abort(); chosen = undefined; },
+        };
+      }
+      case "Concatenation":
+        return leaf(() => {
+          // "behaviorForceEnd_$name": $var interpolation, a ";" ends a variable name
+          const out = text("Pattern").replace(/\$([A-Za-z_]\w*(?:\.\w+)*);?/g, (_, path: string) => {
+            const v = evaluate({ k: "var", path: path.split(".") }, scope, this.host);
+            return v === undefined || v === null ? "" : String(v);
+          });
+          scope.set(text("OutString"), out);
+          return "success";
+        });
+      case "AnimationEventCatch":
+        // a listener for animation events (Attach, Detach, …): runs until its parent stops it
+        return { tick: () => "running", abort: () => {} };
+      case "AnimationEventWait": return constant("success");
+      case "LogToConsole": return leaf(() => { this.report(`log: ${text("Message")}`); return "success"; });
+      case "ErrorNode": return leaf(() => { this.report(`ErrorNode: ${text("Message")}`); return "failure"; });
       case "ExecuteLua": return leaf(() => { this.lua(text("code"), scope); return "success"; });
       case "LuaWrapper": {
         const body = only(kids[0]);
