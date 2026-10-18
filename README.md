@@ -33,6 +33,7 @@ node scripts/test-dba.ts                         # decode all 5,155 .dba animati
 node scripts/test-terrain.ts /tmp/rataje.png      # decode the Rataje heightmap, check seams, write a hillshade
 node scripts/render-terrain.ts /tmp/t "1500,1800,0,30,-8"   # headless 3D terrain views (x,y,z|0=ground,yaw,pitch)
 node scripts/test-level-objects.ts               # parse Rataje's object octree (brushes, vegetation), check against terrain
+node scripts/render-world.ts /tmp/w "2192,1050,0,90,-3"   # headless terrain + objects around a point
 node scripts/render-model.ts /tmp/r soul:henry --anim <clip.caf | db.dba#anim.caf> --frames 0,20,40   # animated headless renders
 node scripts/render-model.ts /tmp/renders objects/vehicles/cart/cart_01.cga   # headless WebGPU render to PNG (Dawn)
 ```
@@ -40,4 +41,4 @@ node scripts/render-model.ts /tmp/renders objects/vehicles/cart/cart_01.cga   # 
 Click **Open KCD folder** and pick the game root (the folder containing `Data` and `bin`).
 Click a `.dds*` file for the texture viewer, a `.cgf/.cga/.skin` for the WebGPU model viewer, a `.cdf`
 for a character, **Characters (game database)** to browse every NPC soul and clothing preset, or
-**World: Rataje** to fly over the level's terrain.
+**World: Rataje** to fly over the level (terrain, buildings and vegetation, streamed around the camera).

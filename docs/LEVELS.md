@@ -125,6 +125,31 @@ elder bushes and branch piles.
   garbage-collected while the device is alive, Dawn aborts with a glibc
   mutex assertion.
 
+## Objects in the world (`web/src/world.ts`, `levelView.ts`)
+
+- **Scene building.** Instances within a radius of the camera are grouped by
+  model, giving one instanced draw per model with per-instance matrices.
+  - Vegetation matrix: T(position) · Rz(angle) · S(scale).
+  - Brush matrix: its Matrix34.
+- **Level-local paths.** `%level%/…` names resolve through a VFS overlay of
+  the level pak. Otherwise `rataje_dlc4/level.pak`'s same-named
+  `brush/*.cgf` would shadow Rataje's.
+- **Not drawn (editor/helper content):**
+  - brushes under `objects/editor/`, `*_nodraw.cgf`, and the test sky;
+  - materials named `proxy_mat_*` or `shadowproxy`, flagged NODRAW (0x400),
+    or whose diffuse texture is in `Materials/special/` (collision/barrier
+    proxies on level-designer `brush/designer_*.cgf`, placeholders);
+  - `%DECAL` sub-materials are alpha-tested at 0.5 until there's a blend
+    pass.
+- **Streaming.** The browser view streams objects within 250 m, up to 400
+  models with 256 px textures, and rebuilds after the camera moves 120 m.
+  Headless: `web/scripts/render-world.ts`.
+- **Known gaps:**
+  - no model LODs (`_lod1…` files), so a village view is 10–25M triangles;
+  - no water, roads or decals (octree types 7/9/11 not decoded);
+  - road and terrain-blend meshes render as flat dark patches;
+  - no terrain colour (`cover.ctc`), no shadows.
+
 ## Not yet decoded
 
 - `cover.ctc` (terrain colour), merged-mesh sectors, and the `layers/*.xml`

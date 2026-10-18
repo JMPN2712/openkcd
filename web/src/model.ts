@@ -90,6 +90,8 @@ export async function loadModel(
     if (mh) {
       try {
         materials = parseMtl(new TextDecoder().decode(await vfs.read(mh)));
+        // a whole material from Materials/special/ is a helper (collision proxy, …)
+        if (mpath.startsWith("materials/special/")) for (const m of materials) m.nodraw = true;
       } catch (err) {
         notes.push(`material ${mpath}: ${(err as Error).message}`);
       }

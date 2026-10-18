@@ -52,9 +52,15 @@ function toMaterial(n: XmlNode): Material {
     diffuse: [rgb[0] ?? 1, rgb[1] ?? 1, rgb[2] ?? 1],
     specular: [spec[0] ?? 0.04, spec[1] ?? 0.04, spec[2] ?? 0.04],
     opacity: Number(n.attrs.Opacity ?? 1),
-    alphaTest: Number(n.attrs.AlphaTest ?? 0),
-    // EYE_AO_OVERLAY is a blended shadow shell over the eyeballs; drawn opaque it hides the eyes
-    nodraw: /^nodraw$/i.test(shader) || (n.attrs.StringGenMask ?? "").includes("%EYE_AO_OVERLAY"),
+    // %DECAL sub-materials are blended overlays in the engine; without a blend pass, cut them out
+    alphaTest: Math.max(Number(n.attrs.AlphaTest ?? 0), (n.attrs.StringGenMask ?? "").includes("%DECAL") ? 0.5 : 0),
+    // hidden: Nodraw shader, the NODRAW flag (0x400), helper textures, physics/shadow proxy
+    // sub-materials (proxy_mat_*, shadowproxy: present in render meshes, never
+    // drawn), and EYE_AO_OVERLAY (a blended shadow shell over the eyeballs)
+    nodraw: /^nodraw$/i.test(shader) || (Number(n.attrs.MtlFlags ?? 0) & 0x400) !== 0 ||
+      // Materials/special/: collision/barrier/raycast proxies, replace-me placeholders
+      /^materials[\\/]special[\\/]/i.test(textures.get("Diffuse") ?? "") ||
+      /(^|_)proxy|shadowproxy/i.test(n.attrs.Name ?? "") || (n.attrs.StringGenMask ?? "").includes("%EYE_AO_OVERLAY"),
     genMask: n.attrs.StringGenMask ?? "",
     params: { ...(n.children.find((c) => c.tag === "PublicParams")?.attrs ?? {}) },
   };

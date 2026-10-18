@@ -147,31 +147,26 @@ export class TerrainRenderer {
     return { vb, ib, count: idx.length };
   }
 
-  render(target: GPUTexture, cam: FlyCamera, opts: { lodDistance?: number } = {}): void {
-    const { width, height } = target;
-    if (!this.depth || this.depth.width !== width || this.depth.height !== height) {
-      this.depth?.destroy();
-      this.msaa?.destroy();
-      this.depth = this.device.createTexture({ size: [width, height], format: "depth24plus", sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
-      this.msaa = this.device.createTexture({ size: [width, height], format: this.format, sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
-    }
+  /** View-projection for a fly camera (shared with other renderers drawing into the same pass). */
+  static viewProj(cam: FlyCamera, aspect: number): Float32Array {
     const dir: Vec3 = [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)];
-    const target3: Vec3 = [cam.pos[0] + dir[0], cam.pos[1] + dir[1], cam.pos[2] + dir[2]];
-    const vp = multiply(perspective(Math.PI / 3.2, width / height, 0.5, 12000), lookAt(cam.pos, target3, [0, 0, 1]));
+    const at: Vec3 = [cam.pos[0] + dir[0], cam.pos[1] + dir[1], cam.pos[2] + dir[2]];
+    return multiply(perspective(Math.PI / 3.2, aspect, 0.5, 12000), lookAt(cam.pos, at, [0, 0, 1]));
+  }
+
+  /** Upload camera uniforms and choose patch LODs for the next draw(). */
+  prepare(cam: FlyCamera, viewProj: Float32Array, opts: { lodDistance?: number } = {}): void {
     const u = new Float32Array(28);
-    u.set(vp, 0);
+    u.set(viewProj, 0);
     u.set([...cam.pos, 1], 16);
     u.set([0.45, 0.25, 0.85, 0], 20);
     u.set([HEIGHT_UNIT, this.terrain.size, 0.00018, 0], 24);
     this.device.queue.writeBuffer(this.camBuf, 0, u);
-
-    // choose a LOD per patch by distance from the camera to the patch centre
     const near = opts.lodDistance ?? 250;
     const per = this.terrain.size / PATCH;
     const lists: number[][] = LODS.map(() => []);
     for (let py = 0; py < per; py++) for (let px = 0; px < per; px++) {
-      const cx = (px + 0.5) * PATCH, cy = (py + 0.5) * PATCH;
-      const d = Math.hypot(cx - cam.pos[0], cy - cam.pos[1]);
+      const d = Math.hypot((px + 0.5) * PATCH - cam.pos[0], (py + 0.5) * PATCH - cam.pos[1]);
       const l = d < near ? 0 : d < near * 4 ? 1 : 2;
       lists[l].push(px * PATCH, py * PATCH, LODS[l]);
     }
@@ -181,22 +176,37 @@ export class TerrainRenderer {
       this.stats.triangles += (list.length / 3) * (this.meshes[l].count / 3);
       if (list.length) this.device.queue.writeBuffer(this.instBufs[l], 0, new Float32Array(list));
     });
+  }
 
+  /** Record the terrain draws into a pass (format, 4× MSAA, depth24plus). */
+  draw(pass: GPURenderPassEncoder): void {
+    pass.setPipeline(this.pipeline);
+    pass.setBindGroup(0, this.bind);
+    this.stats.patches.forEach((n, l) => {
+      if (!n) return;
+      const m = this.meshes[l];
+      pass.setVertexBuffer(0, m.vb);
+      pass.setVertexBuffer(1, this.instBufs[l]);
+      pass.setIndexBuffer(m.ib, "uint32");
+      pass.drawIndexed(m.count, n);
+    });
+  }
+
+  render(target: GPUTexture, cam: FlyCamera, opts: { lodDistance?: number } = {}): void {
+    const { width, height } = target;
+    if (!this.depth || this.depth.width !== width || this.depth.height !== height) {
+      this.depth?.destroy();
+      this.msaa?.destroy();
+      this.depth = this.device.createTexture({ size: [width, height], format: "depth24plus", sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+      this.msaa = this.device.createTexture({ size: [width, height], format: this.format, sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+    }
+    this.prepare(cam, TerrainRenderer.viewProj(cam, width / height), opts);
     const enc = this.device.createCommandEncoder();
     const pass = enc.beginRenderPass({
       colorAttachments: [{ view: this.msaa!.createView(), resolveTarget: target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.70, a: 1 }, loadOp: "clear", storeOp: "discard" }],
       depthStencilAttachment: { view: this.depth.createView(), depthClearValue: 1, depthLoadOp: "clear", depthStoreOp: "discard" },
     });
-    pass.setPipeline(this.pipeline);
-    pass.setBindGroup(0, this.bind);
-    lists.forEach((list, l) => {
-      if (!list.length) return;
-      const m = this.meshes[l];
-      pass.setVertexBuffer(0, m.vb);
-      pass.setVertexBuffer(1, this.instBufs[l]);
-      pass.setIndexBuffer(m.ib, "uint32");
-      pass.drawIndexed(m.count, list.length / 3);
-    });
+    this.draw(pass);
     pass.end();
     this.device.queue.submit([enc.finish()]);
   }

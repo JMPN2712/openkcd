@@ -65,6 +65,23 @@ export class Vfs {
     return vfs;
   }
 
+  /**
+   * A copy of this VFS with one pak's matching entries layered on top: used
+   * for a level pak, whose files (brush/*.cgf, …) are referenced as
+   * %level%/… and must not be confused with another level's.
+   */
+  async extend(pak: PakSource, filter: (lowerName: string) => boolean): Promise<Vfs> {
+    const v = new Vfs();
+    for (const [k, list] of this.files) v.files.set(k, list);
+    v.blobs = this.blobs;
+    for (const entry of await readCentralDirectory(await v.blob(pak))) {
+      const key = entry.name.toLowerCase();
+      if (!filter(key)) continue;
+      v.files.set(key, [...(v.files.get(key) ?? []), { pak, entry }]);
+    }
+    return v;
+  }
+
   private blob(pak: PakSource): Promise<Blob> {
     let b = this.blobs.get(pak);
     if (!b) this.blobs.set(pak, (b = pak.open()));

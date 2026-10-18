@@ -39,14 +39,17 @@ struct VOut {
 };
 
 @vertex fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @location(2) uv: vec2f,
-               @location(3) bi: vec4u, @location(4) bw: vec4f) -> VOut {
+               @location(3) bi: vec4u, @location(4) bw: vec4f,
+               @location(5) i0: vec4f, @location(6) i1: vec4f, @location(7) i2: vec4f, @location(8) i3: vec4f) -> VOut {
   var o: VOut;
   let sk = bones[bi.x] * bw.x + bones[bi.y] * bw.y + bones[bi.z] * bw.z + bones[bi.w] * bw.w;
-  let w = drw.model * (sk * vec4f(p, 1.0));
+  // per-instance world matrix (identity for single models)
+  let world = mat4x4f(i0, i1, i2, i3) * drw.model;
+  let w = world * (sk * vec4f(p, 1.0));
   o.pos = cam.viewProj * w;
   // layered character clothing shares the body's surface: pull outer layers slightly towards the camera
   o.pos.z = o.pos.z - drw.params.w * 0.00004 * o.pos.w;
-  o.n = (drw.model * (sk * vec4f(n, 0.0))).xyz;
+  o.n = (world * (sk * vec4f(n, 0.0))).xyz;
   o.uv = uv;
   o.wpos = w.xyz;
   return o;
@@ -124,6 +127,8 @@ interface DrawItem {
   bind: GPUBindGroup;
   item: number;
   ubuf: GPUBuffer;
+  inst: GPUBuffer;
+  instCount: number;
   /** the mesh's own node transform, composed with the item transform */
   meshTm: Float32Array;
 }
@@ -140,6 +145,7 @@ export class ModelRenderer {
   private draws: DrawItem[] = [];
   private palettes: ({ buf: GPUBuffer; count: number } | null)[] = [];
   private identityPalette: GPUBuffer;
+  private identityInstance: GPUBuffer;
   private owned: (GPUBuffer | GPUTexture)[] = [];
   private depth: GPUTexture | null = null;
   private msaa: GPUTexture | null = null;
@@ -167,6 +173,10 @@ export class ModelRenderer {
             { shaderLocation: 3, offset: 32, format: "uint16x4" },
             { shaderLocation: 4, offset: 40, format: "unorm8x4" },
           ],
+        }, {
+          arrayStride: 64,
+          stepMode: "instance",
+          attributes: [0, 1, 2, 3].map((k) => ({ shaderLocation: 5 + k, offset: k * 16, format: "float32x4" as GPUVertexFormat })),
         }],
       },
       fragment: { module, entryPoint: "fs", targets: [{ format }] },
@@ -177,6 +187,8 @@ export class ModelRenderer {
     this.camBuf = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.camBind = device.createBindGroup({ layout: this.pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.camBuf } }] });
     this.sampler = device.createSampler({ magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", addressModeU: "repeat", addressModeV: "repeat", maxAnisotropy: 8 });
+    this.identityInstance = device.createBuffer({ size: 64, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(this.identityInstance, 0, IDENTITY);
     this.identityPalette = device.createBuffer({ size: 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(this.identityPalette, 0, IDENTITY);
     this.white = device.createTexture({ size: [1, 1], format: "rgba8unorm-srgb", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
@@ -208,7 +220,7 @@ export class ModelRenderer {
    * depth layer. Models with bone weights and a skeleton get a skinning
    * palette (initially the bind pose), updated with setPalette(index, …).
    */
-  setModels(items: { model: LoadedModel; transform?: Float32Array; layer?: number }[]): void {
+  setModels(items: { model: LoadedModel; transform?: Float32Array; layer?: number; instances?: Float32Array }[]): void {
     this.clear();
     this.palettes = items.map(({ model }) => {
       const n = model.skeleton && model.cgf.meshes.some((m) => m.boneIds) ? model.skeleton.bones.length : 0;
@@ -223,6 +235,13 @@ export class ModelRenderer {
     const textures = new Map<MipChain, GPUTexture>();
     const min: Vec3 = [Infinity, Infinity, Infinity];
     const max: Vec3 = [-Infinity, -Infinity, -Infinity];
+    const instBufs = items.map(({ instances }) => {
+      if (!instances?.length) return { buf: this.identityInstance, count: 1 };
+      const buf = this.device.createBuffer({ size: instances.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+      this.device.queue.writeBuffer(buf, 0, instances);
+      this.owned.push(buf);
+      return { buf, count: instances.length / 16 };
+    });
     for (const [itemIndex, { model, transform: partTm, layer = 0 }] of items.entries())
     for (const mesh of model.cgf.meshes) {
       const meshTm = partTm ? multiply(partTm, mesh.transform) : mesh.transform;
@@ -295,8 +314,9 @@ export class ModelRenderer {
             { binding: 4, resource: { buffer: palette ? palette.buf : this.identityPalette } },
           ],
         });
-        this.draws.push({ vb, ib, firstIndex: s.firstIndex, count: s.numIndices, bind, item: itemIndex, ubuf, meshTm: mesh.transform });
-        this.stats.triangles += s.numIndices / 3;
+        const ib2 = instBufs[itemIndex];
+        this.draws.push({ vb, ib, firstIndex: s.firstIndex, count: s.numIndices, bind, item: itemIndex, ubuf, meshTm: mesh.transform, inst: ib2.buf, instCount: ib2.count });
+        this.stats.triangles += (s.numIndices / 3) * ib2.count;
       }
     }
     this.stats.draws = this.draws.length;
@@ -331,12 +351,8 @@ export class ModelRenderer {
     const near = Math.max(cam.distance - r * 1.5, cam.distance * 0.01, 0.001);
     const far = cam.distance + r * 1.5;
     const vp = multiply(perspective(Math.PI / 4, width / height, near, far), lookAt(eye, cam.target, [0, 0, 1]));
-    const cu = new Float32Array(24);
-    cu.set(vp, 0);
-    cu.set([...eye, 1], 16);
     // sun from the camera's upper-left, so the visible side is lit
-    cu.set([Math.cos(cam.yaw + 0.8), Math.sin(cam.yaw + 0.8), 0.9, cam.flat ? 1 : 0], 20);
-    this.device.queue.writeBuffer(this.camBuf, 0, cu);
+    this.setCamera(vp, eye, [Math.cos(cam.yaw + 0.8), Math.sin(cam.yaw + 0.8), 0.9], cam.flat);
 
     const view = target.createView();
     const enc = this.device.createCommandEncoder();
@@ -350,16 +366,31 @@ export class ModelRenderer {
       }],
       depthStencilAttachment: { view: this.depth.createView(), depthClearValue: 1, depthLoadOp: "clear", depthStoreOp: "discard" },
     });
+    this.draw(pass);
+    pass.end();
+    this.device.queue.submit([enc.finish()]);
+  }
+
+  /** Camera for the next draw(): view-projection, eye position, sun direction. */
+  setCamera(viewProj: Float32Array, eye: Vec3, sun: Vec3, flat = false): void {
+    const cu = new Float32Array(24);
+    cu.set(viewProj, 0);
+    cu.set([...eye, 1], 16);
+    cu.set([...sun, flat ? 1 : 0], 20);
+    this.device.queue.writeBuffer(this.camBuf, 0, cu);
+  }
+
+  /** Record this renderer's draws into a pass that uses the same format, 4× MSAA and depth24plus. */
+  draw(pass: GPURenderPassEncoder): void {
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.camBind);
     for (const d of this.draws) {
       pass.setVertexBuffer(0, d.vb);
+      pass.setVertexBuffer(1, d.inst);
       pass.setIndexBuffer(d.ib, "uint32");
       pass.setBindGroup(1, d.bind);
-      pass.drawIndexed(d.count, 1, d.firstIndex);
+      pass.drawIndexed(d.count, d.instCount, d.firstIndex);
     }
-    pass.end();
-    this.device.queue.submit([enc.finish()]);
   }
 
   /** Number of bones in item `index`'s palette (0 = not skinned). */
@@ -394,6 +425,7 @@ export class ModelRenderer {
     this.msaa?.destroy();
     this.white.destroy();
     this.identityPalette.destroy();
+    this.identityInstance.destroy();
     this.camBuf.destroy();
   }
 }
