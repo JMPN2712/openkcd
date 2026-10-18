@@ -6,6 +6,10 @@ import { showScene } from "./modelView.ts";
 import type { TextureContext } from "./textureView.ts";
 import type { Vfs } from "./vfs.ts";
 import { formatCount } from "./format.ts";
+import { parseSkeleton } from "./skeleton.ts";
+import { parseCaf } from "./anim.ts";
+import { clipsFor } from "./clips.ts";
+import type { SceneAnimation } from "./modelView.ts";
 
 const dbCache = new WeakMap<Vfs, Promise<CharacterDb>>();
 
@@ -36,7 +40,34 @@ export function showCharacter(
   return showScene(host, ctx, async (vfs, onStatus) => {
     const spec = await resolve(vfs);
     const ch = await loadCharacter(vfs, spec, { onStatus });
+    let animation: SceneAnimation | undefined;
+    const skHit = vfs.lookup(spec.skeleton);
+    if (skHit) {
+      try {
+        const skeleton = parseSkeleton(await vfs.read(skHit));
+        if (skeleton) {
+          onStatus("Listing animation clips…");
+          animation = {
+            skeleton,
+            clips: await clipsFor(vfs, spec.skeleton),
+            loadClip: async (path) => {
+              const hit = vfs.lookup(path);
+              if (!hit) throw new Error(`${path} not found`);
+              return parseCaf(await vfs.read(hit));
+            },
+            partSkeletons: ch.parts.map((p) => p.model.skeleton),
+            attachments: ch.parts.map((p) => {
+              const bone = p.part.attach ? skeleton.byName.get(p.part.attach.bone.toLowerCase()) : undefined;
+              return bone !== undefined && p.transform ? { bone, base: p.transform } : null;
+            }),
+          };
+        }
+      } catch (err) {
+        ch.notes.push(`skeleton ${spec.skeleton}: ${(err as Error).message}`);
+      }
+    }
     return {
+      animation,
       title: `${spec.name} · ${ch.parts.length}/${spec.parts.length} parts`,
       parts: ch.parts.map(({ part, model, transform }) => ({ model, transform, layer: part.layer, label: `${part.kind}: ${part.label}` })),
       notes: ch.notes,

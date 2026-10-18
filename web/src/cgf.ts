@@ -67,6 +67,9 @@ export interface CgfMesh {
   positions: Float32Array; // xyz
   normals: Float32Array | null; // xyz
   uvs: Float32Array | null; // uv
+  /** skinning (stream 9): 4 bone indices into the file's own CompiledBones list, 4 weights /255 */
+  boneIds: Uint16Array | null;
+  boneWeights: Uint8Array | null;
   indices: Uint32Array;
   subsets: Subset[];
   bboxMin: [number, number, number];
@@ -223,6 +226,7 @@ export function parseCgf(bytes: Uint8Array): Cgf {
     const positions = decodePositions(pos, nVerts);
     const uvs = decodeUvs(get(STREAM.TexCoords), pos.type === STREAM.P3S_C4B_T2S ? pos : null, nVerts);
     const normals = decodeNormals(get(STREAM.Normals), get(STREAM.Tangents), get(STREAM.QTangents), nVerts);
+    const { boneIds, boneWeights } = decodeBoneMapping(get(STREAM.BoneMapping), nVerts);
     const indices = new Uint32Array(nIndices);
     for (let i = 0; i < nIndices; i++) indices[i] = idx.elemSize === 2 ? idx.data.getUint16(i * 2, true) : idx.data.getUint32(i * 4, true);
 
@@ -230,7 +234,7 @@ export function parseCgf(bytes: Uint8Array): Cgf {
     meshes.push({
       nodeName: node.name,
       transform: worldTm(node),
-      positions, normals, uvs, indices,
+      positions, normals, uvs, indices, boneIds, boneWeights,
       subsets: subsets.length ? subsets : [{ firstIndex: 0, numIndices: nIndices, firstVert: 0, numVerts: nVerts, matId: 0 }],
       bboxMin, bboxMax,
     });
@@ -316,3 +320,19 @@ function decodeNormals(normals: Stream | null, tangents: Stream | null, qtangent
   return null;
 }
 
+
+/** Bone mapping stream: 12 bytes = u16×4 ids + u8×4 weights, or 8 bytes = u8×4 + u8×4. */
+function decodeBoneMapping(s: Stream | null, n: number): { boneIds: Uint16Array | null; boneWeights: Uint8Array | null } {
+  if (!s || s.count < n || (s.elemSize !== 12 && s.elemSize !== 8)) return { boneIds: null, boneWeights: null };
+  const ids = new Uint16Array(n * 4);
+  const w = new Uint8Array(n * 4);
+  const wide = s.elemSize === 12;
+  for (let i = 0; i < n; i++) {
+    const o = i * s.elemSize;
+    for (let k = 0; k < 4; k++) {
+      ids[i * 4 + k] = wide ? s.data.getUint16(o + k * 2, true) : s.data.getUint8(o + k);
+      w[i * 4 + k] = s.data.getUint8(o + (wide ? 8 : 4) + k);
+    }
+  }
+  return { boneIds: ids, boneWeights: w };
+}

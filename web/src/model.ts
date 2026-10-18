@@ -1,6 +1,7 @@
 // Loads a model with its materials and diffuse textures from the asset VFS.
 
 import { parseCgf, type Cgf } from "./cgf.ts";
+import { parseSkeleton, type Skeleton } from "./skeleton.ts";
 import { parseMtl, mtlPath, textureFile, type Material } from "./mtl.ts";
 import { decodeMip, openTexture } from "./texture.ts";
 import { mipDims } from "./dds.ts";
@@ -20,6 +21,8 @@ export interface LoadedModel {
   path: string;
   hit: VfsHit;
   cgf: Cgf;
+  /** bones the mesh is weighted to (.skin/.chr), indexed by the bone-mapping stream */
+  skeleton: Skeleton | null;
   mtlPath: string | null;
   materials: Material[];
   /** diffuse texture per material index (null = none / failed) */
@@ -56,11 +59,20 @@ export async function loadModel(
   if (!versions.length) throw new Error(`${path} not found in any pak`);
   let hit: VfsHit | null = null;
   let cgf: Cgf | null = null;
+  let skeleton: Skeleton | null = null;
   for (const v of versions) {
-    const c = parseCgf(await vfs.read(v));
+    const bytes = await vfs.read(v);
+    const c = parseCgf(bytes);
     if (c.meshes.length) {
       hit = v;
       cgf = c;
+      if (c.meshes.some((m) => m.boneIds)) {
+        try {
+          skeleton = parseSkeleton(bytes);
+        } catch (err) {
+          notes.push(`skeleton: ${(err as Error).message}`);
+        }
+      }
       break;
     }
   }
@@ -112,5 +124,5 @@ export async function loadModel(
   const maxDim = opts.maxTextureDim ?? 1024;
   const diffuse = await slot("Diffuse", maxDim);
   const specular = await slot("Specular", Math.min(512, maxDim));
-  return { path, hit, cgf, mtlPath: mpath, materials, diffuse, specular, notes };
+  return { path, hit, cgf, skeleton, mtlPath: mpath, materials, diffuse, specular, notes };
 }

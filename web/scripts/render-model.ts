@@ -13,6 +13,9 @@ import { Vfs } from "../src/vfs.ts";
 import { ASSET_RE } from "../src/assets.ts";
 import { loadModel } from "../src/model.ts";
 import { CharacterDb, loadCharacter, parseCdf } from "../src/character.ts";
+import { parseCaf, type Clip } from "../src/anim.ts";
+import { Animator } from "../src/pose.ts";
+import { parseSkeleton } from "../src/skeleton.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 
 Object.assign(globalThis, globals);
@@ -22,6 +25,8 @@ const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.index
 const root = opt("--root", join(homedir(), "kcd1"));
 const [W, H] = opt("--size", "800x600").split("x").map(Number);
 const view = opt("--view", ""); // yaw,pitch,zoom[,targetZ] e.g. -1.9,0.35,1
+const animPath = opt("--anim", ""); // .caf clip for characters
+const frames = opt("--frames", "").split(",").filter(Boolean).map(Number); // frames to render (default: start)
 const noTex = args.includes("--notex") ? (args.splice(args.indexOf("--notex"), 1), true) : false;
 const flat = args.includes("--flat") ? (args.splice(args.indexOf("--flat"), 1), true) : false;
 const [outDir, ...models] = args;
@@ -79,6 +84,7 @@ const stride = Math.ceil((W * 4) / 256) * 256;
 const readback = device.createBuffer({ size: stride * H, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
 
 let db: CharacterDb | undefined;
+let animation: { animator: Animator; clip: Clip; parts: Awaited<ReturnType<typeof loadCharacter>>["parts"]; offset: number[] } | null = null;
 for (const path of models) {
   const t0 = performance.now();
   const notes: string[] = [];
@@ -103,6 +109,16 @@ for (const path of models) {
       }
     }
     const ch = await loadCharacter(vfs, spec, { maxTextureDim: 1024 });
+    if (animPath) {
+      const skHit = vfs.lookup(spec.skeleton);
+      const sk = skHit ? parseSkeleton(await vfs.read(skHit)) : null;
+      const clipHit = vfs.lookup(animPath);
+      if (!sk || !clipHit) throw new Error(`need skeleton ${spec.skeleton} and clip ${animPath}`);
+      const animator = new Animator(sk);
+      animator.evaluate(null, 0);
+      animation = { animator, clip: parseCaf(await vfs.read(clipHit)), parts: ch.parts, offset: [0, 0, 0] };
+      console.log(`  clip ${animPath}: ${animation.clip.tracks.size} tracks, frames ${animation.clip.start}..${animation.clip.end} @ ${animation.clip.fps} fps`);
+    }
     console.log(`  ${spec.name}: ${ch.parts.length}/${spec.parts.length} parts: ${ch.parts.map((x) => `${x.part.kind}:${x.part.label}@${x.part.layer}`).join(", ")}`);
     notes.push(...ch.notes);
     renderer.setModels(ch.parts.map(({ model, part, transform }) => ({ model: noTex ? { ...model, diffuse: model.diffuse.map(() => null) } : model, layer: part.layer, transform })));
@@ -114,10 +130,27 @@ for (const path of models) {
   }
   const cam = renderer.defaultCamera();
   cam.flat = flat;
+  if (animation) {
+    const bc = animation.animator.center();
+    animation.offset = [0, 1, 2].map((k) => cam.target[k] - bc[k]);
+  }
   if (view) {
     const [yaw, pitch, zoom, targetZ] = view.split(",").map(Number);
     Object.assign(cam, { yaw, pitch, distance: cam.distance / (zoom || 1) });
     if (Number.isFinite(targetZ)) cam.target = [cam.target[0], cam.target[1], targetZ];
+  }
+  const file = join(outDir, basename(path).replace(/[:\s]/g, "_").replace(/\.\w+$/, "") + (noTex ? "_notex" : "") + (view ? "_v" : "") + ".png");
+  const frameList = animation && frames.length ? frames : [animation ? animation.clip.start : 0];
+  for (const frame of frameList) {
+  if (animation) {
+    const { animator, clip, parts } = animation;
+    animator.evaluate(clip, frame);
+    parts.forEach((p, i) => {
+      if (p.model.skeleton && renderer.paletteSize(i)) renderer.setPalette(i, animator.palette(p.model.skeleton));
+    });
+    // cinematics place the character in scene space: keep the camera on the hips
+    const c = animator.center();
+    cam.target = [c[0] + animation.offset[0], c[1] + animation.offset[1], c[2] + animation.offset[2]];
   }
   renderer.render(target, cam);
   const enc = device.createCommandEncoder();
@@ -128,8 +161,9 @@ for (const path of models) {
   const rgba = new Uint8Array(W * H * 4);
   for (let y = 0; y < H; y++) rgba.set(mapped.subarray(y * stride, y * stride + W * 4), y * W * 4);
   readback.unmap();
-  const file = join(outDir, basename(path).replace(/[:\s]/g, "_").replace(/\.\w+$/, "") + (noTex ? "_notex" : "") + (view ? "_v" : "") + ".png");
-  await writeFile(file, png(W, H, rgba));
+  const outFile = animation && frameList.length > 1 ? file.replace(/\.png$/, `_f${frame}.png`) : file;
+  await writeFile(outFile, png(W, H, rgba));
+  }
   console.log(`${path}: ${JSON.stringify(renderer.stats)} ${Math.round(performance.now() - t0)}ms -> ${file}`);
   for (const n of notes) console.log("   note:", n);
 }

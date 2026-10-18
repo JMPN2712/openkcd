@@ -9,6 +9,10 @@ import { ModelRenderer, type Camera } from "./renderer.ts";
 import type { TextureContext } from "./textureView.ts";
 import type { Vfs } from "./vfs.ts";
 import { formatCount } from "./format.ts";
+import type { Clip } from "./anim.ts";
+import type { Skeleton } from "./skeleton.ts";
+import { Animator, invertRigid } from "./pose.ts";
+import { multiply } from "./mat4.ts";
 
 export interface ScenePart {
   model: LoadedModel;
@@ -19,10 +23,22 @@ export interface ScenePart {
   label?: string;
 }
 
+export interface SceneAnimation {
+  skeleton: Skeleton;
+  /** .caf paths usable with the skeleton */
+  clips: string[];
+  loadClip(path: string): Promise<Clip>;
+  /** per scene part: the bones its mesh is weighted to (null = rigid) */
+  partSkeletons: (Skeleton | null)[];
+  /** per scene part: a bone attachment (skeleton bone index + bind-pose transform) */
+  attachments: ({ bone: number; base: Float32Array } | null)[];
+}
+
 export interface Scene {
   title?: string;
   parts: ScenePart[];
   notes: string[];
+  animation?: SceneAnimation;
 }
 
 export type SceneLoader = (vfs: Vfs, onStatus: (s: string) => void) => Promise<Scene>;
@@ -153,9 +169,11 @@ export async function showScene(host: HTMLElement, ctx: TextureContext, load: Sc
   let cam: Camera = renderer.defaultCamera();
 
   let raf = 0;
-  const draw = () => {
+  let onFrame: ((now: number) => void) | null = null;
+  const draw = (now: number) => {
     raf = 0;
     if (!canvas.width || !canvas.height) return;
+    onFrame?.(now);
     cam.flat = flatCb.checked;
     renderer.render(context.getCurrentTexture(), cam);
     if (gpuError) status.textContent = `GPU error: ${gpuError}`;
@@ -206,7 +224,122 @@ export async function showScene(host: HTMLElement, ctx: TextureContext, load: Sc
   canvas.addEventListener("dblclick", resetView);
   reset.addEventListener("click", resetView);
   flatCb.addEventListener("change", redraw);
-  texCb.addEventListener("change", () => { renderer.setModels(items(texCb.checked)); redraw(); });
+  texCb.addEventListener("change", () => { renderer.setModels(items(texCb.checked)); applyPose(); redraw(); });
+
+  // ---- animation
+  let applyPose = () => {};
+  if (scene.animation) {
+    const anim = scene.animation;
+    const animator = new Animator(anim.skeleton);
+    let clip: Clip | null = null;
+    let frame = 0;
+    // camera target relative to the hips in the bind pose, kept while following
+    animator.evaluate(null, 0);
+    const bindCenter = animator.center();
+    const followOffset = () => [0, 1, 2].map((k) => renderer.defaultCamera().target[k] - bindCenter[k]);
+    let playing = false;
+    let last = 0;
+    applyPose = () => {
+      animator.evaluate(clip, frame);
+      anim.partSkeletons.forEach((sk, i) => { if (sk && renderer.paletteSize(i)) renderer.setPalette(i, animator.palette(sk)); });
+      anim.attachments.forEach((a, i) => {
+        if (a) renderer.setItemTransform(i, multiply(multiply(animator.world[a.bone], invertRigid(anim.skeleton.bones[a.bone].bindPose)), a.base));
+      });
+      if (clip && followCb.checked) {
+        const c = animator.center();
+        const off = followOffset();
+        cam.target = [c[0] + off[0], c[1] + off[1], c[2] + off[2]];
+      }
+    };
+    const row = el("div", "tex-controls anim-controls");
+    const filter = el("input", "char-search");
+    filter.type = "search";
+    filter.placeholder = `Filter ${formatCount(anim.clips.length)} clips…`;
+    const pick = el("select", "clip-select");
+    const playBtn = el("button", "link", "▶ Play");
+    playBtn.type = "button";
+    const scrub = el("input");
+    scrub.type = "range";
+    scrub.min = "0"; scrub.max = "0"; scrub.step = "0.1"; scrub.value = "0";
+    const speed = el("select");
+    for (const v of ["0.25", "0.5", "1", "2"]) {
+      const o = el("option", undefined, `${v}×`);
+      o.value = v;
+      if (v === "1") o.selected = true;
+      speed.append(o);
+    }
+    const followCb = el("input");
+    followCb.type = "checkbox";
+    followCb.checked = true;
+    const followLabel = el("label", "ctl check");
+    followLabel.append(followCb, el("span", undefined, "Follow"));
+    const frameLabel = el("span", "dim", "bind pose");
+    const fillPick = () => {
+      const q = filter.value.trim().toLowerCase();
+      const hits = (q ? anim.clips.filter((c) => c.includes(q)) : anim.clips).slice(0, 500);
+      pick.replaceChildren(el("option", undefined, `— bind pose — (${q ? hits.length : anim.clips.length} clips)`));
+      (pick.firstChild as HTMLOptionElement).value = "";
+      for (const c of hits) {
+        const o = el("option", undefined, c.replace(/^animations\//, ""));
+        o.value = c;
+        pick.append(o);
+      }
+    };
+    let ft = 0;
+    filter.addEventListener("input", () => { clearTimeout(ft); ft = window.setTimeout(fillPick, 150); });
+    fillPick();
+    const setPlaying = (p: boolean) => {
+      playing = p && !!clip;
+      playBtn.textContent = playing ? "❚❚ Pause" : "▶ Play";
+      last = 0;
+      redraw();
+    };
+    pick.addEventListener("change", async () => {
+      setPlaying(false);
+      if (!pick.value) {
+        clip = null;
+        frameLabel.textContent = "bind pose";
+      } else {
+        status.textContent = `Loading ${pick.value}…`;
+        try {
+          clip = await anim.loadClip(pick.value);
+          status.textContent = `${clip.tracks.size} bone tracks, frames ${clip.start}–${clip.end} at ${clip.fps} fps`;
+        } catch (err) {
+          clip = null;
+          status.textContent = (err as Error).message;
+        }
+      }
+      frame = clip?.start ?? 0;
+      scrub.min = String(clip?.start ?? 0);
+      scrub.max = String(clip?.end ?? 0);
+      scrub.value = String(frame);
+      applyPose();
+      setPlaying(!!clip);
+    });
+    playBtn.addEventListener("click", () => setPlaying(!playing));
+    scrub.addEventListener("input", () => {
+      frame = Number(scrub.value);
+      setPlaying(false);
+      applyPose();
+      redraw();
+    });
+    followCb.addEventListener("change", () => { applyPose(); redraw(); });
+    onFrame = (now) => {
+      if (!playing || !clip) return;
+      if (last) {
+        frame += ((now - last) / 1000) * clip.fps * Number(speed.value);
+        if (frame > clip.end) frame = clip.start + ((frame - clip.start) % Math.max(1, clip.end - clip.start));
+      }
+      last = now;
+      scrub.value = String(frame);
+      frameLabel.textContent = `frame ${frame.toFixed(0)} / ${clip.end}`;
+      applyPose();
+      redraw(); // keep the loop going while playing
+    };
+    row.append(filter, pick, playBtn, scrub, speed, followLabel, frameLabel);
+    host.insertBefore(row, info);
+    applyPose();
+  }
 
   // ---- info
   const st = renderer.stats;

@@ -13,6 +13,10 @@ import type { LoadedModel, MipChain } from "./model.ts";
 import { colorizeOf } from "./mtl.ts";
 import { lookAt, multiply, perspective, transformPoint, type Vec3 } from "./mat4.ts";
 
+// position 3f, normal 3f, uv 2f, bone ids u16×4, weights unorm8×4
+const VERTEX_BYTES = 44;
+const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+
 const SHADER = /* wgsl */ `
 struct Camera { viewProj: mat4x4f, eye: vec4f, light: vec4f }; // light.w = 1 for flat shading
 // params: x alpha test, y diffuse map, z specular map, w layer
@@ -24,6 +28,8 @@ struct Draw { model: mat4x4f, color: vec4f, spec: vec4f, params: vec4f, colorize
 @group(1) @binding(1) var tex: texture_2d<f32>;
 @group(1) @binding(2) var samp: sampler;
 @group(1) @binding(3) var specTex: texture_2d<f32>;
+// skinning palette: model-space bone matrices × inverse bind pose (identity for static meshes)
+@group(1) @binding(4) var<storage, read> bones: array<mat4x4f>;
 
 struct VOut {
   @builtin(position) pos: vec4f,
@@ -32,13 +38,15 @@ struct VOut {
   @location(2) wpos: vec3f,
 };
 
-@vertex fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @location(2) uv: vec2f) -> VOut {
+@vertex fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @location(2) uv: vec2f,
+               @location(3) bi: vec4u, @location(4) bw: vec4f) -> VOut {
   var o: VOut;
-  let w = drw.model * vec4f(p, 1.0);
+  let sk = bones[bi.x] * bw.x + bones[bi.y] * bw.y + bones[bi.z] * bw.z + bones[bi.w] * bw.w;
+  let w = drw.model * (sk * vec4f(p, 1.0));
   o.pos = cam.viewProj * w;
   // layered character clothing shares the body's surface: pull outer layers slightly towards the camera
   o.pos.z = o.pos.z - drw.params.w * 0.00004 * o.pos.w;
-  o.n = (drw.model * vec4f(n, 0.0)).xyz;
+  o.n = (drw.model * (sk * vec4f(n, 0.0))).xyz;
   o.uv = uv;
   o.wpos = w.xyz;
   return o;
@@ -114,6 +122,10 @@ interface DrawItem {
   firstIndex: number;
   count: number;
   bind: GPUBindGroup;
+  item: number;
+  ubuf: GPUBuffer;
+  /** the mesh's own node transform, composed with the item transform */
+  meshTm: Float32Array;
 }
 
 export class ModelRenderer {
@@ -126,6 +138,8 @@ export class ModelRenderer {
   private sampler: GPUSampler;
   private white: GPUTexture;
   private draws: DrawItem[] = [];
+  private palettes: ({ buf: GPUBuffer; count: number } | null)[] = [];
+  private identityPalette: GPUBuffer;
   private owned: (GPUBuffer | GPUTexture)[] = [];
   private depth: GPUTexture | null = null;
   private msaa: GPUTexture | null = null;
@@ -145,11 +159,13 @@ export class ModelRenderer {
         module,
         entryPoint: "vs",
         buffers: [{
-          arrayStride: 32,
+          arrayStride: VERTEX_BYTES,
           attributes: [
             { shaderLocation: 0, offset: 0, format: "float32x3" },
             { shaderLocation: 1, offset: 12, format: "float32x3" },
             { shaderLocation: 2, offset: 24, format: "float32x2" },
+            { shaderLocation: 3, offset: 32, format: "uint16x4" },
+            { shaderLocation: 4, offset: 40, format: "unorm8x4" },
           ],
         }],
       },
@@ -161,6 +177,8 @@ export class ModelRenderer {
     this.camBuf = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.camBind = device.createBindGroup({ layout: this.pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.camBuf } }] });
     this.sampler = device.createSampler({ magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", addressModeU: "repeat", addressModeV: "repeat", maxAnisotropy: 8 });
+    this.identityPalette = device.createBuffer({ size: 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(this.identityPalette, 0, IDENTITY);
     this.white = device.createTexture({ size: [1, 1], format: "rgba8unorm-srgb", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     device.queue.writeTexture({ texture: this.white }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4 }, [1, 1]);
   }
@@ -185,22 +203,49 @@ export class ModelRenderer {
     this.setModels([{ model }]);
   }
 
-  /** Several models drawn together, each with an optional extra transform and depth layer. */
+  /**
+   * Several models drawn together, each with an optional extra transform and
+   * depth layer. Models with bone weights and a skeleton get a skinning
+   * palette (initially the bind pose), updated with setPalette(index, …).
+   */
   setModels(items: { model: LoadedModel; transform?: Float32Array; layer?: number }[]): void {
     this.clear();
+    this.palettes = items.map(({ model }) => {
+      const n = model.skeleton && model.cgf.meshes.some((m) => m.boneIds) ? model.skeleton.bones.length : 0;
+      if (!n) return null;
+      const buf = this.device.createBuffer({ size: n * 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+      const id = new Float32Array(n * 16);
+      for (let i = 0; i < n; i++) id.set(IDENTITY, i * 16);
+      this.device.queue.writeBuffer(buf, 0, id);
+      this.owned.push(buf);
+      return { buf, count: n };
+    });
     const textures = new Map<MipChain, GPUTexture>();
     const min: Vec3 = [Infinity, Infinity, Infinity];
     const max: Vec3 = [-Infinity, -Infinity, -Infinity];
-    for (const { model, transform: partTm, layer = 0 } of items)
+    for (const [itemIndex, { model, transform: partTm, layer = 0 }] of items.entries())
     for (const mesh of model.cgf.meshes) {
       const meshTm = partTm ? multiply(partTm, mesh.transform) : mesh.transform;
       const nv = mesh.positions.length / 3;
-      const verts = new Float32Array(nv * 8);
+      const palette = mesh.boneIds && mesh.boneWeights ? this.palettes[itemIndex] : null;
+      const raw = new ArrayBuffer(nv * VERTEX_BYTES);
+      const verts = new Float32Array(raw);
+      const ids = new Uint16Array(raw);
+      const wts = new Uint8Array(raw);
+      const F = VERTEX_BYTES / 4, U = VERTEX_BYTES / 2;
       for (let i = 0; i < nv; i++) {
-        verts.set(mesh.positions.subarray(i * 3, i * 3 + 3), i * 8);
-        if (mesh.normals) verts.set(mesh.normals.subarray(i * 3, i * 3 + 3), i * 8 + 3);
-        else verts[i * 8 + 5] = 1;
-        if (mesh.uvs) verts.set(mesh.uvs.subarray(i * 2, i * 2 + 2), i * 8 + 6);
+        verts.set(mesh.positions.subarray(i * 3, i * 3 + 3), i * F);
+        if (mesh.normals) verts.set(mesh.normals.subarray(i * 3, i * 3 + 3), i * F + 3);
+        else verts[i * F + 5] = 1;
+        if (mesh.uvs) verts.set(mesh.uvs.subarray(i * 2, i * 2 + 2), i * F + 6);
+        if (palette) {
+          for (let k = 0; k < 4; k++) {
+            ids[i * U + 16 + k] = Math.min(mesh.boneIds![i * 4 + k], palette.count - 1);
+            wts[i * VERTEX_BYTES + 40 + k] = mesh.boneWeights![i * 4 + k];
+          }
+        } else {
+          wts[i * VERTEX_BYTES + 40] = 255; // bone 0 of the identity palette
+        }
         const p = transformPoint(meshTm, [mesh.positions[i * 3], mesh.positions[i * 3 + 1], mesh.positions[i * 3 + 2]]);
         for (let c = 0; c < 3; c++) { min[c] = Math.min(min[c], p[c]); max[c] = Math.max(max[c], p[c]); }
       }
@@ -247,9 +292,10 @@ export class ModelRenderer {
             { binding: 1, resource: gpuTex.createView() },
             { binding: 2, resource: this.sampler },
             { binding: 3, resource: specTex.createView() },
+            { binding: 4, resource: { buffer: palette ? palette.buf : this.identityPalette } },
           ],
         });
-        this.draws.push({ vb, ib, firstIndex: s.firstIndex, count: s.numIndices, bind });
+        this.draws.push({ vb, ib, firstIndex: s.firstIndex, count: s.numIndices, bind, item: itemIndex, ubuf, meshTm: mesh.transform });
         this.stats.triangles += s.numIndices / 3;
       }
     }
@@ -316,10 +362,29 @@ export class ModelRenderer {
     this.device.queue.submit([enc.finish()]);
   }
 
+  /** Number of bones in item `index`'s palette (0 = not skinned). */
+  paletteSize(index: number): number {
+    return this.palettes[index]?.count ?? 0;
+  }
+
+  /** Replace item `index`'s extra transform (e.g. a prop following an animated bone). */
+  setItemTransform(index: number, transform: Float32Array): void {
+    for (const d of this.draws) {
+      if (d.item === index) this.device.queue.writeBuffer(d.ubuf, 0, multiply(transform, d.meshTm));
+    }
+  }
+
+  /** Upload skinning matrices (column-major 4×4 per bone) for item `index`. */
+  setPalette(index: number, matrices: Float32Array): void {
+    const p = this.palettes[index];
+    if (p) this.device.queue.writeBuffer(p.buf, 0, matrices.subarray(0, p.count * 16));
+  }
+
   clear(): void {
     for (const o of this.owned) o.destroy();
     this.owned = [];
     this.draws = [];
+    this.palettes = [];
     this.stats = { meshes: 0, triangles: 0, vertices: 0, draws: 0, textured: 0 };
   }
 
@@ -328,6 +393,7 @@ export class ModelRenderer {
     this.depth?.destroy();
     this.msaa?.destroy();
     this.white.destroy();
+    this.identityPalette.destroy();
     this.camBuf.destroy();
   }
 }
