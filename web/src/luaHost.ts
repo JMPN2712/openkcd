@@ -135,6 +135,11 @@ rawset(Database, "GetTableColumnData", function(t, c) return __kcd_decode(__kcd_
 rawset(Database, "GetTableLine", function(t, n) return __kcd_decode(__kcd_db("line", t, n) or "null") end)
 -- brain variables: a per-entity store of tables the scripts modify in place
 XGenAIModule = mkstub("XGenAIModule")
+-- WUIDs are entity ids here
+rawset(XGenAIModule, "GetEntityByWUID", function(wuid) if wuid == nil then return nil end return __kcd_entity(wuid) end)
+rawset(XGenAIModule, "GetEntityIdByWUID", function(wuid) return wuid end)
+rawset(XGenAIModule, "GetMyWUID", function(entity) return entity and entity.id end)
+TError = function(...) local parts = {} for i = 1, select("#", ...) do parts[#parts + 1] = tostring((select(i, ...))) end __kcd_error("TError: " .. table.concat(parts, " ")) end
 local brains = {}
 rawset(XGenAIModule, "GetBrainVariable", function(id, name)
   local b = brains[id] or {}
@@ -259,7 +264,23 @@ local entities = {}
 function __kcd_entity(id, name)
   local e = entities[id]
   if e then return e end
-  e = setmetatable({ id = id, name = name, this = { id = id, name = name } }, { __index = function(t, k)
+  name = name or __kcd_entname(id)
+  -- the soul keeps its meta roles (MERCHANT, REPAIRMAN, GOSSIP, …); other soul methods are stubs
+  local roles = {}
+  local soul = setmetatable({}, { __index = function(t, k)
+    if type(k) ~= "string" or not k:match("^%u") then return nil end
+    return mkstub("entity.soul." .. k)
+  end })
+  rawset(soul, "AddMetaRoleByName", function(self, role) roles[role] = true end)
+  rawset(soul, "RemoveMetaRoleByName", function(self, role) roles[role] = nil end)
+  rawset(soul, "HasMetaRoleByName", function(self, role) return roles[role] == true end)
+  rawset(soul, "GetMetaRoles", function(self) local out = {} for r in pairs(roles) do out[#out + 1] = r end table.sort(out) return out end)
+  e = setmetatable({ id = id, name = name, this = { id = id, name = name }, soul = soul }, { __index = function(t, k)
+    if k == "Properties" then
+      local p = __kcd_decode(__kcd_entprops(id) or "null") or {}
+      rawset(t, k, p)
+      return p
+    end
     if type(k) == "string" and (ENGINE_PARTS[k] or k:match("^%u")) then
       local s = mkstub("entity." .. k)
       rawset(t, k, s)
@@ -305,6 +326,8 @@ export class LuaHost {
     g.set("__kcd_log", (kind: string, msg: string) => { if (host.logs.length < 500) host.logs.push(`${kind}: ${msg}`); });
     g.set("__kcd_read", (path: string) => host.readScript(path));
     g.set("__kcd_db", (what: string, table: string, i?: number) => host.db(what, table, i));
+    g.set("__kcd_entname", (id: number) => host.entityName(Number(id)));
+    g.set("__kcd_entprops", (id: number) => { const p = host.entityProps(Number(id)); return p ? JSON.stringify(p) : null; });
     g.set("__kcd_loadxml", (def: string, data: string) => {
       const d = host.readScript(def), x = host.readScript(data);
       return d && x ? JSON.stringify(loadLuaXml(d, x)) : null;
@@ -325,6 +348,10 @@ export class LuaHost {
   }
 
   private tables = new Map<string, DbTable>();
+  /** entity names by id (the level's entity index), for XGenAIModule.GetEntityByWUID */
+  entityName: (id: number) => string = () => "";
+  /** entity editor properties by id (entity.Properties) */
+  entityProps: (id: number) => Record<string, unknown> | null = () => null;
 
   /** Database script API backend: JSON for GetTableInfo / GetColumnInfo / GetTableColumnData / GetTableLine. */
   private db(what: string, name: string, i?: number): string | null {

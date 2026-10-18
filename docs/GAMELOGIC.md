@@ -258,10 +258,21 @@ NotNearPlayer, IsLoadedGate, RemoveLink.
   values, forms 0 single / 1 array / 2 associative / 3 array) in the trees'
   global scope. Engine value types not in TypeDefinitions (`common:wuid`,
   `common:vec3`, …) start empty; other unknown types start as structs.
+- **More engine API.**
+  - `XGenAIModule.GetEntityByWUID` / `GetEntityIdByWUID`: WUIDs are entity
+    ids here, giving the same persistent entity table.
+  - `entity.soul` meta roles: `Add/Remove/HasMetaRoleByName`,
+    `GetMetaRoles`. The work trees use these to make NPCs merchants or
+    repairmen while working.
+  - `TError`: recorded as an error.
+  - `entity.Properties`: the entity's editor properties from the mission
+    file, built lazily on first access (attributes, numeric text as
+    numbers, child elements nested). `GetEntityScriptProperty` reads
+    `Properties.Script` from these, for example a work area's
+    `workBreakChance` override.
 - **Status.** The work trees of Rataje's 16 market NPCs run with no Lua
-  errors. Engine calls still stubbed there: `entity.soul.Add/RemoveMetaRoleByName`,
-  `XGenAIModule.GetEntityByWUID` / `GetEntityIdByWUID`, `TError`,
-  `EntityModule.GetSlotHand`.
+  errors. The only engine call still stubbed on those paths is
+  `EntityModule.GetSlotHand` (item slots).
 
 ## Quests (`Libs/Quests/flowgraphs`)
 

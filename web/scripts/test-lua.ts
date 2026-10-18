@@ -46,9 +46,11 @@ const changed = host.run(
   { id: 22547, name: "rat_tailor" },
 );
 const want = { t_workplace_params: { breakChance: 0.25, useCategories: "tailor_measuring" }, t_list: ["a", "b", "c"] };
+const roles = host.lua.doStringSync(`local e = XGenAIModule.GetEntityByWUID(22547) return table.concat(e.soul:GetMetaRoles(), ",") .. "|" .. tostring(e.soul:HasMetaRoleByName("MERCHANT"))`);
+check("soul meta roles persist per entity (GetEntityByWUID → same entity)", roles === "MERCHANT|true", roles);
 const sorted = (o: object) => JSON.stringify(Object.fromEntries(Object.entries(o).sort()));
 check("tree Lua writes data back (only changed variables)", sorted(changed) === sorted(want), JSON.stringify(changed));
-check("engine calls are stubbed and counted", host.calls.get("entity.soul.AddMetaRoleByName") === 1 && host.calls.get("XGenAIModule.GetEntityByWUID") === 1, JSON.stringify([...host.calls]));
+check("unimplemented engine calls are stubbed and counted", host.calls.get("GetEntityScriptProperty") === 1, JSON.stringify([...host.calls]));
 
 const t0 = performance.now();
 const n = await host.preload();

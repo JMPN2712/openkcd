@@ -5,6 +5,8 @@
 //     <Properties … esModularBehaviorTree="IdleSeq" fileModel="…/male.cdf"> <BB dayFrom=… dayTo=… …/> …
 // 929 of Rataje's 952 NPC entity names equal a soul_name in Libs/Tables/rpg/soul.
 
+import { parseXml, type XmlNode } from "./xml.ts";
+
 export interface NpcEntity {
   id: number;
   name: string;
@@ -68,6 +70,25 @@ export interface EntityInfo {
   saTemplate?: string;
   /** smart-object helper class (soclasses_SmartObjectHelpers), e.g. "tailorTable", "Bed" */
   soHelpers?: string;
+  /** the raw <Properties …>…</Properties> element (see entityProperties) */
+  propsXml?: string;
+}
+
+/**
+ * An entity's editor properties as its Lua script sees them (entity.Properties): attributes as
+ * fields (numeric text as numbers), child elements as nested tables (Properties.Script.Misc, …).
+ */
+export function entityProperties(e: EntityInfo): Record<string, unknown> | null {
+  if (!e.propsXml) return null;
+  const node = parseXml(e.propsXml).children[0];
+  if (!node) return null;
+  const conv = (n: XmlNode): Record<string, unknown> => {
+    const o: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(n.attrs)) o[k] = v !== "" && /^-?\d+(\.\d+)?(e[-+]?\d+)?$/i.test(v) ? Number(v) : v;
+    for (const c of n.children) o[c.tag] = conv(c);
+    return o;
+  };
+  return conv(node);
 }
 
 /** Index every entity in the mission XML by EntityId (Rataje: 55k entities, ~0.5 s). */
@@ -98,6 +119,13 @@ export function parseEntityIndex(xml: string): Map<number, EntityInfo> {
       }
     }
     const props = /<Properties\b([^>]*)>/.exec(body)?.[1] ?? "";
+    const ps = body.indexOf("<Properties");
+    if (ps >= 0) {
+      const selfClose = /<Properties\b[^>]*\/>/y;
+      selfClose.lastIndex = ps;
+      const pe = selfClose.test(body) ? selfClose.lastIndex : body.indexOf("</Properties>", ps) + "</Properties>".length;
+      if (pe > ps) info.propsXml = body.slice(ps, pe);
+    }
     const pa = (k: string) => new RegExp(`\\b${k}="([^"]+)"`).exec(props)?.[1];
     const category = pa("sWH_AI_EntityCategory"), soType = pa("guidSmartObjectType"), saTemplate = pa("guidSmartAreaTemplate");
     if (category) info.category = category;

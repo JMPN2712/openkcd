@@ -17,7 +17,7 @@ import { parseTreeFile, type BtNode, type BtTree, type BtVariable } from "./bt.t
 import type { Vfs } from "./vfs.ts";
 import { readTable } from "./tables.ts";
 import { Runner, Scope, type Context, type Host, type Status, type Task, type Value } from "./btRuntime.ts";
-import type { EntityInfo } from "./levelEntities.ts";
+import { entityProperties, type EntityInfo } from "./levelEntities.ts";
 import type { Row } from "./tables.ts";
 import { setTypeDefs } from "./btRuntime.ts";
 import { TypeDefs } from "./typeDefs.ts";
@@ -154,6 +154,10 @@ export class AiWorld {
       report: (w) => o.trace?.(`[unsupported] ${w}`),
     };
     this.runner = new Runner(host);
+    if (o.lua) {
+      o.lua.entityName = (id) => o.ents.get(id)?.name ?? "";
+      o.lua.entityProps = (id) => { const e = o.ents.get(id); return e ? entityProperties(e) : null; };
+    }
   }
 
   private trace(msg: string) {
