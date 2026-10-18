@@ -36,6 +36,15 @@ export class Scope {
     this.decls.set(v.name, v);
     this.vars.set(v.name, initialValue(v));
   }
+  /** All visible variables, outermost first (inner scopes shadow outer ones). */
+  snapshot(): Record<string, Value> {
+    const chain: Scope[] = [];
+    for (let s: Scope | null = this; s; s = s.parent) chain.unshift(s);
+    const out: Record<string, Value> = {};
+    for (const s of chain) for (const [k, v] of s.vars) out[k] = v;
+    return out;
+  }
+
   /** Reset a variable to its declared initial value (VarOperation Reinit). */
   reinit(name: string): void {
     for (let s: Scope | null = this; s; s = s.parent) {
@@ -46,17 +55,26 @@ export class Scope {
   }
 }
 
-/** Declared initial value: scalars from `values`; struct types start as {}; wuids as null; arrays []. */
+/** Struct and enum definitions (Libs/AI/TypeDefinitions.xml), for initial values. */
+let typeDefs: { defaultOf(type: string, text?: string): Value } | null = null;
+export function setTypeDefs(td: typeof typeDefs): void {
+  typeDefs = td;
+}
+
+/** Declared initial value: scalars from `values`; struct types from their definition (else {}); wuids as null; arrays []. */
 export function initialValue(v: BtVariable): Value {
   const scalar = (s: string): Value => {
     switch (v.type) {
       case "_bool": return s === "true" || s === "1";
       case "_int": case "_float": case "_double": return s === "" ? 0 : Number(s);
       case "_string": return s;
-      default:
-        // ASSUMPTION: namespaced value types (common:wuid, common:vec3, dialog:state, …) start empty;
-        // other types are structs (workplace_params, nextBehavior, …) filled field by field
+      default: {
+        const d = typeDefs?.defaultOf(v.type, s);
+        if (d !== undefined && d !== null) return d;
+        // ASSUMPTION: undefined namespaced value types (common:wuid, common:vec3, …) start empty;
+        // other unknown types are structs filled field by field
         return v.type.includes(":") ? (s === "" ? null : s) : {};
+      }
     }
   };
   if (v.form === "array") return v.values === "" ? [] : v.values.split(",").map((x) => scalar(x.trim()));

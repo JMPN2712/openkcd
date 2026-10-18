@@ -202,6 +202,48 @@ NotNearPlayer, IsLoadedGate, RemoveLink.
   - the tailor walks to his table's helper and plays `tailor_idle` at its
     long side, leaning over the cloth.
 
+### Lua (`web/src/luaHost.ts`, `web/src/typeDefs.ts`)
+
+- **Runtime.** `wasmoon-lua5.1` 1.18.10 (MIT) is the real Lua 5.1 VM
+  compiled to WebAssembly (204 KB), pinned to a February 2024 release. In
+  Lua 5.1, `10/2` prints `5` (5.3+ prints `5.0`) and `setfenv` and
+  `table.getn` exist, so the scripts run unmodified. The `.wasm` is served
+  locally: the package's default would fetch it from a CDN.
+- **Usage in the scripts.** 90k lines across 498 files, plus 2,358
+  tree-embedded snippets, use few 5.1-only features (`table.getn` 23×,
+  `loadstring` 15×, `math.pow` 6×).
+- **Start-up.** `Scripts/main.lua` defines `OnInit`, which loads the rest
+  through `Script.ReloadScript` (`common.lua`, Utils, QuestUtils, Enum, …).
+  After it, the game's scripts have defined 275 globals.
+- **Implemented engine API.**
+  - `Script.ReloadScript` / `LoadScript`.
+  - `System.Log*`.
+  - `CryAction.LoadXML(definition, data)`: schema-driven XML → Lua, from
+    `Libs/LuaXML`.
+  - `XGenAIModule.Get/SetBrainVariable`: a per-entity store.
+  - **Enums:** the `enum_<name>` tables from `Libs/AI/TypeDefinitions.xml`
+    (189 enums). Enums missing from it (`enum_FTIconType`,
+    `enum_animationOverride`) answer `"<enum>.<value>"`.
+- **Stubbed engine API.** Every other capitalised global is a logging stub:
+  callable, returns nil, and answers nested keys. The host counts the
+  calls (e.g. `entity.soul.AddMetaRoleByName`,
+  `XGenAIModule.GetEntityByWUID`) to decide what to implement next.
+- **Tree Lua.** `ExecuteLua` / `LuaWrapper` code runs as a chunk with
+  `entity` (the NPC, with `entity.this.id`) and `data` (the tree's visible
+  variables). Data goes in as JSON, decoded in Lua into proper 1-based
+  tables, and changed variables are written back.
+- **TypeDefinitions.xml.** 1,000 struct types (nested names joined with
+  ':', members inherited) and 189 enums. Tree variables of struct types now
+  start with the schema's member defaults; e.g. `cutsceneData` gets
+  `mode = cutsceneMode.video`, `timeOfDay = -1`.
+- **Known gaps.**
+  - `Events.lua` needs the `Database` script API (`GetTableInfo`, …) at
+    start-up.
+  - The tailor's trees reach the game's own assertions in `Context.lua`
+    ("already has the context option … active"), a sign that some
+    enter/exit hook runs twice. That is to be checked against the
+    executor.
+
 ## Quests (`Libs/Quests/flowgraphs`)
 
 - **Scope.** 287 graphs, one per quest, using only 16 node classes:

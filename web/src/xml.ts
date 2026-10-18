@@ -5,6 +5,8 @@ export interface XmlNode {
   tag: string;
   attrs: Record<string, string>;
   children: XmlNode[];
+  /** text content directly inside the element (trimmed; absent when empty) */
+  text?: string;
 }
 
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
@@ -17,7 +19,15 @@ export function parseXml(text: string): XmlNode {
   const stack = [root];
   const tagRe = /<(\/?)([A-Za-z_][\w.:-]*)((?:\s+[\w.:-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g;
   const attrRe = /([\w.:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
-  for (const m of text.replace(/<!--[\s\S]*?-->/g, "").matchAll(tagRe)) {
+  const src = text.replace(/<!--[\s\S]*?-->/g, "");
+  let last = 0;
+  for (const m of src.matchAll(tagRe)) {
+    const between = src.slice(last, m.index).trim();
+    last = m.index + m[0].length;
+    if (between && !between.startsWith("<?") && stack.length > 1) {
+      const top = stack[stack.length - 1];
+      top.text = (top.text ?? "") + unescape(between);
+    }
     const [, close, tag, attrText, selfClose] = m;
     if (close) {
       if (stack.length > 1) stack.pop();

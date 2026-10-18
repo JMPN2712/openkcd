@@ -19,6 +19,9 @@ import { readTable } from "./tables.ts";
 import { Runner, Scope, type Context, type Host, type Status, type Task, type Value } from "./btRuntime.ts";
 import type { EntityInfo } from "./levelEntities.ts";
 import type { Row } from "./tables.ts";
+import { setTypeDefs } from "./btRuntime.ts";
+import { TypeDefs } from "./typeDefs.ts";
+import type { LuaHost } from "./luaHost.ts";
 
 /** A smart-object helper (Libs/SmartObjects.xml): a spot relative to the object, for some animations. */
 export interface SoHelper {
@@ -102,6 +105,8 @@ export interface WorldOptions {
   trace?: (msg: string) => void;
   /** whether NPCs run their detailed behaviour (else the LOD branch); default true */
   detail?: boolean;
+  /** Lua for ExecuteLua / LuaWrapper code (luaHost.ts); without it, Lua is skipped */
+  lua?: LuaHost;
 }
 
 const wuid = (v: Value | undefined): number | null => {
@@ -139,6 +144,11 @@ export class AiWorld {
       random: o.random ?? Math.random,
       tree: o.trees,
       node: (n, c) => this.node(n, c),
+      lua: o.lua ? (code, scope) => {
+        const npc = this.current.npc;
+        const changed = o.lua!.run(code, scope.snapshot(), { id: npc, name: this.o.ents.get(npc)?.name ?? "" });
+        for (const [k, v] of Object.entries(changed)) scope.set(k, v);
+      } : undefined,
       report: (w) => o.trace?.(`[unsupported] ${w}`),
     };
     this.runner = new Runner(host);
@@ -157,9 +167,13 @@ export class AiWorld {
   private globals(npc: number, extra: Record<string, Value> = {}): Scope {
     const g = new Scope();
     for (const v of this.o.trees("final/sb_daycycles.xml", "root")?.variables ?? []) g.declare(v);
-    g.vars.set("this", { id: npc });
+    g.vars.set("this", { id: npc, name: this.o.ents.get(npc)?.name ?? "" });
     g.vars.set("__player", { id: -1 });
-    for (const [k, v] of Object.entries(extra)) g.vars.set(k, v);
+    for (const [k, v] of Object.entries(extra)) {
+      // system structs (__area, __object) carry the entity's name too
+      const id = v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, Value>).id : undefined;
+      g.vars.set(k, typeof id === "number" ? { ...(v as Record<string, Value>), name: this.o.ents.get(id)?.name ?? "" } : v);
+    }
     return g;
   }
 
@@ -572,6 +586,12 @@ function assignVar(scope: Scope, target: string, v: Value): void {
  * tables and the smart-object helpers. `opts` supplies the entity index, clocks and callbacks.
  */
 export async function createAiWorld(vfs: Vfs, opts: Omit<WorldOptions, "ai" | "trees" | "helpers">): Promise<AiWorld> {
+  const td = vfs.lookup("libs/ai/typedefinitions.xml");
+  if (td) {
+    const defs = new TypeDefs(new TextDecoder().decode(await vfs.read(td)));
+    setTypeDefs(defs);
+    opts.lua?.defineEnums(defs.luaEnums());
+  }
   const trees = new Map<string, BtTree>();
   for (const path of vfs.paths()) {
     if (!path.startsWith("libs/ai/") || !path.endsWith(".xml")) continue;

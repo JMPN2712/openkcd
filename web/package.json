@@ -15,5 +15,8 @@
     "typescript": "7.0.2",
     "vite": "8.3.4",
     "webgpu": "0.6.2"
+  },
+  "dependencies": {
+    "wasmoon-lua5.1": "1.18.10"
   }
 }

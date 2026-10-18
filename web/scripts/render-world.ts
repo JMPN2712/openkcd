@@ -23,6 +23,8 @@ import { NavMesh } from "../src/navmesh.ts";
 import { createAiWorld } from "../src/btWorld.ts";
 import { NpcAi } from "../src/npcAi.ts";
 import { AnimLibrary } from "../src/mannequin.ts";
+import { LuaHost } from "../src/luaHost.ts";
+import { createRequire } from "node:module";
 import { NpcWorld, npcItems, animateNpcs, updateAi } from "../src/npcs.ts";
 import { TerrainRenderer, type FlyCamera } from "../src/terrainRenderer.ts";
 import { ModelRenderer } from "../src/renderer.ts";
@@ -131,11 +133,14 @@ let npcAi: NpcAi | null = null;
 if (aiSeconds > 0 && npcWorld) {
   const t0 = performance.now();
   const clock = { now: 0 };
+  const lua = await LuaHost.create(vfs, createRequire(import.meta.url).resolve("wasmoon-lua5.1/dist/liblua5.1.wasm"));
+  await lua.preload();
   const world = await createAiWorld(vfs, {
-    ents: entIndex, realTime: () => clock.now, gameTime: () => clock.now * 15, random: () => 0.5,
+    ents: entIndex, lua, realTime: () => clock.now, gameTime: () => clock.now * 15, random: () => 0.5,
     act: (a) => npcAi!.act(a),
     trace: (m) => { if (aiTrace && !m.startsWith("[unsupported]")) console.log(`   ai ${clock.now.toFixed(1)} s: ${m}`); },
   });
+  lua.boot();
   npcAi = new NpcAi(world, { male: new AnimLibrary(vfs, "male"), female: new AnimLibrary(vfs, "female") });
   Object.defineProperty(clock, "now", { get: () => npcAi!.now });
   npcWorld.ai = npcAi;

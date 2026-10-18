@@ -18,6 +18,9 @@ import { NpcWorld, npcItems, animateNpcs, updateAi, type WorldNpc } from "./npcs
 import { createAiWorld } from "./btWorld.ts";
 import { NpcAi } from "./npcAi.ts";
 import { AnimLibrary } from "./mannequin.ts";
+import { LuaHost } from "./luaHost.ts";
+// served by Vite with the app (never the package's CDN default)
+import luaWasm from "wasmoon-lua5.1/dist/liblua5.1.wasm?url";
 import { ASSET_RE } from "./assets.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -169,9 +172,16 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const npcWorld = new NpcWorld(vfs, npcEntities, schedules, (x, y) => heightAt(terrain, x, y));
   // behaviour trees for NPCs at work (loaded in the background: ~1 s of tree parsing)
   let npcAi: NpcAi | null = null;
-  void createAiWorld(vfs, {
-    ents, realTime: () => npcAi?.now ?? 0, gameTime: () => (npcAi?.now ?? 0) * 15, act: (a) => npcAi?.act(a) ?? 1,
-  }).then((w) => {
+  void (async () => {
+    // Lua 5.1 with the game's scripts (Scripts/main.lua) for the trees' Lua code
+    const lua = await LuaHost.create(vfs, luaWasm);
+    await lua.preload();
+    const w = await createAiWorld(vfs, {
+      ents, lua, realTime: () => npcAi?.now ?? 0, gameTime: () => (npcAi?.now ?? 0) * 15, act: (a) => npcAi?.act(a) ?? 1,
+    });
+    if (!lua.boot()) console.warn("Lua start-up:", lua.errors.slice(0, 3));
+    return w;
+  })().then((w) => {
     if (stopped) return;
     npcAi = new NpcAi(w, { male: new AnimLibrary(vfs, "male"), female: new AnimLibrary(vfs, "female") });
     npcWorld.ai = npcAi;
