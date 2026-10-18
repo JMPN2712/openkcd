@@ -187,6 +187,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   })().then((w) => {
     if (stopped) return;
     npcAi = new NpcAi(w, { male: new AnimLibrary(vfs, "male"), female: new AnimLibrary(vfs, "female") });
+    npcAi.nav = schedules.navMesh;
     npcWorld.ai = npcAi;
     npcCheckedAt = -Infinity;
   }).catch((err) => console.warn("behaviour trees:", err));
@@ -196,6 +197,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let npcCheckedAt = -Infinity;
   let npcInfo = `NPCs: ${npcEntities.length} in level`;
   let minute = 10 * 60; // game time of day, minutes
+  let simSeconds = 0; // simulation clock (real seconds at ×15)
   clockRange.value = String(minute);
   clockRange.addEventListener("input", () => { minute = Number(clockRange.value); npcCheckedAt = -Infinity; });
   // re-place NPCs when the set around the camera (or where they are) changes
@@ -300,8 +302,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (!canvas.width) return;
     if (!streamedAt || Math.hypot(cam.pos[0] - streamedAt[0], cam.pos[1] - streamedAt[1]) > STREAM_STEP) void stream();
     minute = (minute + (dt * Number(speedSel.value)) / 60) % 1440;
-    // behaviour trees run on real time scaled like the game clock (×15 = real time)
-    npcAi?.tick((dt * Number(speedSel.value)) / 15);
+    // one simulation clock for behaviour trees and NPC animation, scaled like the game clock
+    // (×15 = real time): legs keep pace with movement at every speed, and pausing freezes both
+    const simDt = (dt * Number(speedSel.value)) / 15;
+    simSeconds += simDt;
+    npcAi?.tick(simDt);
     const hh = Math.floor(minute / 60), mm = Math.floor(minute % 60);
     clockLabel.textContent = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
     if (document.activeElement !== clockRange) clockRange.value = String(Math.floor(minute));
@@ -318,7 +323,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     models.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
     water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
     npcR.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
-    animateNpcs(npcs, npcWorld, minute, now / 1000, npcR);
+    animateNpcs(npcs, npcWorld, minute, simSeconds, npcR);
     if (scene) {
       const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts);
       lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));

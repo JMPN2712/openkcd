@@ -122,6 +122,10 @@ function route(pts: Vec3[]): Route {
 export class Schedules {
   private ents: Map<number, EntityInfo>;
   private nav: NavMesh | null = null;
+  /** the navmesh set with setNavMesh (shared with the behaviour-tree driver) */
+  get navMesh(): NavMesh | null {
+    return this.nav;
+  }
   private routes = new Map<string, Route>();
   private beds = new Map<number, EntityInfo>();
   constructor(npcs: NpcEntity[], ents: Map<number, EntityInfo>) {

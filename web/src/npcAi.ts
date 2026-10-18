@@ -8,6 +8,7 @@ import type { AiWorld, Action } from "./btWorld.ts";
 import type { Task } from "./btRuntime.ts";
 import type { AnimLibrary, FragmentClip } from "./mannequin.ts";
 import type { NpcEntity } from "./levelEntities.ts";
+import type { NavMesh } from "./navmesh.ts";
 
 type Vec3 = [number, number, number];
 type Quat = [number, number, number, number];
@@ -24,9 +25,8 @@ export interface AiState {
   fragment: string;
   /** AI clock time the current move/animation started */
   since: number;
-  /** move: from, to and duration */
-  from?: Vec3;
-  to?: Vec3;
+  /** move: the route (corner points, cumulative distances), duration and end orientation */
+  route?: { pts: Vec3[]; cum: number[] };
   duration?: number;
   endRot?: Quat;
 }
@@ -44,6 +44,8 @@ export class NpcAi {
   private female = new Map<number, boolean>();
   /** AI clock (real seconds, scaled with the game-speed setting by the caller) */
   now = 0;
+  /** level navmesh: moves longer than 1.5 m follow it (else straight lines) */
+  nav: NavMesh | null = null;
   private pending = new Set<Promise<unknown>>();
 
   constructor(world: AiWorld, libs: Record<"male" | "female", AnimLibrary>) {
@@ -58,10 +60,15 @@ export class NpcAi {
     const st = d.state;
     if (a.kind === "move" && typeof a.target !== "string") {
       const to = a.target;
-      const dist = Math.hypot(to[0] - st.pos[0], to[1] - st.pos[1]);
-      Object.assign(st, { mode: "walk", from: [...st.pos], to: [...to], since: this.now, duration: dist / WALK_SPEED, endRot: a.rot, clip: null, fragment: "" });
-      if (dist > 0.05) st.rot = yawQuat(Math.atan2(to[1] - st.pos[1], to[0] - st.pos[0]) - Math.PI / 2);
-      return dist / WALK_SPEED;
+      const straight = Math.hypot(to[0] - st.pos[0], to[1] - st.pos[1]);
+      // around counters, walls and furniture: the navmesh path, bridged to the exact ends
+      const path = straight > 1.5 ? this.nav?.findPath(st.pos, to, 20000) : null;
+      const pts: Vec3[] = path ? [[...st.pos] as Vec3, ...path, [...to] as Vec3] : [[...st.pos] as Vec3, [...to] as Vec3];
+      const cum = [0];
+      for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+      const length = cum[cum.length - 1];
+      Object.assign(st, { mode: "walk", route: { pts, cum }, since: this.now, duration: length / WALK_SPEED, endRot: a.rot, clip: null, fragment: "" });
+      return length / WALK_SPEED;
     }
     const fragment = String(a.target);
     const lib = this.libs[this.female.get(a.npc) ? "female" : "male"];
@@ -114,10 +121,18 @@ export class NpcAi {
     this.now += dt;
     for (const d of this.driven.values()) {
       const st = d.state;
-      if (st.mode === "walk" && st.from && st.to && st.duration !== undefined) {
-        const t = st.duration > 0 ? Math.min(1, (this.now - st.since) / st.duration) : 1;
-        st.pos = [st.from[0] + (st.to[0] - st.from[0]) * t, st.from[1] + (st.to[1] - st.from[1]) * t, st.from[2] + (st.to[2] - st.from[2]) * t];
-        if (t >= 1) { st.mode = "idle"; if (st.endRot) st.rot = [...st.endRot]; }
+      if (st.mode === "walk" && st.route && st.duration !== undefined) {
+        const { pts, cum } = st.route;
+        const total = cum[cum.length - 1];
+        const walked = Math.min(total, (this.now - st.since) * WALK_SPEED);
+        let k = 1;
+        while (k < cum.length - 1 && cum[k] < walked) k++;
+        const a = pts[k - 1], b = pts[k];
+        const seg = cum[k] - cum[k - 1];
+        const t = seg > 0 ? (walked - cum[k - 1]) / seg : 1;
+        st.pos = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+        if (seg > 0.05) st.rot = yawQuat(Math.atan2(b[1] - a[1], b[0] - a[0]) - Math.PI / 2);
+        if (walked >= total) { st.mode = "idle"; if (st.endRot) st.rot = [...st.endRot]; }
       }
       if (!d.done && d.task.tick() !== "running") d.done = true;
     }

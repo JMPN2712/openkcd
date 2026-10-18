@@ -149,6 +149,7 @@ if (aiSeconds > 0 && npcWorld) {
   npcAi = new NpcAi(world, { male: new AnimLibrary(vfs, "male"), female: new AnimLibrary(vfs, "female") });
   Object.defineProperty(clock, "now", { get: () => npcAi!.now });
   npcWorld.ai = npcAi;
+  npcAi.nav = schedules?.navMesh ?? null;
   console.log(`behaviour trees loaded in ${Math.round(performance.now() - t0)} ms`);
 }
 if (atEntity) {
