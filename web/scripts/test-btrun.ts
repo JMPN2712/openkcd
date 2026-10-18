@@ -27,7 +27,7 @@ function trees(xml: string): Map<string, BtTree> {
 }
 function host(lib: Map<string, BtTree>, clock: { t: number }, rnd = 0.25): Host {
   return {
-    gameTime: () => clock.t, realTime: () => clock.t / 15, random: () => rnd,
+    worldTime: () => clock.t * 15, realTime: () => clock.t, random: () => rnd,
     tree: (file, name) => (file === "test.xml" ? lib.get(name) : undefined),
   };
 }
@@ -115,7 +115,7 @@ for (const path of vfs.paths()) {
 }
 {
   const clock = { t: 0 };
-  const r = new Runner({ gameTime: () => clock.t, realTime: () => clock.t / 15, random: () => 0.5, tree: (f, n) => game.get(`${f}#${n}`) });
+  const r = new Runner({ worldTime: () => clock.t * 15, realTime: () => clock.t, random: () => 0.5, tree: (f, n) => game.get(`${f}#${n}`) });
   const tailor = game.get("final/sa_tailory.xml#tailor")!;
   // run only its OnInit (the parameters); its Behavior is the shared workplace loop
   const { scope } = r.instantiate(tailor);

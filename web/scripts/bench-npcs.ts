@@ -73,7 +73,7 @@ await lua.preloadTables();
 lap("Lua + scripts + tables", t0);
 t0 = T();
 let ai: NpcAi | null = null;
-const world = await createAiWorld(vfs, { ents, lua, realTime: () => ai?.now ?? 0, gameTime: () => (ai?.now ?? 0) * 15, act: (a) => ai?.act(a) ?? 1 });
+const world = await createAiWorld(vfs, { ents, lua, realTime: () => ai?.now ?? 0, worldTime: () => (ai?.now ?? 0) * 15, act: (a) => ai?.act(a) ?? 1 });
 lua.boot();
 lap("behaviour trees + AI tables + boot", t0);
 const libs = { male: new AnimLibrary(vfs, "male"), female: new AnimLibrary(vfs, "female") };

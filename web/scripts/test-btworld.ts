@@ -51,7 +51,7 @@ const unsupported = new Set<string>();
 const world = await createAiWorld(vfs, {
   ents, lua,
   realTime: () => clock.real,
-  gameTime: () => clock.real * 15,
+  worldTime: () => clock.real * 15,
   random: () => 0.5,
   trace: (m) => {
     if (m.startsWith("[unsupported]")) { unsupported.add(m.slice(14)); return; }

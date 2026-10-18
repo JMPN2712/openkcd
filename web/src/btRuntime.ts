@@ -85,9 +85,9 @@ export function initialValue(v: BtVariable): Value {
 
 /** Host services: clocks, globals ($__player, $__area, …), functions, Lua, world-facing nodes. */
 export interface Host {
-  /** game time in seconds (KCD's clock, 15× real time) */
-  gameTime(): number;
-  /** real (world) time in seconds */
+  /** the in-world clock in seconds (time of day, 15× real time): timeType="WorldTime" (waits of 5m, 1h) */
+  worldTime(): number;
+  /** simulation seconds, real time: timeType="GameTime" (waits of 500ms, 2s, 5s; 3,664 of 3,866 Waits) */
   realTime(): number;
   random(): number;
   /** resolve an IncludeTree target (file relative to Libs/AI, tree name) */
@@ -445,7 +445,7 @@ export class Runner {
       }
       case "Wait": {
         let until: number | null = null;
-        const clock = () => (text("timeType") === "WorldTime" ? this.host.realTime() : this.host.gameTime());
+        const clock = () => (text("timeType") === "WorldTime" ? this.host.worldTime() : this.host.realTime());
         return {
           tick: () => {
             if (until === null) {

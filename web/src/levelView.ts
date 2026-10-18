@@ -185,7 +185,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     await lua.preload();
     await lua.preloadTables();
     const w = await createAiWorld(vfs, {
-      ents, lua, realTime: () => npcAi?.now ?? 0, gameTime: () => (npcAi?.now ?? 0) * 15, act: (a) => npcAi?.act(a) ?? 1,
+      ents, lua, realTime: () => npcAi?.now ?? 0, worldTime: () => (npcAi?.now ?? 0) * 15, act: (a) => npcAi?.act(a) ?? 1,
     });
     if (!lua.boot()) console.warn("Lua start-up:", lua.errors.slice(0, 3));
     return w;

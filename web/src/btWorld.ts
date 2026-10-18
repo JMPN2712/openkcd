@@ -23,6 +23,16 @@ import { setTypeDefs } from "./btRuntime.ts";
 import { TypeDefs } from "./typeDefs.ts";
 import type { LuaHost } from "./luaHost.ts";
 
+/**
+ * Smart-object classes whose helpers only make sense with the object turned 180° about Z.
+ * WORKAROUND: tailorTable's "entry" helper (0, 0.5, 0) lands in the middle of the table at all three
+ * Rataje tailors' tables (table_heavy160 is centred on its pivot) and clear of it when mirrored. Other
+ * classes fit the plain transform: water troughs, fireplaces, pub tables and logs put their standing
+ * helpers inside furniture 0 times as computed and 26 times mirrored (Rattay). How the game resolves
+ * this class (animation alignment?) is unknown.
+ */
+const MIRRORED_HELPERS = new Set(["tailortable"]);
+
 /** A smart-object helper (Libs/SmartObjects.xml): a spot relative to the object, for some animations. */
 export interface SoHelper {
   name: string;
@@ -97,7 +107,7 @@ export interface WorldOptions {
   /** smart-object helpers by class (parseSmartObjectHelpers) */
   helpers?: Map<string, SoHelper[]>;
   trees: (file: string, name: string) => BtTree | undefined;
-  gameTime: () => number;
+  worldTime: () => number;
   realTime: () => number;
   random?: () => number;
   /** an action starts; return its duration in real seconds (default: estimates) */
@@ -143,7 +153,7 @@ export class AiWorld {
       this.parents.set(l.target, list);
     }
     const host: Host = {
-      gameTime: o.gameTime,
+      worldTime: o.worldTime,
       realTime: o.realTime,
       random: o.random ?? Math.random,
       tree: o.trees,
@@ -402,7 +412,8 @@ export class AiWorld {
     const k = Math.max(0, list.findIndex((h) => animation && h.description.includes(`'${animation}'`)));
     const h = list[k];
     if (!h) return { id: -1, pos: e.pos, rot: e.rot };
-    const [w, x, y, z] = e.rot;
+    // the object's rotation, turned half round for classes whose markers face the other way
+    const [w, x, y, z] = MIRRORED_HELPERS.has((e.soHelpers ?? "").toLowerCase()) ? [-e.rot[3], e.rot[2], -e.rot[1], e.rot[0]] : e.rot;
     const [px, py, pz] = h.pos;
     // rotate the helper offset by the object's rotation: v + 2w(q×v) + 2q×(q×v), then translate
     const tx = 2 * (y * pz - z * py), ty = 2 * (z * px - x * pz), tz = 2 * (x * py - y * px);
@@ -652,6 +663,13 @@ export class AiWorld {
                   const t = this.lookupValue(c.scope, spec.replace(/^\$/, "").slice(0, -4));
                   const r = t && typeof t === "object" && !Array.isArray(t) ? (t as Record<string, Value>).rot : undefined;
                   if (Array.isArray(r) && r.length === 4) rot = r as [number, number, number, number];
+                }
+                // ExactMove directionType="AlignWithEntity": end facing the way the target faces (a vendor's
+                // merchant point faces the street)
+                if (!rot && n.tag === "ExactMove" && this.prop(n, "directionType") === "AlignWithEntity") {
+                  const t = wuid(this.ref(n, c, "directionSpecification"));
+                  const te = t !== null ? this.o.ents.get(t) : undefined;
+                  if (te) rot = [...te.rot];
                 }
                 if (!p) this.trace(`npc ${npc}: ${n.tag} destination "${this.prop(n, "destinationSpecification")}" unresolved`);
                 a = { kind: "move", npc, target: (p ? [...p] : this.pos(npc) ?? [0, 0, 0]) as [number, number, number], object: obj ?? undefined, rot };

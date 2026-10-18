@@ -146,7 +146,7 @@ if (aiSeconds > 0 && npcWorld) {
   await lua!.preload();
   await lua!.preloadTables();
   const world = await createAiWorld(vfs, {
-    ents: entIndex, lua: lua!, realTime: () => clock.now, gameTime: () => clock.now * 15, random: () => 0.5,
+    ents: entIndex, lua: lua!, realTime: () => clock.now, worldTime: () => clock.now * 15, random: () => 0.5,
     act: (a) => npcAi!.act(a),
     trace: (m) => { if (aiTrace && !m.startsWith("[unsupported]")) console.log(`   ai ${clock.now.toFixed(1)} s: ${m}`); },
   });
