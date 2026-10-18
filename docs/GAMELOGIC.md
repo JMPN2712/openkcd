@@ -236,13 +236,32 @@ NotNearPlayer, IsLoadedGate, RemoveLink.
   ':', members inherited) and 189 enums. Tree variables of struct types now
   start with the schema's member defaults; e.g. `cutsceneData` gets
   `mode = cutsceneMode.video`, `timeOfDay = -1`.
-- **Known gaps.**
-  - `Events.lua` needs the `Database` script API (`GetTableInfo`, …) at
-    start-up.
-  - The tailor's trees reach the game's own assertions in `Context.lua`
-    ("already has the context option … active"), a sign that some
-    enter/exit hook runs twice. That is to be checked against the
-    executor.
+- **Database script API.** `GetTableInfo` (`LineCount`, `ColumnCount`),
+  `GetColumnInfo`, `GetTableColumnData` (a 1-based column array) and
+  `GetTableLine` (a row keyed by column name), with 0-based indices.
+  - Values are typed by the table header (integer/real → number, boolean,
+    empty → nil).
+  - Lua calls are synchronous, so the tables whose names the scripts quote
+    are preloaded (37, including the 8.9 MB `soul`).
+  - With it, the game's start-up runs without errors; `EventSystem` fills
+    its spawn pools from the soul table (597 souls).
+- **Entities.** One persistent Lua table per entity, as in the engine:
+  scripts keep state on it (e.g. `Contexts` stores `entity.contextsData`).
+  - Only engine parts (`soul`, `human`, `actor`, `inventory`, …) and
+    PascalCase methods are stubbed. Stubs never invent lower-case data
+    fields.
+  - An earlier version stubbed every field; that made `Context.lua` assert
+    "already has the context option … active". The cause was the stubs,
+    not the interpreter.
+- **Brain variables.** `b_*` variables (`b_dialogParameters`, `b_context`,
+  …) are declared from `Libs/Tables/ai/brain_variable` (types, initial
+  values, forms 0 single / 1 array / 2 associative / 3 array) in the trees'
+  global scope. Engine value types not in TypeDefinitions (`common:wuid`,
+  `common:vec3`, …) start empty; other unknown types start as structs.
+- **Status.** The work trees of Rataje's 16 market NPCs run with no Lua
+  errors. Engine calls still stubbed there: `entity.soul.Add/RemoveMetaRoleByName`,
+  `XGenAIModule.GetEntityByWUID` / `GetEntityIdByWUID`, `TError`,
+  `EntityModule.GetSlotHand`.
 
 ## Quests (`Libs/Quests/flowgraphs`)
 

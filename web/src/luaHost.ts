@@ -18,6 +18,29 @@ import { parseXml, type XmlNode } from "./xml.ts";
  * (<Definition root=…>) maps <Property name= type=> to attributes and <Array name= elementName=> to a
  * child element whose elementName children form a list (recursively; typed arrays hold values).
  */
+/** A database table as the Database script API sees it: typed columns in header order, rows of values. */
+interface DbTable {
+  columns: { name: string; type: string }[];
+  rows: (string | number | boolean | null)[][];
+}
+
+function parseDbTable(xml: string): DbTable {
+  const columns = [...xml.matchAll(/<column\s+name="([^"]+)"\s+type="([^"]*)"/g)].map((m) => ({ name: m[1], type: m[2] }));
+  const un = (v: string) => v.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  const conv = (type: string, v: string | undefined): string | number | boolean | null => {
+    if (v === undefined || v === "") return null;
+    if (/int|real|double|float|numeric/.test(type)) return Number(v);
+    if (type === "boolean") return /^(true|t|1)$/i.test(v);
+    return un(v);
+  };
+  const rows: DbTable["rows"] = [];
+  for (const m of xml.matchAll(/<row\s([^>]*?)\/>/g)) {
+    const attrs = new Map([...m[1].matchAll(/(\w+)="([^"]*)"/g)].map((a) => [a[1], a[2]]));
+    rows.push(columns.map((c) => conv(c.type, attrs.get(c.name))));
+  }
+  return { columns, rows };
+}
+
 export function loadLuaXml(defXml: string, dataXml: string): unknown {
   const def = parseXml(defXml).children.find((c) => c.tag === "Definition");
   const data = parseXml(dataXml).children[0];
@@ -53,7 +76,8 @@ local function mkstub(path)
   if s then return s end
   s = setmetatable({}, {
     __index = function(t, k)
-      if type(k) ~= "string" then return nil end
+      -- engine API is PascalCase functions/tables; lower-case keys are data the engine doesn't have
+      if type(k) ~= "string" or not k:match("^%u") then return nil end
       local c = mkstub(path .. "." .. k)
       rawset(t, k, c)
       return c
@@ -103,6 +127,12 @@ rawset(CryAction, "LoadXML", function(def, data)
   if not j then __kcd_error("LoadXML: missing " .. tostring(def) .. " / " .. tostring(data)) return nil end
   return __kcd_decode(j)
 end)
+-- the Database script API over the game's tables (Libs/Tables, preloaded): indices are 0-based
+Database = mkstub("Database")
+rawset(Database, "GetTableInfo", function(t) return __kcd_decode(__kcd_db("info", t) or "null") end)
+rawset(Database, "GetColumnInfo", function(t, c) return __kcd_decode(__kcd_db("column", t, c) or "null") end)
+rawset(Database, "GetTableColumnData", function(t, c) return __kcd_decode(__kcd_db("data", t, c) or "null") end)
+rawset(Database, "GetTableLine", function(t, n) return __kcd_decode(__kcd_db("line", t, n) or "null") end)
 -- brain variables: a per-entity store of tables the scripts modify in place
 XGenAIModule = mkstub("XGenAIModule")
 local brains = {}
@@ -222,12 +252,27 @@ end
 __kcd_decode = decode
 
 -- run tree code with (entity, data); returns data as JSON
-function __kcd_exec(code, entityId, entityName, dataJson)
-  local entity = setmetatable({ id = entityId, name = entityName, this = { id = entityId, name = entityName } }, { __index = function(t, k)
-    local s = mkstub("entity." .. k)
-    rawset(t, k, s)
-    return s
+-- one Lua table per entity, as in the engine: scripts keep state on it (entity.contextsData, …).
+-- Engine-provided parts (soul, human, actor, inventory, …) and methods (PascalCase) are stubs.
+local ENGINE_PARTS = { soul = true, human = true, actor = true, inventory = true, horse = true, player = true, item = true, vehicle = true, physics = true, ai = true }
+local entities = {}
+function __kcd_entity(id, name)
+  local e = entities[id]
+  if e then return e end
+  e = setmetatable({ id = id, name = name, this = { id = id, name = name } }, { __index = function(t, k)
+    if type(k) == "string" and (ENGINE_PARTS[k] or k:match("^%u")) then
+      local s = mkstub("entity." .. k)
+      rawset(t, k, s)
+      return s
+    end
+    return nil
   end })
+  entities[id] = e
+  return e
+end
+
+function __kcd_exec(code, entityId, entityName, dataJson)
+  local entity = __kcd_entity(entityId, entityName)
   local data = decode(dataJson)
   local f, err = loadstring("local entity, data = ...\\n" .. code, "=tree")
   if not f then __kcd_error(err) return nil end
@@ -259,6 +304,7 @@ export class LuaHost {
     g.set("__kcd_error", (msg: string) => { if (host.errors.length < 500) host.errors.push(String(msg)); });
     g.set("__kcd_log", (kind: string, msg: string) => { if (host.logs.length < 500) host.logs.push(`${kind}: ${msg}`); });
     g.set("__kcd_read", (path: string) => host.readScript(path));
+    g.set("__kcd_db", (what: string, table: string, i?: number) => host.db(what, table, i));
     g.set("__kcd_loadxml", (def: string, data: string) => {
       const d = host.readScript(def), x = host.readScript(data);
       return d && x ? JSON.stringify(loadLuaXml(d, x)) : null;
@@ -276,6 +322,39 @@ export class LuaHost {
       this.scripts.set(p, new TextDecoder("latin1").decode(await this.vfs.read(this.vfs.lookup(p)!)));
     }
     return this.scripts.size;
+  }
+
+  private tables = new Map<string, DbTable>();
+
+  /** Database script API backend: JSON for GetTableInfo / GetColumnInfo / GetTableColumnData / GetTableLine. */
+  private db(what: string, name: string, i?: number): string | null {
+    const t = this.tables.get(String(name).toLowerCase());
+    if (!t) {
+      if (this.errors.length < 500) this.errors.push(`Database: table ${name} not loaded`);
+      return null;
+    }
+    const k = Number(i ?? 0);
+    switch (what) {
+      case "info": return JSON.stringify({ LineCount: t.rows.length, ColumnCount: t.columns.length });
+      case "column": return t.columns[k] ? JSON.stringify({ Name: t.columns[k].name, Type: t.columns[k].type }) : null;
+      case "data": return t.columns[k] ? JSON.stringify(t.rows.map((r) => r[k])) : null;
+      case "line": {
+        const r = t.rows[k];
+        return r ? JSON.stringify(Object.fromEntries(t.columns.map((c, j) => [c.name, r[j]]).filter(([, v]) => v !== null))) : null;
+      }
+    }
+    return null;
+  }
+
+  /** Preload the database tables the scripts name in quotes (e.g. "soul", "new_homes_parcel"). */
+  async preloadTables(): Promise<string[]> {
+    const byName = new Map<string, string>();
+    for (const p of this.vfs.paths()) if (p.startsWith("libs/tables/") && p.endsWith(".xml")) byName.set(p.slice(p.lastIndexOf("/") + 1, -4), p);
+    const quoted = new Set<string>();
+    for (const src of this.scripts.values()) for (const m of src.matchAll(/["']([a-z_0-9]+)["']/gi)) quoted.add(m[1].toLowerCase());
+    const names = [...quoted].filter((n) => byName.has(n));
+    for (const n of names) this.tables.set(n, parseDbTable(new TextDecoder().decode(await this.vfs.read(this.vfs.lookup(byName.get(n)!)!))));
+    return names;
   }
 
   private readScript(path: string): string | undefined {

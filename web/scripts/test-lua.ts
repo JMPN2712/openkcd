@@ -31,7 +31,7 @@ for (const p of await findPaks(join(root, "Data"))) {
   const b = await openAsBlob(p);
   sources.push({ path: relative(root, p), size: b.size, open: async () => b });
 }
-const vfs = await Vfs.build(sources, { filter: (n) => n.endsWith(".lua") || n.startsWith("libs/luaxml/") || n === "libs/ai/typedefinitions.xml", includeHd: false });
+const vfs = await Vfs.build(sources, { filter: (n) => n.endsWith(".lua") || n.startsWith("libs/luaxml/") || n === "libs/ai/typedefinitions.xml" || /^libs\/tables\/.*\.xml$/.test(n), includeHd: false });
 const host = await LuaHost.create(vfs, wasm);
 
 check("Lua 5.1 semantics", host.lua.doStringSync(`return _VERSION .. "|" .. tostring(10/2) .. "|" .. table.getn({1,2,3})`) === "Lua 5.1|5|3");
@@ -52,6 +52,8 @@ check("engine calls are stubbed and counted", host.calls.get("entity.soul.AddMet
 
 const t0 = performance.now();
 const n = await host.preload();
+const tables = await host.preloadTables();
+console.log(`database tables named by the scripts, preloaded: ${tables.length} (${tables.slice(0, 8).join(", ")}, …)`);
 host.calls.clear();
 const defs = new TypeDefs(new TextDecoder().decode(await vfs.read(vfs.lookup("libs/ai/typedefinitions.xml")!)));
 host.defineEnums(defs.luaEnums());
@@ -62,6 +64,12 @@ console.log(`engine API touched while booting: ${[...host.calls].sort((a, b) => 
 const defined = host.lua.doStringSync(`local t = {} for k, v in pairs(_G) do if type(k) == "string" and (type(v) == "function" or (type(v) == "table" and not getmetatable(v))) then t[#t + 1] = k end end table.sort(t) return #t .. ": " .. table.concat(t, " ", 1, math.min(#t, 60))`);
 console.log(`globals defined by the game's scripts after boot (plain tables and functions) ${defined}`);
 // remaining errors are engine APIs not implemented yet (e.g. Database.GetTableInfo in Events.lua)
+const souls = host.lua.doStringSync(`local c = DatabaseUtils.LoadTableColumns("soul", { "soul_id", "soul_name" }) return #c.soul_id .. " " .. tostring(c.soul_name[1] ~= nil)`);
+check("Database API: DatabaseUtils.LoadTableColumns('soul', …)", /^\d{4,} true$/.test(souls), souls);
+const line = host.lua.doStringSync(`local l = Database.GetTableLine("soul_archetype", 0) return tostring(l.soul_archetype_name) .. " " .. type(l.soul_archetype_id)`);
+check("Database API: GetTableLine typed values", line === "NPC number", line);
+const pools = host.lua.doStringSync(`local n = 0 for _, c in pairs(EventSystem.classes or {}) do n = n + #c.souls end return n`);
+console.log(`EventSystem soul pools filled from the soul table: ${pools} souls`);
 check("main.lua and OnInit run to the end", ok, host.errors.length ? `known gaps: ${host.errors.slice(0, 3).join(" | ")}` : "no errors");
 console.log(fails ? `FAIL (${fails})` : "OK");
 if (fails) process.exit(1);

@@ -71,13 +71,15 @@ export function initialValue(v: BtVariable): Value {
       default: {
         const d = typeDefs?.defaultOf(v.type, s);
         if (d !== undefined && d !== null) return d;
-        // ASSUMPTION: undefined namespaced value types (common:wuid, common:vec3, …) start empty;
-        // other unknown types are structs filled field by field
-        return v.type.includes(":") ? (s === "" ? null : s) : {};
+        // ASSUMPTION: engine value types not in TypeDefinitions.xml (common:wuid, common:vec3,
+        // common:transform, …) start empty; other unknown types (dialog:parameters, …) are structs
+        if (/(wuid|vec3|transform|quat|time|guid)$/i.test(v.type)) return s === "" ? null : s;
+        return {};
       }
     }
   };
   if (v.form === "array") return v.values === "" ? [] : v.values.split(",").map((x) => scalar(x.trim()));
+  if (v.form === "associative") return {};
   return scalar(v.values);
 }
 

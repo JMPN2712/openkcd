@@ -31,9 +31,10 @@ for (const p of await findPaks(join(root, "Data"))) {
   const b = await openAsBlob(p);
   sources.push({ path: relative(root, p), size: b.size, open: async () => b });
 }
-const vfs = await Vfs.build(sources, { filter: (n) => /^libs\/(ai|tables\/ai)\/.*\.xml$/.test(n) || n === "libs/smartobjects.xml" || n.endsWith(".lua") || n.startsWith("libs/luaxml/"), includeHd: false });
+const vfs = await Vfs.build(sources, { filter: (n) => /^libs\/(ai|tables\/ai)\/.*\.xml$/.test(n) || n === "libs/smartobjects.xml" || n.endsWith(".lua") || n.startsWith("libs/luaxml/") || /^libs\/tables\/.*\.xml$/.test(n), includeHd: false });
 const lua = await LuaHost.create(vfs, createRequire(import.meta.url).resolve("wasmoon-lua5.1/dist/liblua5.1.wasm"));
 await lua.preload();
+await lua.preloadTables();
 
 const level = await openAsBlob(join(root, "Data/Levels/rataje/level.pak"));
 const mission = (await readCentralDirectory(level)).find((e) => e.name.toLowerCase() === "objects_mission0.xml")!;

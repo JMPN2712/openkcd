@@ -176,6 +176,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     // Lua 5.1 with the game's scripts (Scripts/main.lua) for the trees' Lua code
     const lua = await LuaHost.create(vfs, luaWasm);
     await lua.preload();
+    await lua.preloadTables();
     const w = await createAiWorld(vfs, {
       ents, lua, realTime: () => npcAi?.now ?? 0, gameTime: () => (npcAi?.now ?? 0) * 15, act: (a) => npcAi?.act(a) ?? 1,
     });

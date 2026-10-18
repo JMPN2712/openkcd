@@ -13,7 +13,7 @@
 // complete after a time estimate here. Semantics are approximations
 // (docs/GAMELOGIC.md); guesses are marked ASSUMPTION.
 
-import { parseTreeFile, type BtNode, type BtTree } from "./bt.ts";
+import { parseTreeFile, type BtNode, type BtTree, type BtVariable } from "./bt.ts";
 import type { Vfs } from "./vfs.ts";
 import { readTable } from "./tables.ts";
 import { Runner, Scope, type Context, type Host, type Status, type Task, type Value } from "./btRuntime.ts";
@@ -107,6 +107,8 @@ export interface WorldOptions {
   detail?: boolean;
   /** Lua for ExecuteLua / LuaWrapper code (luaHost.ts); without it, Lua is skipped */
   lua?: LuaHost;
+  /** brain variables (Libs/Tables/ai/brain_variable: b_dialogParameters, b_context, …) */
+  brainVars?: BtVariable[];
 }
 
 const wuid = (v: Value | undefined): number | null => {
@@ -166,6 +168,7 @@ export class AiWorld {
    */
   private globals(npc: number, extra: Record<string, Value> = {}): Scope {
     const g = new Scope();
+    for (const v of this.o.brainVars ?? []) g.declare(v);
     for (const v of this.o.trees("final/sb_daycycles.xml", "root")?.variables ?? []) g.declare(v);
     g.vars.set("this", { id: npc, name: this.o.ents.get(npc)?.name ?? "" });
     g.vars.set("__player", { id: -1 });
@@ -604,5 +607,12 @@ export async function createAiWorld(vfs: Vfs, opts: Omit<WorldOptions, "ai" | "t
   const ai = new AiDb({ soTag: await readTable(vfs, T.soTag), so2tag: await readTable(vfs, T.so2tag), saTag: await readTable(vfs, T.saTag), sa2tag: await readTable(vfs, T.sa2tag) });
   const so = vfs.lookup("libs/smartobjects.xml");
   const helpers = so ? parseSmartObjectHelpers(new TextDecoder().decode(await vfs.read(so))) : new Map<string, SoHelper[]>();
-  return new AiWorld({ ...opts, ai, helpers, trees: (f, n) => trees.get(`${f}#${n}`) });
+  // brain variables, one declaration per name (form ids: 0 single, 1 array, 2 associative, 3 array)
+  const brainVars = new Map<string, BtVariable>();
+  for (const r of await readTable(vfs, "ai/brain_variable")) {
+    if (brainVars.has(r.brain_variable_name)) continue;
+    const form = ({ "1": "array", "2": "associative", "3": "array" } as Record<string, string>)[r.ai_variable_form_id] ?? "single";
+    brainVars.set(r.brain_variable_name, { name: r.brain_variable_name, type: r.type, values: r.init_value ?? "", form, persistent: r.is_persistent === "True" });
+  }
+  return new AiWorld({ ...opts, ai, helpers, brainVars: [...brainVars.values()], trees: (f, n) => trees.get(`${f}#${n}`) });
 }

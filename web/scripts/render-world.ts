@@ -130,17 +130,20 @@ if (withNpcs || atNpc) {
   console.log(`NPC entities: ${npcEnts.length}`);
 }
 let npcAi: NpcAi | null = null;
+let lua: LuaHost | null = null;
 if (aiSeconds > 0 && npcWorld) {
   const t0 = performance.now();
   const clock = { now: 0 };
-  const lua = await LuaHost.create(vfs, createRequire(import.meta.url).resolve("wasmoon-lua5.1/dist/liblua5.1.wasm"));
-  await lua.preload();
+  lua = await LuaHost.create(vfs, createRequire(import.meta.url).resolve("wasmoon-lua5.1/dist/liblua5.1.wasm"));
+  await lua!.preload();
+  await lua!.preloadTables();
   const world = await createAiWorld(vfs, {
-    ents: entIndex, lua, realTime: () => clock.now, gameTime: () => clock.now * 15, random: () => 0.5,
+    ents: entIndex, lua: lua!, realTime: () => clock.now, gameTime: () => clock.now * 15, random: () => 0.5,
     act: (a) => npcAi!.act(a),
     trace: (m) => { if (aiTrace && !m.startsWith("[unsupported]")) console.log(`   ai ${clock.now.toFixed(1)} s: ${m}`); },
   });
-  lua.boot();
+  lua!.boot();
+  lua!.calls.clear();
   npcAi = new NpcAi(world, { male: new AnimLibrary(vfs, "male"), female: new AnimLibrary(vfs, "female") });
   Object.defineProperty(clock, "now", { get: () => npcAi!.now });
   npcWorld.ai = npcAi;
@@ -212,6 +215,7 @@ for (const [i, v] of list.entries()) {
         npcAi.tick(0.1);
         if (Math.round(t * 10) % 10 === 0) await npcAi.settle(); // let fragment clips load
       }
+      if (aiTrace) console.log(`  engine API called from tree Lua: ${[...lua!.calls].sort((x, y) => y[1] - x[1]).slice(0, 25).map(([k, v]) => `${k}×${v}`).join(", ")}\n  Lua errors: ${[...new Set(lua!.errors)].slice(0, 6).join(" | ")}`);
       for (const id of npcAi.ids()) {
         const st = npcAi.state(id)!;
         console.log(`  behaviour tree: ${npcEnts.find((e) => e.id === id)?.name} ${st.mode}${st.fragment ? ` ${st.fragment} (${st.clip?.name ?? "loading"})` : ""} at ${st.pos.map((v) => v.toFixed(1))}`);
