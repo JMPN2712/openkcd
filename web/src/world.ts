@@ -4,7 +4,7 @@
 // instance by distance, culling by view distance and frustum.
 
 import type { EntityInfo } from "./levelEntities.ts";
-import { poseMatrix } from "./character.ts";
+import { parseCdf, poseMatrix, type CharacterSpec } from "./character.ts";
 import { loadModel, type LoadedModel, type MipChain } from "./model.ts";
 import { vegetationMatrix, type LevelObjects } from "./levelObjects.ts";
 import type { Terrain } from "./terrain.ts";
@@ -51,23 +51,30 @@ export function resolveLevelPath(name: string): string {
 export interface WorldCaches {
   models: Map<string, Promise<LoadedModel | null>>;
   textures: Map<string, Promise<MipChain | null>>;
+  /** parsed .cdf of door / AnimObject props */
+  cdfs: Map<string, Promise<CharacterSpec | null>>;
 }
 
 export function newWorldCaches(): WorldCaches {
-  return { models: new Map(), textures: new Map() };
+  return { models: new Map(), textures: new Map(), cdfs: new Map() };
 }
+
+/** Group key for a character skin with its material override (.cdf parts): "skin|mtl". */
+const skinKey = (skin: string, mtl: string | null) => `${skin}|${mtl ?? ""}`;
 
 async function loadLods(vfs: Vfs, path: string, caches: WorldCaches, maxTextureDim: number): Promise<LoadedModel[] | null> {
   const load = (p: string) => {
     let m = caches.models.get(p);
     if (!m) {
-      m = loadModel(vfs, p, { maxTextureDim, textureCache: caches.textures }).catch(() => null);
+      const [file, material] = p.split("|");
+      m = loadModel(vfs, file, { maxTextureDim, textureCache: caches.textures, material: material || undefined }).catch(() => null);
       caches.models.set(p, m);
     }
     return m;
   };
   const base = await load(path);
   if (!base) return null;
+  if (path.includes("|")) return [base];
   const lods = [base];
   for (let k = 1; k < 6; k++) {
     const p = path.replace(/\.(cgf|cga)$/, `_lod${k}.$1`);
@@ -154,16 +161,28 @@ export async function buildWorldScene(
     const name = terrain.brushNames[objects.brushName[i]];
     if (name && !HIDDEN_BRUSH.test(name)) add(resolveLevelPath(name), "brush", m, m[12], m[13]);
   }
+  const caches = opts.caches ?? newWorldCaches();
   for (const e of opts.props ?? []) {
     if (Math.abs(e.pos[0] - center[0]) > radius || Math.abs(e.pos[1] - center[1]) > radius) continue;
     const m = poseMatrix(e.pos, e.rot);
     if (e.scale) for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) m[c * 4 + r] *= e.scale[c];
-    add(e.model!.toLowerCase().replace(/\\/g, "/"), "prop", m, e.pos[0], e.pos[1]);
+    const path = e.model!.toLowerCase().replace(/\\/g, "/");
+    if (!path.endsWith(".cdf")) {
+      add(path, "prop", m, e.pos[0], e.pos[1]);
+      continue;
+    }
+    // doors, wells, flags: the .cdf's skins in bind pose (closed / at rest)
+    let spec = caches.cdfs.get(path);
+    if (!spec) {
+      const hit = vfs.lookup(path);
+      spec = hit ? vfs.read(hit).then((b) => parseCdf(new TextDecoder().decode(b), path)).catch(() => null) : Promise.resolve(null);
+      caches.cdfs.set(path, spec);
+    }
+    for (const part of (await spec)?.parts ?? []) if (!part.attach) add(skinKey(part.skin, part.material), "prop", m, e.pos[0], e.pos[1]);
   }
 
   const ordered = [...groups.values()].sort((a, b) => a.nearest - b.nearest);
   const max = opts.maxModels ?? 400;
-  const caches = opts.caches ?? newWorldCaches();
   const failed = new Map<string, string>();
   const models: WorldModel[] = [];
   let instances = 0;

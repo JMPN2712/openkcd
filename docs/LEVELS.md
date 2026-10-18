@@ -234,8 +234,11 @@ elder bushes and branch piles.
 - **Skipped entities** (`web/src/levelEntities.ts` `propEntities`):
   - trigger and area classes, whose models are editor shapes
     (`objects/default/primitive_cylinder.cgf` ×858, `box_nodraw`);
-  - `.cdf`/`.chr` entities (doors: 792 `AnimDoor`; wells, flags), which
-    are animated characters and not drawn yet.
+  - `.cdf`/`.chr` entities other than doors and AnimObjects (NPCs, graves).
+- **Doors and AnimObjects.** Doors (792 `AnimDoor`) and AnimObjects (wells,
+  flags, smokehouse doors) are `.cdf` characters: one skinned `.skin`, with
+  a material from the CDF. They are drawn as instanced props in bind pose,
+  which is the closed or at-rest position. Opening animations come later.
 - **Light shafts.** `objects/lightshafts/*` brushes use the `Geometrybeam`
   and `Templbeamproc` shaders, which are additive volumetric beams.
   Drawn opaque, they came out as black shards in interiors, so their

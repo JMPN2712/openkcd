@@ -100,13 +100,14 @@ export function parseEntityIndex(xml: string): Map<number, EntityInfo> {
  * Entities drawn as static props: their object_Model when it is a static mesh
  * (.cgf/.cga) and not an editor helper. Rataje: chests and shelves (Stash),
  * beds, chairs, nests, alchemy tables, grindstones, … Triggers and areas carry
- * editor shapes (primitive_cylinder, box_nodraw) and are skipped; doors and
- * other .cdf/.chr entities are animated characters, not handled here.
+ * editor shapes (primitive_cylinder, box_nodraw) and are skipped. Doors
+ * (AnimDoor) and AnimObjects (wells, flags) use a .cdf: drawn in bind pose,
+ * i.e. closed / at rest. Other .cdf/.chr entities (NPCs, graves) are not props.
  */
 export function propEntities(ents: Map<number, EntityInfo>): EntityInfo[] {
   return [...ents.values()].filter((e) =>
     e.model &&
-    /\.(cgf|cga)$/i.test(e.model) &&
+    (/\.(cgf|cga)$/i.test(e.model) || (/\.cdf$/i.test(e.model) && /^(AnimDoor|AnimObject)$/.test(e.cls))) &&
     !/^objects[\\/](default|editor)[\\/]/i.test(e.model) &&
     !/Trigger|Area|CaptionObject/.test(e.cls));
 }
