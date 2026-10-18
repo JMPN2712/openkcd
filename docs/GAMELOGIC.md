@@ -56,6 +56,31 @@ Most of the game's behaviour is **data**, interpreted by native code in
 - **Test oracle.** The trees' XML gives every use of every node, which
   makes it a test oracle for an interpreter.
 
+### Parsing (`web/src/bt.ts`)
+
+- **Trees:** all 4,911 trees in 600 files parse in under 1 s.
+  - `EditorData` is editor layout and is ignored.
+  - `IncludeTree` targets are Libs/AI-relative paths, sometimes with
+    backslashes. All 3,390 static includes resolve; 32 more name their
+    target through variables at run time.
+- **Properties:** a quoted property (`"…"` inside the XML attribute) is
+  either an expression or plain text.
+  - Plain text: Lua code, messages, include targets, GUIDs, categories,
+    message types. `isTextProp` lists these.
+  - Unquoted properties are raw literals: enum names, message types,
+    variable names.
+- **Expression language,** Lua-flavoured:
+  - **Values:** `$var.field` paths, namespaced `$enum:type.value`,
+    `'…'`/`"…"` strings, numbers, `true`/`false`.
+  - **Durations and times:** `2s`, `500ms`, `1m 30s`, `2m40s`, `1.5h`;
+    times of day `05:15`.
+  - **Operators:** `#array` length; `== ~= != < <= > >=`;
+    `and or not ! ~ & |`; `+ - * / %`; `?:`.
+  - **Assignments:** `= += -= *= /=`, comma- or newline-separated.
+  - **Other:** calls `f(…)`, indexing `a[b]`, `//` comments.
+- **Coverage:** 371,749 of 371,770 expression properties parse (99.99%).
+  The rest are data quirks.
+
 ## Quests (`Libs/Quests/flowgraphs`)
 
 - **Scope.** 287 graphs, one per quest, using only 16 node classes:
