@@ -334,6 +334,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     models.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
     water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
     npcR.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
+    npcWorld.stepCrowd(npcs, minute, simDt);
     animateNpcs(npcs, npcWorld, minute, simSeconds, npcR);
     if (scene) {
       const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts);

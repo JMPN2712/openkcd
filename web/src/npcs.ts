@@ -14,6 +14,7 @@ import type { NpcAi } from "./npcAi.ts";
 import type { LoadedModel } from "./model.ts";
 import type { Vfs } from "./vfs.ts";
 import { multiply } from "./mat4.ts";
+import { avoid, CA, NPC_PATH_RADIUS, type CrowdAgent, type Vec3 } from "./crowd.ts";
 
 const CLIPS: Record<"male" | "female", [string, Record<Pose, string[]>]> = {
   male: ["animations/humans/male/male_general.dba", {
@@ -29,6 +30,20 @@ const CLIPS: Record<"male" | "female", [string, Record<Pose, string[]>]> = {
     act: [],
   }],
 };
+
+/** An NPC moved by stepCrowd: its avoidance agent, the plan it follows and what is drawn. */
+interface Mover {
+  agent: CrowdAgent;
+  ref: Placement;
+  shown?: Placement;
+  yaw: number;
+  goalZ?: number;
+}
+
+/** Plans further than this (m) from where an NPC is restart it there instead of walking. */
+const SNAP_DISTANCE = 8;
+
+const yawOf = (q: [number, number, number, number]) => 2 * Math.atan2(q[3], q[0]);
 
 /** Selection advantage (m) of NPCs already shown, see NpcWorld.select. */
 const SHOWN_BONUS = 25;
@@ -101,6 +116,11 @@ export class NpcWorld {
     return r;
   }
 
+  /** actual movement with collision avoidance, per NPC id (stepCrowd) */
+  private movers = new Map<number, Mover>();
+  /** NPCs' planned spots moved off one another (key: planned spot), see stepCrowd */
+  private freeSpots = new Map<string, Vec3>();
+
   /** NPCs whose workplace behaviour trees drive them while at work (null = schedule placement only). */
   ai: NpcAi | null = null;
 
@@ -144,6 +164,111 @@ export class NpcWorld {
       })
       .sort((a, b) => a.d - b.d)
       .slice(0, max);
+  }
+
+  /**
+   * Move the shown NPCs for `dt` real seconds: each chases its planned placement (schedule or
+   * behaviour tree) at walking speed, steering around the others with the game's collision
+   * avoidance (crowd.ts). The result is what animateNpcs draws.
+   */
+  stepCrowd(npcs: WorldNpc[], minute: number, dt: number): void {
+    const inView = new Set(npcs.map((n) => n.entity.id));
+    for (const id of this.movers.keys()) if (!inView.has(id)) this.movers.delete(id);
+    if (dt <= 0) return;
+    const planned = npcs.map((n) => this.placeAt(n.entity, n.schedule, minute));
+    const goals = this.separateSpots(npcs, planned);
+    const agents: CrowdAgent[] = [];
+    npcs.forEach((n, i) => {
+      const ref = planned[i], goal = goals[i];
+      let m = this.movers.get(n.entity.id);
+      const far = m && (Math.hypot(goal[0] - m.agent.pos[0], goal[1] - m.agent.pos[1]) > SNAP_DISTANCE || Math.abs(goal[2] - m.agent.pos[2]) > 2);
+      if (!m || far) {
+        // new, or the plan jumped (clock moved, activity elsewhere): start at the planned spot
+        m = { agent: { radius: NPC_PATH_RADIUS + CA.agentExtraFat, pos: [...goal], vel: [0, 0], pref: [0, 0], maxSpeed: 0, avoids: false, shrink: m?.agent.shrink ?? 1 }, ref, yaw: yawOf(ref.rot) };
+        this.movers.set(n.entity.id, m);
+      }
+      m.ref = ref;
+      const a = m.agent;
+      const speed = WALK_SPEED[n.entity.female ? "female" : "male"];
+      const dx = goal[0] - a.pos[0], dy = goal[1] - a.pos[1], dist = Math.hypot(dx, dy);
+      a.maxSpeed = speed * 1.3;
+      if (ref.pose === "walk") {
+        // follow the moving plan, catching up when behind (0.3 m lag at walking speed)
+        const v = dist > 1e-3 ? Math.min(a.maxSpeed, speed + 0.5 * (dist - 0.3)) : 0;
+        a.pref = dist > 1e-3 ? [(dx / dist) * Math.max(0, v), (dy / dist) * Math.max(0, v)] : [0, 0];
+        a.avoids = true;
+      } else {
+        // arriving: within ai_CollisionAvoidancePathEndCutoffRange the agent stops avoiding
+        const v = Math.min(speed, dist / dt);
+        a.pref = dist > 0.02 ? [(dx / dist) * v, (dy / dist) * v] : [0, 0];
+        a.avoids = dist > CA.pathEndCutoff;
+      }
+      a.vel = a.avoids ? a.vel : a.pref;
+      m.goalZ = goal[2];
+      agents.push(a);
+    });
+    avoid(agents, dt);
+    npcs.forEach((n) => {
+      const m = this.movers.get(n.entity.id)!;
+      const a = m.agent;
+      a.pos[0] += a.vel[0] * dt;
+      a.pos[1] += a.vel[1] * dt;
+      a.pos[2] = m.goalZ ?? a.pos[2];
+      const moving = Math.hypot(a.vel[0], a.vel[1]) > 0.15;
+      // turn towards the walking direction (up to 2 turns a second), else the planned facing
+      const want = moving ? Math.atan2(a.vel[1], a.vel[0]) - Math.PI / 2 : yawOf(m.ref.rot);
+      const d = ((want - m.yaw + 3 * Math.PI) % (2 * Math.PI)) - Math.PI;
+      m.yaw += Math.sign(d) * Math.min(Math.abs(d), 4 * Math.PI * dt);
+      const settled = !moving && Math.hypot(a.pref[0], a.pref[1]) === 0;
+      const pose: Pose = moving ? "walk" : settled && m.ref.pose !== "walk" ? m.ref.pose : "stand";
+      m.shown = { ...m.ref, pos: [...a.pos], rot: [Math.cos(m.yaw / 2), 0, 0, Math.sin(m.yaw / 2)], pose };
+    });
+  }
+
+  /** The placement stepCrowd last produced for an NPC (undefined before it runs). */
+  drawn(id: number): Placement | undefined {
+    return this.movers.get(id)?.shown;
+  }
+
+  /**
+   * Standing spots for the shown NPCs. APPROXIMATION: in the game every NPC at work or home runs its
+   * area's behaviour tree, which hands out distinct spots (locks, semaphores); NPCs we don't run a tree
+   * for stand on their planned spot, which can be another NPC's (the tailor's wife on his table spot).
+   * Those move to the nearest free navmesh point within 1.5 m; NPCs driven by trees, walking, acting or
+   * in bed keep theirs.
+   */
+  private separateSpots(npcs: WorldNpc[], planned: Placement[]): Vec3[] {
+    const nav = this.schedules?.navMesh ?? null;
+    const minGap = 2 * (NPC_PATH_RADIUS + CA.agentExtraFat);
+    const taken: Vec3[] = [];
+    const goals: Vec3[] = planned.map((p) => [...p.pos] as Vec3);
+    const flexible = (i: number) => planned[i].pose === "stand" && !planned[i].where.includes("behaviour tree");
+    npcs.forEach((_, i) => { if (!flexible(i)) taken.push(goals[i]); });
+    const free = (p: Vec3) => taken.every((t) => Math.hypot(t[0] - p[0], t[1] - p[1]) >= minGap || Math.abs(t[2] - p[2]) > 2);
+    const order = npcs.map((_, i) => i).filter(flexible).sort((a, b) => npcs[a].entity.id - npcs[b].entity.id);
+    for (const i of order) {
+      const p = goals[i];
+      if (!free(p)) {
+        const key = `${npcs[i].entity.id}@${p.map((v) => v.toFixed(1)).join(",")}`;
+        let spot = this.freeSpots.get(key);
+        if (!spot || !free(spot)) {
+          spot = undefined;
+          for (const r of [0.7, 1.0, 1.5]) {
+            for (let k = 0; k < 12 && !spot; k++) {
+              const ang = (k / 12) * 2 * Math.PI;
+              const q: Vec3 = [p[0] + Math.cos(ang) * r, p[1] + Math.sin(ang) * r, p[2]];
+              const at = nav ? nav.findPoly(q, 0.05)?.point : undefined;
+              if ((!nav || (at && Math.abs(at[2] - p[2]) < 0.5)) && free(q)) spot = at ? [q[0], q[1], at[2]] : q;
+            }
+            if (spot) break;
+          }
+          if (spot) this.freeSpots.set(key, spot);
+        }
+        if (spot) goals[i] = spot;
+      }
+      taken.push(goals[i]);
+    }
+    return goals;
   }
 
   /** Identifies a selection: changes when an NPC enters or leaves it (movement is per frame, see animateNpcs). */
@@ -240,7 +365,7 @@ export interface NpcRendererOps {
  */
 export function animateNpcs(npcs: WorldNpc[], world: NpcWorld, minute: number, seconds: number, r: NpcRendererOps): void {
   for (const n of npcs) {
-    const p = world.placeAt(n.entity, n.schedule, minute);
+    const p = world.drawn(n.entity.id) ?? world.placeAt(n.entity, n.schedule, minute);
     const moved = p.pos.some((v, i) => v !== n.placement.pos[i]) || p.rot.some((v, i) => v !== n.placement.rot[i]);
     n.placement = p;
     if (moved) {

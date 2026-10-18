@@ -415,3 +415,30 @@ read from your own install at runtime, like every other asset, and never
 committed. Reimplementing behaviour from observation and decompilation for
 private interoperability is a different legal question than redistributing
 code; keep decompiled output out of the repo.
+
+## Collision avoidance
+
+`web/src/crowd.ts`, driven by `NpcWorld.stepCrowd`. An ORCA velocity
+solver (van den Berg et al. 2011; the open-source RVO2 library) tuned to the
+game's behaviour:
+
+- **Agents and obstacles.** Moving NPCs avoid each other reciprocally.
+  Standing NPCs, and NPCs about to reach their path end, are only avoided.
+  At most 20 agents are solved per step, closest to someone else first.
+- **Neighbours.** Each agent considers its 8 nearest moving neighbours and
+  every standing NPC within 5 m, on the same floor.
+- **Infeasible cases.** When no velocity is allowed, the agent tries the
+  allowed region's boundary nearest to its preferred velocity, then drops
+  far neighbours.
+- **Shrink.** Agents that keep having to avoid slowly shrink the standing
+  NPCs' radii, so they can squeeze past.
+- **Body size.** Humans use the scripts' `pathRadius` 0.25 m
+  (`npc_x.lua`) plus 0.075 m.
+- **Viewer approximation.**
+  - Planned positions (schedules, behaviour-tree moves) are the reference
+    each NPC chases at walking speed, up to 1.3×.
+  - NPCs without a running tree whose standing spot is taken move to the
+    nearest free navmesh point. In the game they would run their own area
+    trees, which hand out distinct spots.
+- **Check.** `web/scripts/sim-crowd.ts` counts NPCs drawn inside one
+  another over a minute of the market.
