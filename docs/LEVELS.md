@@ -73,6 +73,44 @@ How this was established (none of it was guessable from the field names):
 Heights range from 10.5 to 218.4 m. The viewer keeps one 4097² `Uint16Array`
 in 5 cm units (34 MB) and upsamples coarse leaves bilinearly.
 
+## Object octree (`web/src/levelObjects.ts`)
+
+The octree follows the terrain tree and runs exactly to the end of
+`terrain.dat`: 218,209 nodes, at most 9 levels deep. Checked by
+`web/scripts/test-level-objects.ts`.
+
+- **Node:** `i16 version` (5), `u16 childMask` (8 bits), AABB, `i32
+  objectBytes`, then the objects, then the children whose mask bit is set,
+  depth-first.
+- **Object ordering.** Objects within a node are **sorted by type**
+  (CryEngine `EERType`): zero order violations across 1.69M parsed records.
+  So the parser can stop at the first type it doesn't know without losing
+  brushes or vegetation.
+- **Brush (type 1, 100 bytes):**
+  - `u32 type`, world AABB, `u32` (mostly 0, *not* the geometry),
+    `u32 renderFlags`;
+  - **`u16 nameIndex`** into the 12,437-name table, `u8`, `u8`;
+  - `Matrix34` (rotation·scale | translation, row-major), `u32`,
+    `i32 material`, `u32`.
+  - **How the index was identified:** transforming each candidate model's
+    bounding box by the matrix reproduces the stored AABB for 2,150 of 2,150
+    sampled records with the u16 at +36, against 26 with the u32 at +28.
+  - Names starting `%level%/` refer to files inside the level pak
+    (e.g. `brush/*.cgf`).
+- **Vegetation (type 2, 64 bytes):** `u32 type`, AABB, `u32`, `u32 flags`,
+  `u16 group` (into the 508 vegetation groups), `u8`, `u8`, `Vec3
+  position`, `f32 scale`, `u8 angle` (1/256 turns about Z), 7 bytes.
+  - All 1,479,226 positions lie inside their AABBs.
+  - Instances sit on the decoded terrain: height above ground has a median
+    of −2 cm and p5–p95 of −6 to +1 cm. That's an independent check of the
+    heightmap decoding.
+- **Not decoded yet:** decals (7), water volumes (9), roads (11) and type 23.
+  They are variable-length, and 129 MiB of them remain unread.
+
+**Rataje totals:** 212,879 brushes (12,436 distinct meshes) and 1,479,226
+vegetation instances. The most common are soil stones, modular rocks,
+elder bushes and branch piles.
+
 ## Rendering (`web/src/terrainRenderer.ts`)
 
 - **Heightmap on the GPU:** uploaded once as a 4097² `r16uint` texture. The
@@ -89,6 +127,5 @@ in 5 cm units (34 MB) and upsamples coarse leaves bilinearly.
 
 ## Not yet decoded
 
-- The object octree in `terrain.dat` (vegetation and brush instances).
 - `cover.ctc` (terrain colour), merged-mesh sectors, and the `layers/*.xml`
   entities.

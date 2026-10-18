@@ -32,6 +32,7 @@ node scripts/test-anim.ts                        # parse all 8,233 .caf clips (~
 node scripts/test-dba.ts                         # decode all 5,155 .dba animation databases (~1.5 min)
 node scripts/test-terrain.ts /tmp/rataje.png      # decode the Rataje heightmap, check seams, write a hillshade
 node scripts/render-terrain.ts /tmp/t "1500,1800,0,30,-8"   # headless 3D terrain views (x,y,z|0=ground,yaw,pitch)
+node scripts/test-level-objects.ts               # parse Rataje's object octree (brushes, vegetation), check against terrain
 node scripts/render-model.ts /tmp/r soul:henry --anim <clip.caf | db.dba#anim.caf> --frames 0,20,40   # animated headless renders
 node scripts/render-model.ts /tmp/renders objects/vehicles/cart/cart_01.cga   # headless WebGPU render to PNG (Dawn)
 ```
