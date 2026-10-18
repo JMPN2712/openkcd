@@ -20,7 +20,10 @@ import { WaterRenderer } from "../src/waterRenderer.ts";
 import { parseNpcEntities, parseEntityIndex, propEntities } from "../src/levelEntities.ts";
 import { Schedules } from "../src/schedule.ts";
 import { NavMesh } from "../src/navmesh.ts";
-import { NpcWorld, npcItems, animateNpcs } from "../src/npcs.ts";
+import { createAiWorld } from "../src/btWorld.ts";
+import { NpcAi } from "../src/npcAi.ts";
+import { AnimLibrary } from "../src/mannequin.ts";
+import { NpcWorld, npcItems, animateNpcs, updateAi } from "../src/npcs.ts";
 import { TerrainRenderer, type FlyCamera } from "../src/terrainRenderer.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 import { buildWorldScene, lodItems, newWorldCaches, selectLods } from "../src/world.ts";
@@ -36,6 +39,9 @@ const noProps = args.includes("--no-props") ? (args.splice(args.indexOf("--no-pr
 const npcsOnly = args.includes("--npcs-only") ? (args.splice(args.indexOf("--npcs-only"), 1), true) : false; // debug: skip world geometry
 const atNpc = opt("--at-npc", ""); // frame the camera on a named NPC, in front of them and facing them
 const npcDist = Number(opt("--npc-dist", "4"));
+const aiSeconds = Number(opt("--ai", "0")); // run workplace behaviour trees this long (real seconds) before rendering
+const atEntity = opt("--at-entity", ""); // frame the camera on an entity (by name), like --at-npc
+const aiTrace = args.includes("--ai-trace") ? (args.splice(args.indexOf("--ai-trace"), 1), true) : false;
 const clock = opt("--clock", ""); // HH:MM: place NPCs by their schedules (default: at their spawn points)
 const [clockH, clockM] = (clock || "12:00").split(":").map(Number);
 const minute = clockH * 60 + clockM;
@@ -121,6 +127,28 @@ if (withNpcs || atNpc) {
   npcWorld = new NpcWorld(vfs, npcEnts, schedules, (x, y) => heightAt(terrain, x, y));
   console.log(`NPC entities: ${npcEnts.length}`);
 }
+let npcAi: NpcAi | null = null;
+if (aiSeconds > 0 && npcWorld) {
+  const t0 = performance.now();
+  const clock = { now: 0 };
+  const world = await createAiWorld(vfs, {
+    ents: entIndex, realTime: () => clock.now, gameTime: () => clock.now * 15, random: () => 0.5,
+    act: (a) => npcAi!.act(a),
+    trace: (m) => { if (aiTrace && !m.startsWith("[unsupported]")) console.log(`   ai ${clock.now.toFixed(1)} s: ${m}`); },
+  });
+  npcAi = new NpcAi(world, { male: new AnimLibrary(vfs, "male"), female: new AnimLibrary(vfs, "female") });
+  Object.defineProperty(clock, "now", { get: () => npcAi!.now });
+  npcWorld.ai = npcAi;
+  console.log(`behaviour trees loaded in ${Math.round(performance.now() - t0)} ms`);
+}
+if (atEntity) {
+  const e = [...entIndex.values()].find((x) => x.name === atEntity || x.name.startsWith(atEntity));
+  if (!e) throw new Error(`no entity named ${atEntity}`);
+  const [w, qx, qy, qz] = e.rot;
+  const fx = 2 * (qx * qy - w * qz), fy = 1 - 2 * (qx * qx + qz * qz);
+  list = [`${e.pos[0] + npcDist * fx},${e.pos[1] + npcDist * fy},${e.pos[2] + 1.6 + npcDist * 0.15},${(Math.atan2(-fy, -fx) * 180) / Math.PI},-12`];
+  console.log(`framing ${e.name} (${e.cls}) at ${e.pos.map((v) => v.toFixed(1))}`);
+}
 if (atNpc) {
   const n = npcEnts.find((e) => e.name === atNpc);
   if (!n) throw new Error(`no NPC entity named ${atNpc}`);
@@ -172,6 +200,18 @@ for (const [i, v] of list.entries()) {
   terrainR.prepare(cam, vp);
   if (npcWorld) {
     const npcs = await npcWorld.near(cam.pos, 120, 40, minute);
+    if (npcAi) {
+      // run the behaviour trees of NPCs at work for --ai seconds (0.1 s steps)
+      updateAi(npcs, npcWorld, minute);
+      for (let t = 0; t < aiSeconds; t += 0.1) {
+        npcAi.tick(0.1);
+        if (Math.round(t * 10) % 10 === 0) await npcAi.settle(); // let fragment clips load
+      }
+      for (const id of npcAi.ids()) {
+        const st = npcAi.state(id)!;
+        console.log(`  behaviour tree: ${npcEnts.find((e) => e.id === id)?.name} ${st.mode}${st.fragment ? ` ${st.fragment} (${st.clip?.name ?? "loading"})` : ""} at ${st.pos.map((v) => v.toFixed(1))}`);
+      }
+    }
     npcR.setModels(npcItems(npcs));
     animateNpcs(npcs, npcWorld, minute, animTime, npcR);
     npcR.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);

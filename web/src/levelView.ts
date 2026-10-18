@@ -14,7 +14,10 @@ import { Vfs } from "./vfs.ts";
 import { parseNpcEntities, parseEntityIndex, propEntities, type EntityInfo, type NpcEntity } from "./levelEntities.ts";
 import { Schedules } from "./schedule.ts";
 import { NavMesh } from "./navmesh.ts";
-import { NpcWorld, npcItems, animateNpcs, type WorldNpc } from "./npcs.ts";
+import { NpcWorld, npcItems, animateNpcs, updateAi, type WorldNpc } from "./npcs.ts";
+import { createAiWorld } from "./btWorld.ts";
+import { NpcAi } from "./npcAi.ts";
+import { AnimLibrary } from "./mannequin.ts";
 import { ASSET_RE } from "./assets.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -25,7 +28,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 }
 
 let stopActive: (() => void) | null = null;
-const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules; props: EntityInfo[] }>>();
+const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules; props: EntityInfo[]; ents: Map<number, EntityInfo> }>>();
 const vfsCache = new Map<string, Promise<Vfs>>();
 const worldCaches = newWorldCaches();
 const STREAM_RADIUS = 500; // metres of objects around the camera
@@ -50,6 +53,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let npcEntities: NpcEntity[];
   let schedules: Schedules;
   let props: EntityInfo[];
+  let ents: Map<number, EntityInfo>;
   let vfs: Vfs;
   let device: GPUDevice;
   try {
@@ -89,12 +93,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
             console.warn("navmesh:", err);
           }
         }
-        return { terrain, objects, cover, npcEntities, schedules, props: propEntities(ents) };
+        return { terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents };
       })();
       p.catch(() => terrainCache.delete(pakPath));
       terrainCache.set(pakPath, p);
     }
-    ({ terrain, objects, cover, npcEntities, schedules, props } = await p);
+    ({ terrain, objects, cover, npcEntities, schedules, props, ents } = await p);
     let v = vfsCache.get(pakPath);
     if (!v) {
       // assets from every non-level pak, with this level's own files (brush/*.cgf, …) on top
@@ -163,6 +167,16 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const water = new WaterRenderer(device, format, objects.water);
   const npcR = new ModelRenderer(device, format, 4);
   const npcWorld = new NpcWorld(vfs, npcEntities, schedules, (x, y) => heightAt(terrain, x, y));
+  // behaviour trees for NPCs at work (loaded in the background: ~1 s of tree parsing)
+  let npcAi: NpcAi | null = null;
+  void createAiWorld(vfs, {
+    ents, realTime: () => npcAi?.now ?? 0, gameTime: () => (npcAi?.now ?? 0) * 15, act: (a) => npcAi?.act(a) ?? 1,
+  }).then((w) => {
+    if (stopped) return;
+    npcAi = new NpcAi(w, { male: new AnimLibrary(vfs, "male"), female: new AnimLibrary(vfs, "female") });
+    npcWorld.ai = npcAi;
+    npcCheckedAt = -Infinity;
+  }).catch((err) => console.warn("behaviour trees:", err));
   let npcs: WorldNpc[] = [];
   let npcKey = "";
   let npcBusy = false;
@@ -179,6 +193,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const m = Math.floor(minute);
     try {
       const key = NpcWorld.key(await npcWorld.select(at, NPC_RADIUS, NPC_MAX, m));
+      updateAi(npcs, npcWorld, m);
       if (key === npcKey || stopped) return;
       const next = await npcWorld.near(at, NPC_RADIUS, NPC_MAX, m, (s) => { npcInfo = s; });
       if (stopped) return;
@@ -272,6 +287,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (!canvas.width) return;
     if (!streamedAt || Math.hypot(cam.pos[0] - streamedAt[0], cam.pos[1] - streamedAt[1]) > STREAM_STEP) void stream();
     minute = (minute + (dt * Number(speedSel.value)) / 60) % 1440;
+    // behaviour trees run on real time scaled like the game clock (×15 = real time)
+    npcAi?.tick((dt * Number(speedSel.value)) / 15);
     const hh = Math.floor(minute / 60), mm = Math.floor(minute % 60);
     clockLabel.textContent = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
     if (document.activeElement !== clockRange) clockRange.value = String(Math.floor(minute));
@@ -305,7 +322,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     water.draw(pass);
     pass.end();
     device.queue.submit([enc.finish()]);
-    hud.textContent = `x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${sceneInfo}${lodInfo} · ${npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep)` : ""}`;
+    hud.textContent = `x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${sceneInfo}${lodInfo} · ${npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();

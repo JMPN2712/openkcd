@@ -13,7 +13,9 @@
 // complete after a time estimate here. Semantics are approximations
 // (docs/GAMELOGIC.md); guesses are marked ASSUMPTION.
 
-import type { BtNode, BtTree } from "./bt.ts";
+import { parseTreeFile, type BtNode, type BtTree } from "./bt.ts";
+import type { Vfs } from "./vfs.ts";
+import { readTable } from "./tables.ts";
 import { Runner, Scope, type Context, type Host, type Status, type Task, type Value } from "./btRuntime.ts";
 import type { EntityInfo } from "./levelEntities.ts";
 import type { Row } from "./tables.ts";
@@ -82,6 +84,8 @@ export interface Action {
   target: [number, number, number] | string;
   /** helper/smart object involved, if any */
   object?: number;
+  /** move: the orientation to end in (a helper's), quaternion w, x, y, z */
+  rot?: [number, number, number, number];
 }
 
 export interface WorldOptions {
@@ -505,9 +509,21 @@ export class AiWorld {
                 let p = Array.isArray(dest) && dest.length === 3 ? (dest as number[]) : wuid(dest) !== null ? this.pos(wuid(dest)!) : null;
                 // MoveAndAct without a destination goes to a helper of the smart object it acts on
                 const obj = wuid(c.scope.get("__object"));
-                if (!p && n.tag === "MoveAndAct" && obj !== null) p = this.helperFor(obj, String(c.eval("AnimationToPlay", "")))?.pos ?? null;
+                let rot: [number, number, number, number] | undefined;
+                if (!p && n.tag === "MoveAndAct" && obj !== null) {
+                  const h = this.helperFor(obj, String(c.eval("AnimationToPlay", "")));
+                  p = h?.pos ?? null;
+                  rot = h?.rot;
+                }
+                // a destination from ActionHelperMapper (PositionOut = {pos, rot}) carries the helper's orientation
+                const spec = this.prop(n, "destinationSpecification");
+                if (spec.endsWith(".pos")) {
+                  const t = this.lookupValue(c.scope, spec.replace(/^\$/, "").slice(0, -4));
+                  const r = t && typeof t === "object" && !Array.isArray(t) ? (t as Record<string, Value>).rot : undefined;
+                  if (Array.isArray(r) && r.length === 4) rot = r as [number, number, number, number];
+                }
                 if (!p) this.trace(`npc ${npc}: ${n.tag} destination "${this.prop(n, "destinationSpecification")}" unresolved`);
-                a = { kind: "move", npc, target: (p ? [...p] : this.pos(npc) ?? [0, 0, 0]) as [number, number, number], object: wuid(c.scope.get("__object")) ?? undefined };
+                a = { kind: "move", npc, target: (p ? [...p] : this.pos(npc) ?? [0, 0, 0]) as [number, number, number], object: obj ?? undefined, rot };
               }
               const t = a.target;
               this.trace(`npc ${npc}: ${a.kind} ${typeof t === "string" ? t : `to ${t.map((v) => v.toFixed(1)).join(",")}`}${a.object !== undefined ? ` (${this.name(a.object)})` : ""}`);
@@ -549,4 +565,24 @@ function assignVar(scope: Scope, target: string, v: Value): void {
   let o = scope.get(name);
   if (o === null || o === undefined || typeof o !== "object" || Array.isArray(o)) { o = {}; scope.set(name, o); }
   (o as Record<string, Value>)[sub] = v;
+}
+
+/**
+ * Load everything an AiWorld needs from the asset VFS: all Libs/AI behaviour trees (~1 s), the AI
+ * tables and the smart-object helpers. `opts` supplies the entity index, clocks and callbacks.
+ */
+export async function createAiWorld(vfs: Vfs, opts: Omit<WorldOptions, "ai" | "trees" | "helpers">): Promise<AiWorld> {
+  const trees = new Map<string, BtTree>();
+  for (const path of vfs.paths()) {
+    if (!path.startsWith("libs/ai/") || !path.endsWith(".xml")) continue;
+    const xml = new TextDecoder().decode(await vfs.read(vfs.lookup(path)!));
+    if (!xml.includes("<BehaviorTree")) continue;
+    const rel = path.slice("libs/ai/".length);
+    for (const t of parseTreeFile(xml, rel)) trees.set(`${rel}#${t.name.toLowerCase()}`, t);
+  }
+  const T = AiDb.TABLES;
+  const ai = new AiDb({ soTag: await readTable(vfs, T.soTag), so2tag: await readTable(vfs, T.so2tag), saTag: await readTable(vfs, T.saTag), sa2tag: await readTable(vfs, T.sa2tag) });
+  const so = vfs.lookup("libs/smartobjects.xml");
+  const helpers = so ? parseSmartObjectHelpers(new TextDecoder().decode(await vfs.read(so))) : new Map<string, SoHelper[]>();
+  return new AiWorld({ ...opts, ai, helpers, trees: (f, n) => trees.get(`${f}#${n}`) });
 }

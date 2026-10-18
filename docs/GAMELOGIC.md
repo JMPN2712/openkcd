@@ -174,6 +174,34 @@ the configured break at the area's bench.
 clip mapping, inventories and items, and HandCheck, For, LODLock / LODCheck,
 NotNearPlayer, IsLoadedGate, RemoveLink.
 
+### In the world view (`web/src/npcAi.ts`, `web/src/mannequin.ts`)
+
+- **When trees run.** NPCs that have arrived at work (their schedule says
+  "work" and they've finished walking) run their work area's behaviour,
+  named by their Work link (`Work['tailor']` → `tailor`). The tree stops
+  when the activity changes.
+- **Actions.**
+  - **Moves:** a straight walk at 1.4 m/s that ends in the helper's
+    orientation.
+  - **Animations:** the Mannequin fragment's clip, looping, or holding the
+    last frame for one-shots.
+  - **Clock:** trees run on real time scaled like the game clock (×15 =
+    real time).
+- **Mannequin.** `Animations/Mannequin/ADB/kcd_<gender>_database.adb` lists
+  per fragment ID the variants by tag set, with animation layers
+  (`Tailor` → `tailor_idle`, looping, plus procedural variations
+  `TailorVAR`). Names are aliases from the skeleton's `.chrparams`: for
+  humans, `name="*" path="*\*.caf"` under `Animations\humans\<gender>`,
+  i.e. a .caf's base name; the tracks are in the gender's DBAs
+  (`male_tailor.dba`). Building the alias index reads all of a gender's
+  DBAs (~3 s, once).
+- **Result** (`render-world.ts --clock 10:00 --ai 30`):
+  - in Rataje at 10:00, 16 NPCs near the market run their workplace trees
+    (tailor, merchants, garrison guards, swordsmith, bailiff, city walkers,
+    hanging out at home);
+  - the tailor walks to his table's helper and plays `tailor_idle` at its
+    long side, leaning over the cloth.
+
 ## Quests (`Libs/Quests/flowgraphs`)
 
 - **Scope.** 287 graphs, one per quest, using only 16 node classes:

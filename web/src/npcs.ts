@@ -10,6 +10,7 @@ import { Animator } from "./pose.ts";
 import type { Clip } from "./anim.ts";
 import type { NpcEntity } from "./levelEntities.ts";
 import type { Placement, Pose, Schedules } from "./schedule.ts";
+import type { NpcAi } from "./npcAi.ts";
 import type { LoadedModel } from "./model.ts";
 import type { Vfs } from "./vfs.ts";
 import { multiply } from "./mat4.ts";
@@ -19,11 +20,13 @@ const CLIPS: Record<"male" | "female", [string, Record<Pose, string[]>]> = {
     stand: ["animations/humans/male/locomotion/relaxed_idle.caf", "animations/humans/male/behavior/_relaxed_idle_both.caf"],
     sleep: ["animations/humans/male/behavior/sleeping_bed_idle.caf"],
     walk: ["animations/humans/male/locomotion/relaxed_walk_medium.caf"],
+    act: [], // behaviour-tree animations come from the Mannequin fragments (npcAi.ts)
   }],
   female: ["animations/humans/female/female_general.dba", {
     stand: ["animations/humans/female/locomotion/relaxed_idle.caf"],
     sleep: ["animations/humans/female/behavior/sleeping_bed_idle.caf"],
     walk: ["animations/humans/female/locomotion/relaxed_walk_medium.caf"],
+    act: [],
   }],
 };
 
@@ -78,7 +81,7 @@ export class NpcWorld {
         const hit = this.vfs.lookup(skeletonPath);
         const skeleton = hit ? parseSkeleton(await this.vfs.read(hit)) : null;
         if (!skeleton) return null;
-        const clips: Record<Pose, Clip | null> = { stand: null, sleep: null, walk: null };
+        const clips: Record<Pose, Clip | null> = { stand: null, sleep: null, walk: null, act: null };
         const [dbPath, names] = CLIPS[female ? "female" : "male"];
         const dh = this.vfs.lookup(dbPath);
         if (dh) {
@@ -95,8 +98,21 @@ export class NpcWorld {
     return r;
   }
 
-  /** Where an NPC is at `minute` (schedule, walks included), or its spawn point without schedules. */
+  /** NPCs whose workplace behaviour trees drive them while at work (null = schedule placement only). */
+  ai: NpcAi | null = null;
+
+  /** Where an NPC is at `minute`: its behaviour tree's state when one drives it, else the schedule. */
   placeAt(e: NpcEntity, schedule: ScheduleItem[], minute: number): Placement {
+    const st = this.ai?.state(e.id);
+    if (st) {
+      const p = this.scheduled(e, schedule, minute);
+      return { ...p, where: `${p.where} (behaviour tree)`, pos: st.pos, rot: st.rot, pose: st.mode === "walk" ? "walk" : st.mode === "act" ? "act" : "stand" };
+    }
+    return this.scheduled(e, schedule, minute);
+  }
+
+  /** Schedule placement (walks included), or the spawn point without schedules. */
+  scheduled(e: NpcEntity, schedule: ScheduleItem[], minute: number): Placement {
     return this.schedules
       ? this.schedules.at(e, schedule, minute, this.groundAt, WALK_SPEED[e.female ? "female" : "male"])
       : { activity: "", where: "spawn", pos: e.pos, rot: e.rot, pose: "stand" };
@@ -157,6 +173,28 @@ export class NpcWorld {
   }
 }
 
+/**
+ * Start or stop the NPCs' workplace behaviour trees: an NPC that has arrived at work (schedule
+ * activity "work", not walking) runs its work area's behaviour named by its Work link
+ * (Work['tailor'] → "tailor"); when the activity changes, the tree stops.
+ */
+export function updateAi(npcs: WorldNpc[], world: NpcWorld, minute: number): void {
+  const ai = world.ai;
+  if (!ai) return;
+  const inView = new Set(npcs.map((n) => n.entity.id));
+  for (const id of ai.ids()) if (!inView.has(id)) ai.stop(id);
+  for (const n of npcs) {
+    const p = world.scheduled(n.entity, n.schedule, minute);
+    const atWork = p.where === "work" && p.pose === "stand";
+    if (!atWork) { ai.stop(n.entity.id); continue; }
+    if (ai.has(n.entity.id)) continue;
+    const link = [...n.entity.links].find(([k]) => k.split(",").some((x) => x.startsWith("Work")));
+    if (!link) continue;
+    const behaviour = /Work\['?([^'\]]+)'?\]/.exec(link[0])?.[1];
+    if (behaviour) ai.start(n.entity, link[1], behaviour, p.pos, p.rot);
+  }
+}
+
 /** Renderer items for a set of NPCs; fills each NPC's `items` with its item indices (offset by `base`). */
 export function npcItems(npcs: WorldNpc[], base = 0): NpcRenderItem[] {
   const items: NpcRenderItem[] = [];
@@ -191,8 +229,15 @@ export function animateNpcs(npcs: WorldNpc[], world: NpcWorld, minute: number, s
       n.world = poseMatrix(p.pos, p.rot);
       n.character.parts.forEach(({ transform }, k) => r.setItemTransform(n.items[k], transform ? multiply(n.world, transform) : n.world));
     }
-    const c = n.clips[p.pose] ?? n.clips.stand;
-    const frame = c ? c.start + ((seconds * c.fps + n.phase) % Math.max(1, c.end - c.start)) : 0;
+    const st = p.pose === "act" ? world.ai?.state(n.entity.id) : undefined;
+    let c = n.clips[p.pose] ?? n.clips.stand;
+    let frame = c ? c.start + ((seconds * c.fps + n.phase) % Math.max(1, c.end - c.start)) : 0;
+    if (st?.clip && world.ai) {
+      // a behaviour-tree animation: from its start, looping or holding the last frame
+      c = st.clip.clip;
+      const f = (world.ai.now - st.since) * c.fps;
+      frame = c.start + (st.clip.loop ? f % Math.max(1, c.end - c.start) : Math.min(f, c.end - c.start));
+    }
     n.animator.evaluate(c, frame, p.pose === "walk");
     n.character.parts.forEach(({ model }, k) => {
       if (model.skeleton && r.paletteSize(n.items[k])) r.setPalette(n.items[k], n.animator.palette(model.skeleton));

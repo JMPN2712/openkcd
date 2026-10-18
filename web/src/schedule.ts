@@ -10,7 +10,7 @@ import type { ScheduleItem } from "./character.ts";
 import type { EntityInfo, NpcEntity } from "./levelEntities.ts";
 import type { NavMesh, Vec3 } from "./navmesh.ts";
 
-export type Pose = "stand" | "sleep" | "walk";
+export type Pose = "stand" | "sleep" | "walk" | "act";
 
 export interface Placement {
   activity: string;
