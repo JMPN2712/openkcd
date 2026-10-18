@@ -47,3 +47,6 @@ coverage/
 # --- Python ---
 __pycache__/
 *.pyc
+
+# local scratch files
+/.scratch/

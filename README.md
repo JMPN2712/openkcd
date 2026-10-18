@@ -12,7 +12,8 @@ extracted assets or derived data are ever committed.
 - `docs/CHARACTERS.md`: how NPCs are assembled from the database, .cdf files and clothing materials.
 - `docs/ANIMATION.md`: animation clip format, quaternion decoding, skinning.
 - `docs/LEVELS.md`: level files and the compiled terrain heightmap.
-- `tools/`: read-only Python recon scripts (`pe_info.py`, `pak_survey.py`, `pak_report.py`, `pakread.py`).
+- `docs/GAMELOGIC.md`: where gameplay logic lives (behaviour trees, quests, Lua, WHGame.dll structure) and a porting plan.
+- `tools/`: read-only Python recon scripts (`pe_info.py`, `pak_survey.py`, `pak_report.py`, `pakread.py`, `rtti_survey.py`).
 - `web/`: browser pak reader (Vite + TypeScript, no backend, no runtime dependencies).
 
 ## Pak browser
