@@ -5,6 +5,7 @@ import { classify, looksLikeGameRoot, scanDirectory, OWNER_ORDER, type Owner, ty
 import { showPreview, type PreviewHooks } from "./preview.ts";
 import { showTexture, type TextureContext } from "./textureView.ts";
 import { showCharacter, showCharacterBrowser } from "./characterView.ts";
+import { showLevel } from "./levelView.ts";
 import { ASSET_RE } from "./assets.ts";
 import { Vfs } from "./vfs.ts";
 import { formatCount, formatSize } from "./format.ts";
@@ -19,6 +20,7 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const statusEl = $<HTMLSpanElement>("status");
 const paksEl = $<HTMLElement>("pak-groups");
 const charactersBtn = $<HTMLButtonElement>("characters");
+const worldBtn = $<HTMLButtonElement>("world");
 const treeEl = $<HTMLDivElement>("tree");
 const previewEl = $<HTMLElement>("preview");
 const titleEl = $<HTMLSpanElement>("pak-title");
@@ -108,6 +110,7 @@ $<HTMLButtonElement>("open").addEventListener("click", async () => {
     allPaks = paks;
     textures.hasHd = paks.some((p) => p.path.toLowerCase().includes("_hd"));
     charactersBtn.disabled = false;
+    worldBtn.disabled = !paks.some((p) => p.path.toLowerCase() === "data/levels/rataje/level.pak");
     renderPakList(paks);
     const total = paks.reduce((s, p) => s + p.size, 0);
     setStatus(`${root.name}: ${paks.length} archives, ${formatSize(total)}. Read locally, nothing uploaded.`);
@@ -117,6 +120,18 @@ $<HTMLButtonElement>("open").addEventListener("click", async () => {
 });
 
 // ---------- pak list ----------
+
+// ---------- world ----------
+
+worldBtn.addEventListener("click", () => {
+  document.querySelectorAll(".pak.active, .side-action.active").forEach((b) => b.classList.remove("active"));
+  worldBtn.classList.add("active");
+  const head = el("div", "preview-head");
+  head.append(el("div", "preview-path", "data/levels/rataje: terrain"));
+  const body = el("div", "preview-body");
+  previewEl.replaceChildren(head, body);
+  void showLevel(body, allPaks, "rataje");
+});
 
 // ---------- characters (game database) ----------
 

@@ -73,6 +73,20 @@ How this was established (none of it was guessable from the field names):
 Heights range from 10.5 to 218.4 m. The viewer keeps one 4097² `Uint16Array`
 in 5 cm units (34 MB) and upsamples coarse leaves bilinearly.
 
+## Rendering (`web/src/terrainRenderer.ts`)
+
+- **Heightmap on the GPU:** uploaded once as a 4097² `r16uint` texture. The
+  vertex shader reads heights and central-difference normals from it.
+- **Patches:** one instanced grid patch per 64 m sector, at 1, 4 or 16 m
+  spacing by distance. Each patch has a skirt (its border duplicated 4 steps
+  lower) to hide cracks between LODs. A typical ground-level view is about
+  1M triangles.
+- **Colour:** slope and height only, until `cover.ctc` is decoded.
+- **Headless check:** `web/scripts/render-terrain.ts` renders views to PNG
+  through Dawn. Keep the object returned by `create()` referenced; if it is
+  garbage-collected while the device is alive, Dawn aborts with a glibc
+  mutex assertion.
+
 ## Not yet decoded
 
 - The object octree in `terrain.dat` (vegetation and brush instances).
