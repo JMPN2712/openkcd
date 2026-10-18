@@ -135,7 +135,8 @@ export async function readEntry(blob: Blob, e: PakEntry, limit?: number, verify 
     out.set(value.subarray(0, n), got);
     got += n;
   }
-  await reader.cancel().catch(() => {});
+  // only a partial read (limit) leaves the stream open
+  if (got < e.usize) await reader.cancel().catch(() => {});
   if (got < want) throw new Error(`truncated data in ${e.name}: ${got}/${want} bytes`);
   if (limit === undefined && verify) checkCrc(out, e);
   return out;

@@ -186,9 +186,21 @@ export async function buildWorldScene(
   const failed = new Map<string, string>();
   const models: WorldModel[] = [];
   let instances = 0;
-  for (const [n, g] of ordered.slice(0, max).entries()) {
-    if (!caches.models.has(g.path)) opts.onStatus?.(`Loading models ${n + 1}/${Math.min(max, ordered.length)}: ${g.path.split("/").pop()}`);
-    const lods = await loadLods(vfs, g.path, caches, opts.maxTextureDim ?? 256);
+  // load eight models at a time (reads and decoding overlap; one at a time left the CPU idle half the time)
+  const chosen = ordered.slice(0, max);
+  const lodsOf: Promise<LoadedModel[] | null>[] = new Array(chosen.length);
+  let next = 0, loaded = 0;
+  const worker = async () => {
+    while (next < chosen.length) {
+      const k = next++;
+      lodsOf[k] = loadLods(vfs, chosen[k].path, caches, opts.maxTextureDim ?? 256);
+      await lodsOf[k];
+      opts.onStatus?.(`Loading models ${++loaded}/${chosen.length}`);
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, worker));
+  for (const [n, g] of chosen.entries()) {
+    const lods = await lodsOf[n];
     if (!lods) {
       failed.set(g.path, "failed to load");
       continue;

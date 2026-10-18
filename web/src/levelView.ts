@@ -70,16 +70,16 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         const ctc = entries.find((e) => e.name.toLowerCase() === "terrain/cover.ctc");
         if (!entry) throw new Error("terrain/terrain.dat not found in the level pak");
         status.textContent = `Reading terrain (${Math.round(entry.usize / 2 ** 20)} MiB)…`;
-        const bytes = await readEntry(blob, entry);
+        const bytes = await readEntry(blob, entry, undefined, false);
         status.textContent = "Decoding heightmap and object octree…";
         await new Promise((r) => setTimeout(r, 0));
         const terrain = parseTerrain(bytes);
         const objects = parseLevelObjects(bytes, terrain.objectsOffset);
         status.textContent = "Reading terrain colour…";
-        const cover = ctc ? parseCover(await readEntry(blob, ctc), terrain.size) : undefined;
+        const cover = ctc ? parseCover(await readEntry(blob, ctc, undefined, false), terrain.size) : undefined;
         const mission = entries.find((e) => e.name.toLowerCase() === "objects_mission0.xml");
         status.textContent = "Reading entities (NPCs, furniture)…";
-        const xml = mission ? new TextDecoder().decode(await readEntry(blob, mission)) : "";
+        const xml = mission ? new TextDecoder().decode(await readEntry(blob, mission, undefined, false)) : "";
         const npcEntities = parseNpcEntities(xml);
         const ents = parseEntityIndex(xml);
         const schedules = new Schedules(npcEntities, ents);
@@ -91,7 +91,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
             const ne = (await readCentralDirectory(rb)).find((e) => e.name.toLowerCase() === "recast/rdnavmesh_1.nav");
             if (ne) {
               status.textContent = `Reading navigation mesh (${Math.round(ne.usize / 2 ** 20)} MiB)…`;
-              schedules.setNavMesh(new NavMesh(await readEntry(rb, ne)));
+              schedules.setNavMesh(new NavMesh(await readEntry(rb, ne, undefined, false)));
             }
           } catch (err) {
             console.warn("navmesh:", err);
