@@ -82,6 +82,40 @@ Most of the game's behaviour is **data**, interpreted by native code in
   The rest are data quirks.
 
 
+### Interpreter (`web/src/btRuntime.ts`)
+
+A standard tick interpreter (success / failure / running), not a model of
+Warhorse's event executor. Semantics follow node names, properties and how
+the shipped trees use them; guesses are marked `ASSUMPTION` in the code, to
+check against the game later.
+
+- **Nodes:** Root (OnInit, then Behavior), Sequence, Selector, Parallel
+  (successMode / failureMode Any|All), IfCondition, IfElseCondition,
+  RandomGate, While (doFail, propagateChildFail), Loop (count, −1 =
+  forever), ForEach (array, startIndex, step, iterator, value, break), Wait
+  (duration, −1 = forever; variation; GameTime/WorldTime; doFail), Success,
+  Fail, Expression, VarOperation (Reinit, PushBack, Copy, Size, Find,
+  Erase, Clear), IncludeTree, ExecuteLua and LuaWrapper (through the host).
+- **Variables:**
+  - Typed initial values; struct types start as `{}` and are filled field
+    by field.
+  - Included trees get a child scope, so forward-declared variables resolve
+    to the caller's.
+  - Durations are often stored as strings (`'10s'`); numeric contexts read
+    them as seconds.
+- **Host:** world-facing nodes and Lua go through a `Host` interface. Unknown
+  tags are reported; leaves succeed and single-child nodes pass through.
+- **Coverage:** 53% of the 156k node uses in the shipped trees are
+  interpreted natively, plus 2,358 Lua nodes. The largest missing groups
+  are quests (SetQuestObjective, QuestObjectiveCondition/Gate, ~13k),
+  messages to NPCs (InstantSendMessageToNPC, 5.6k), the smart-object graph
+  (GraphSearch, LinkTagFilter, Nodalyzer, ~9k) and locks or control
+  (ExternalLock, Switch, FuseBox, SuppressFailure).
+- **Tests:** `test-btrun.ts` checks the semantics on small trees and runs
+  the tailor workplace's settings tree (`final/sa_tailory.xml`). Running
+  the whole tailor tree shows what the world side must provide next:
+  GraphSearch over the smart-object graph, and Lua.
+
 ## Quests (`Libs/Quests/flowgraphs`)
 
 - **Scope.** 287 graphs, one per quest, using only 16 node classes:
