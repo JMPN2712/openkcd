@@ -14,6 +14,7 @@ import { ASSET_RE } from "../src/assets.ts";
 import { loadModel } from "../src/model.ts";
 import { CharacterDb, loadCharacter, parseCdf } from "../src/character.ts";
 import { parseCaf, type Clip } from "../src/anim.ts";
+import { Dba } from "../src/dba.ts";
 import { Animator } from "../src/pose.ts";
 import { parseSkeleton } from "../src/skeleton.ts";
 import { ModelRenderer } from "../src/renderer.ts";
@@ -25,7 +26,7 @@ const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.index
 const root = opt("--root", join(homedir(), "kcd1"));
 const [W, H] = opt("--size", "800x600").split("x").map(Number);
 const view = opt("--view", ""); // yaw,pitch,zoom[,targetZ] e.g. -1.9,0.35,1
-const animPath = opt("--anim", ""); // .caf clip for characters
+const animPath = opt("--anim", ""); // .caf clip, or database.dba#animation/name.caf, for characters
 const frames = opt("--frames", "").split(",").filter(Boolean).map(Number); // frames to render (default: start)
 const noTex = args.includes("--notex") ? (args.splice(args.indexOf("--notex"), 1), true) : false;
 const flat = args.includes("--flat") ? (args.splice(args.indexOf("--flat"), 1), true) : false;
@@ -112,11 +113,13 @@ for (const path of models) {
     if (animPath) {
       const skHit = vfs.lookup(spec.skeleton);
       const sk = skHit ? parseSkeleton(await vfs.read(skHit)) : null;
-      const clipHit = vfs.lookup(animPath);
-      if (!sk || !clipHit) throw new Error(`need skeleton ${spec.skeleton} and clip ${animPath}`);
+      const [clipFile, dbAnim] = animPath.split("#");
+      const clipHit = vfs.lookup(clipFile);
+      if (!sk || !clipHit) throw new Error(`need skeleton ${spec.skeleton} and clip ${clipFile}`);
       const animator = new Animator(sk);
       animator.evaluate(null, 0);
-      animation = { animator, clip: parseCaf(await vfs.read(clipHit)), parts: ch.parts, offset: [0, 0, 0] };
+      const bytes = await vfs.read(clipHit);
+      animation = { animator, clip: dbAnim ? new Dba(bytes).clip(dbAnim) : parseCaf(bytes), parts: ch.parts, offset: [0, 0, 0] };
       console.log(`  clip ${animPath}: ${animation.clip.tracks.size} tracks, frames ${animation.clip.start}..${animation.clip.end} @ ${animation.clip.fps} fps`);
     }
     console.log(`  ${spec.name}: ${ch.parts.length}/${spec.parts.length} parts: ${ch.parts.map((x) => `${x.part.kind}:${x.part.label}@${x.part.layer}`).join(", ")}`);

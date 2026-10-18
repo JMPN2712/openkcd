@@ -8,6 +8,7 @@ import type { Vfs } from "./vfs.ts";
 import { formatCount } from "./format.ts";
 import { parseSkeleton } from "./skeleton.ts";
 import { parseCaf } from "./anim.ts";
+import { Dba } from "./dba.ts";
 import { clipsFor } from "./clips.ts";
 import type { SceneAnimation } from "./modelView.ts";
 
@@ -47,14 +48,32 @@ export function showCharacter(
         const skeleton = parseSkeleton(await vfs.read(skHit));
         if (skeleton) {
           onStatus("Listing animation clips…");
+          const { clips, databases } = await clipsFor(vfs, spec.skeleton);
+          const dbs = new Map<string, Promise<Dba>>();
+          const openDb = (path: string) => {
+            let p = dbs.get(path);
+            if (!p) {
+              p = (async () => {
+                const hit = vfs.lookup(path);
+                if (!hit) throw new Error(`${path} not found`);
+                return new Dba(await vfs.read(hit));
+              })();
+              p.catch(() => dbs.delete(path));
+              dbs.set(path, p);
+            }
+            return p;
+          };
           animation = {
             skeleton,
-            clips: await clipsFor(vfs, spec.skeleton),
+            clips,
+            databases,
             loadClip: async (path) => {
               const hit = vfs.lookup(path);
               if (!hit) throw new Error(`${path} not found`);
               return parseCaf(await vfs.read(hit));
             },
+            listDatabase: async (path) => (await openDb(path)).anims.map((a) => a.name),
+            loadDatabaseClip: async (path, name) => (await openDb(path)).clip(name),
             partSkeletons: ch.parts.map((p) => p.model.skeleton),
             attachments: ch.parts.map((p) => {
               const bone = p.part.attach ? skeleton.byName.get(p.part.attach.bone.toLowerCase()) : undefined;

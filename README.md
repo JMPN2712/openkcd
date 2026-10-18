@@ -28,7 +28,8 @@ node scripts/test-textures.ts /tmp/tex && python3 -I scripts/compare_pillow.py /
 node scripts/test-cgf.ts                         # parse every model, check indices/bounds/normals
 node scripts/test-characters.ts                  # resolve every NPC soul/preset from the database, load a sample
 node scripts/test-anim.ts                        # parse all 8,233 .caf clips (~2 min)
-node scripts/render-model.ts /tmp/r soul:henry --anim <clip.caf> --frames 0,200,400   # animated headless renders
+node scripts/test-dba.ts                         # decode all 5,155 .dba animation databases (~1.5 min)
+node scripts/render-model.ts /tmp/r soul:henry --anim <clip.caf | db.dba#anim.caf> --frames 0,20,40   # animated headless renders
 node scripts/render-model.ts /tmp/renders objects/vehicles/cart/cart_01.cga   # headless WebGPU render to PNG (Dawn)
 ```
 

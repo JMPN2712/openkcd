@@ -27,7 +27,12 @@ export interface SceneAnimation {
   skeleton: Skeleton;
   /** .caf paths usable with the skeleton */
   clips: string[];
+  /** animation databases (.dba), each holding many clips */
+  databases: string[];
   loadClip(path: string): Promise<Clip>;
+  /** names of the animations inside a database */
+  listDatabase(path: string): Promise<string[]>;
+  loadDatabaseClip(path: string, name: string): Promise<Clip>;
   /** per scene part: the bones its mesh is weighted to (null = rigid) */
   partSkeletons: (Skeleton | null)[];
   /** per scene part: a bone attachment (skeleton bone index + bind-pose transform) */
@@ -254,8 +259,11 @@ export async function showScene(host: HTMLElement, ctx: TextureContext, load: Sc
     const row = el("div", "tex-controls anim-controls");
     const filter = el("input", "char-search");
     filter.type = "search";
-    filter.placeholder = `Filter ${formatCount(anim.clips.length)} clips…`;
+    filter.placeholder = `Filter ${formatCount(anim.databases.length)} databases, ${formatCount(anim.clips.length)} clips…`;
     const pick = el("select", "clip-select");
+    const dbPick = el("select", "clip-select");
+    dbPick.hidden = true;
+    let dbAnims: string[] = [];
     const playBtn = el("button", "link", "▶ Play");
     playBtn.type = "button";
     const scrub = el("input");
@@ -274,19 +282,42 @@ export async function showScene(host: HTMLElement, ctx: TextureContext, load: Sc
     const followLabel = el("label", "ctl check");
     followLabel.append(followCb, el("span", undefined, "Follow"));
     const frameLabel = el("span", "dim", "bind pose");
+    const short = (c: string) => c.replace(/^animations\//, "");
+    // gameplay databases first, the many per-line facial ones last
+    const databases = [...anim.databases].sort((a, b) => Number(a.includes("/facials/")) - Number(b.includes("/facials/")) || a.localeCompare(b));
     const fillPick = () => {
       const q = filter.value.trim().toLowerCase();
-      const hits = (q ? anim.clips.filter((c) => c.includes(q)) : anim.clips).slice(0, 500);
-      pick.replaceChildren(el("option", undefined, `— bind pose — (${q ? hits.length : anim.clips.length} clips)`));
+      const keep = pick.value;
+      const dbs = (q ? databases.filter((c) => c.includes(q)) : databases).slice(0, 300);
+      const cafs = (q ? anim.clips.filter((c) => c.includes(q)) : anim.clips).slice(0, 500);
+      pick.replaceChildren(el("option", undefined, "— bind pose —"));
       (pick.firstChild as HTMLOptionElement).value = "";
-      for (const c of hits) {
-        const o = el("option", undefined, c.replace(/^animations\//, ""));
-        o.value = c;
-        pick.append(o);
+      for (const [label, list, kind] of [["Animation databases", dbs, "dba"], ["Clips", cafs, "caf"]] as const) {
+        if (!list.length) continue;
+        const g = el("optgroup");
+        g.label = `${label} (${list.length})`;
+        for (const c of list) {
+          const o = el("option", undefined, short(c));
+          o.value = `${kind}:${c}`;
+          g.append(o);
+        }
+        pick.append(g);
+      }
+      if ([...pick.options].some((o) => o.value === keep)) pick.value = keep;
+    };
+    const fillDbPick = () => {
+      const q = filter.value.trim().toLowerCase();
+      const hits = (q && !pick.value.includes(q) ? dbAnims.filter((a) => a.includes(q)) : dbAnims).slice(0, 1000);
+      dbPick.replaceChildren(el("option", undefined, `— ${hits.length} of ${dbAnims.length} animations —`));
+      (dbPick.firstChild as HTMLOptionElement).value = "";
+      for (const a of hits) {
+        const o = el("option", undefined, short(a));
+        o.value = a;
+        dbPick.append(o);
       }
     };
     let ft = 0;
-    filter.addEventListener("input", () => { clearTimeout(ft); ft = window.setTimeout(fillPick, 150); });
+    filter.addEventListener("input", () => { clearTimeout(ft); ft = window.setTimeout(() => { fillPick(); if (!dbPick.hidden) fillDbPick(); }, 150); });
     fillPick();
     const setPlaying = (p: boolean) => {
       playing = p && !!clip;
@@ -294,16 +325,16 @@ export async function showScene(host: HTMLElement, ctx: TextureContext, load: Sc
       last = 0;
       redraw();
     };
-    pick.addEventListener("change", async () => {
+    const useClip = async (load: (() => Promise<Clip>) | null, label: string) => {
       setPlaying(false);
-      if (!pick.value) {
+      if (!load) {
         clip = null;
         frameLabel.textContent = "bind pose";
       } else {
-        status.textContent = `Loading ${pick.value}…`;
+        status.textContent = `Loading ${label}…`;
         try {
-          clip = await anim.loadClip(pick.value);
-          status.textContent = `${clip.tracks.size} bone tracks, frames ${clip.start}–${clip.end} at ${clip.fps} fps`;
+          clip = await load();
+          status.textContent = `${label}: ${clip.tracks.size} bone tracks, frames ${clip.start}–${clip.end} at ${clip.fps} fps`;
         } catch (err) {
           clip = null;
           status.textContent = (err as Error).message;
@@ -315,6 +346,28 @@ export async function showScene(host: HTMLElement, ctx: TextureContext, load: Sc
       scrub.value = String(frame);
       applyPose();
       setPlaying(!!clip);
+    };
+    pick.addEventListener("change", async () => {
+      const [kind, path] = [pick.value.slice(0, 3), pick.value.slice(4)];
+      if (kind === "dba") {
+        status.textContent = `Reading ${short(path)}…`;
+        try {
+          dbAnims = await anim.listDatabase(path);
+          dbPick.hidden = false;
+          fillDbPick();
+          status.textContent = `${short(path)}: ${formatCount(dbAnims.length)} animations`;
+        } catch (err) {
+          status.textContent = (err as Error).message;
+        }
+        return;
+      }
+      dbPick.hidden = true;
+      await useClip(kind === "caf" ? () => anim.loadClip(path) : null, short(path));
+    });
+    dbPick.addEventListener("change", async () => {
+      const path = pick.value.slice(4);
+      const name = dbPick.value;
+      await useClip(name ? () => anim.loadDatabaseClip(path, name) : null, short(name));
     });
     playBtn.addEventListener("click", () => setPlaying(!playing));
     scrub.addEventListener("input", () => {
@@ -336,7 +389,7 @@ export async function showScene(host: HTMLElement, ctx: TextureContext, load: Sc
       applyPose();
       redraw(); // keep the loop going while playing
     };
-    row.append(filter, pick, playBtn, scrub, speed, followLabel, frameLabel);
+    row.append(filter, pick, dbPick, playBtn, scrub, speed, followLabel, frameLabel);
     host.insertBefore(row, info);
     applyPose();
   }

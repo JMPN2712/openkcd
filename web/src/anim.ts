@@ -41,7 +41,7 @@ export interface Clip {
   fps: number;
 }
 
-const ROT_SIZE: Record<number, number> = { 0: 16, 1: 16, 5: 6, 8: 8 };
+export const ROT_SIZE: Record<number, number> = { 0: 16, 1: 16, 5: 6, 8: 8 };
 const POS_SIZE: Record<number, number> = { 0: 12, 2: 12 };
 const TIME_SIZE: Record<number, number> = { 0: 4, 1: 2, 2: 1 };
 
@@ -73,7 +73,7 @@ function smallestThree(lo: number, hi: number, totalBits: number, widths: number
   return q;
 }
 
-function readRotation(dv: DataView, o: number, fmt: number): Quat {
+export function readRotation(dv: DataView, o: number, fmt: number): Quat {
   switch (fmt) {
     case 0:
     case 1:
