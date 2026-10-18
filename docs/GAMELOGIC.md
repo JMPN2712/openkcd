@@ -141,7 +141,13 @@ phase. Test: `web/scripts/test-npcs.ts`.
   at work, 188 at home.
 - **Walking.** Each activity starts with a walk from the previous
   activity's place:
-  - straight line, no pathfinding yet, so NPCs can pass through walls;
+  - along the level's own navmesh (`web/src/navmesh.ts`, format in
+    LEVELS.md): A* over polygons, crossing tile borders, then the funnel
+    algorithm. Routes are cached per NPC and schedule item, and fall back to
+    a straight line if no path is found. Guard 8's home → garrison route is
+    109.5 m (straight line 106.9 m) and runs down the lane between the town
+    wall and a palisade. Indexing Rataje's 58,056 tiles takes ~20 ms, and a
+    route 1–13 ms;
   - speed taken from the walk clip's root motion: `relaxed_walk_medium`
     moves its root 3.03 m in 65 frames, 1.40 m/s for men and 1.29 m/s for
     women;

@@ -1,12 +1,14 @@
 // NPC daily schedules: which activity a soul is doing at a given time (from
 // the soul table's baked activity_N/time_N columns) and where that puts them
 // (bed, work area, home area or spawn point, via the NPC entity's links).
-// At the start of each activity the NPC walks there in a straight line from
-// the previous activity's place (no pathfinding yet). The activity behaviours
-// themselves (behaviour trees) come later.
+// At the start of each activity the NPC walks there from the previous
+// activity's place, along the level's navmesh when one is set (src/navmesh.ts),
+// else in a straight line. The activity behaviours themselves (behaviour trees)
+// come later.
 
 import type { ScheduleItem } from "./character.ts";
 import type { EntityInfo, NpcEntity } from "./levelEntities.ts";
+import type { NavMesh, Vec3 } from "./navmesh.ts";
 
 export type Pose = "stand" | "sleep" | "walk";
 
@@ -105,8 +107,22 @@ function linked(npc: NpcEntity, ents: Map<number, EntityInfo>, test: (name: stri
 export const REAL_SECONDS_PER_GAME_MINUTE = 4;
 
 /** Per-level schedule state: entity index plus each NPC's bed. */
+/** A walk route: corner points and the cumulative horizontal distance at each. */
+interface Route {
+  pts: Vec3[];
+  cum: number[];
+}
+
+function route(pts: Vec3[]): Route {
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  return { pts, cum };
+}
+
 export class Schedules {
   private ents: Map<number, EntityInfo>;
+  private nav: NavMesh | null = null;
+  private routes = new Map<string, Route>();
   private beds = new Map<number, EntityInfo>();
   constructor(npcs: NpcEntity[], ents: Map<number, EntityInfo>) {
     this.ents = ents;
@@ -133,6 +149,24 @@ export class Schedules {
     }
   }
 
+  /** Walk along this navmesh from now on (clears cached routes). */
+  setNavMesh(nav: NavMesh | null): void {
+    this.nav = nav;
+    this.routes.clear();
+  }
+
+  private routeFor(key: string, from: Vec3, to: Vec3): Route {
+    let r = this.routes.get(key);
+    if (!r) {
+      const path = this.nav?.findPath(from, to);
+      // bridge from the exact places to the mesh (beds, area points just off it)
+      r = route(path ? [from, ...path, to] : [from, to]);
+      if (this.routes.size > 5000) this.routes.clear();
+      this.routes.set(key, r);
+    }
+    return r;
+  }
+
   get bedCount(): number {
     return this.beds.size;
   }
@@ -148,16 +182,22 @@ export class Schedules {
     schedule.forEach((s, k) => { if (s.start <= minute) i = k; });
     const elapsed = (minute - schedule[i].start + 1440) % 1440;
     const from = this.place(npc, schedule, (schedule[i].start + 1439) % 1440, groundAt);
-    const dx = to.pos[0] - from.pos[0], dy = to.pos[1] - from.pos[1];
-    const dist = Math.hypot(dx, dy);
-    const walkMinutes = dist / speed / REAL_SECONDS_PER_GAME_MINUTE;
-    if (dist < 1 || elapsed >= walkMinutes) return to;
-    const t = elapsed / walkMinutes;
-    const x = from.pos[0] + dx * t, y = from.pos[1] + dy * t;
-    // ends may be indoors above the terrain; in between, keep to the ground
-    const z = Math.max(groundAt(x, y), from.pos[2] + (to.pos[2] - from.pos[2]) * t);
+    if (Math.hypot(to.pos[0] - from.pos[0], to.pos[1] - from.pos[1]) < 1) return to;
+    const r = this.routeFor(`${npc.id}/${i}`, from.pos, to.pos);
+    const total = r.cum[r.cum.length - 1];
+    const walked = elapsed * REAL_SECONDS_PER_GAME_MINUTE * speed;
+    if (walked >= total) return to;
+    let k = 1;
+    while (k < r.cum.length - 1 && r.cum[k] < walked) k++;
+    const a = r.pts[k - 1], b = r.pts[k];
+    const seg = r.cum[k] - r.cum[k - 1];
+    const t = seg > 0 ? (walked - r.cum[k - 1]) / seg : 1;
+    const x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t;
+    let z = a[2] + (b[2] - a[2]) * t;
+    // without a navmesh the straight line can run below the terrain between the ends
+    if (!this.nav) z = Math.max(groundAt(x, y), z);
     // the walk clip moves along model +Y: turn +Y to the walking direction
-    return { activity: to.activity, where: `→ ${to.where}`, pos: [x, y, z], rot: yawQuat(Math.atan2(dy, dx) - Math.PI / 2), pose: "walk" };
+    return { activity: to.activity, where: `→ ${to.where}`, pos: [x, y, z], rot: yawQuat(Math.atan2(b[1] - a[1], b[0] - a[0]) - Math.PI / 2), pose: "walk" };
   }
 
   place(npc: NpcEntity, schedule: ScheduleItem[], minute: number, groundAt: (x: number, y: number) => number): Placement {

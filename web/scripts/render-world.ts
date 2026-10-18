@@ -19,6 +19,7 @@ import { parseCover } from "../src/cover.ts";
 import { WaterRenderer } from "../src/waterRenderer.ts";
 import { parseNpcEntities, parseEntityIndex, propEntities } from "../src/levelEntities.ts";
 import { Schedules } from "../src/schedule.ts";
+import { NavMesh } from "../src/navmesh.ts";
 import { NpcWorld, npcItems, animateNpcs } from "../src/npcs.ts";
 import { TerrainRenderer, type FlyCamera } from "../src/terrainRenderer.ts";
 import { ModelRenderer } from "../src/renderer.ts";
@@ -77,7 +78,19 @@ let npcEnts: ReturnType<typeof parseNpcEntities> = [];
 let schedules: Schedules | null = null;
 if (withNpcs || atNpc) {
   npcEnts = parseNpcEntities(missionXml);
-  if (clock) schedules = new Schedules(npcEnts, entIndex);
+  if (clock) {
+    schedules = new Schedules(npcEnts, entIndex);
+    const recast = sources.find((s) => s.path.toLowerCase() === "data/levels/rataje/recast.pak");
+    if (recast && !args.includes("--no-nav")) {
+      const rb = await recast.open();
+      const ne = (await readCentralDirectory(rb)).find((e) => e.name.toLowerCase() === "recast/rdnavmesh_1.nav");
+      if (ne) {
+        const nav = new NavMesh(await readEntry(rb, ne));
+        schedules.setNavMesh(nav);
+        console.log(`navmesh: ${nav.tileCount} tiles`);
+      }
+    }
+  }
 }
 if (!list.length) {
   const cells = new Map<number, number>();

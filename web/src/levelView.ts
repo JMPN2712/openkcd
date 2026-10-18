@@ -13,6 +13,7 @@ import { buildWorldScene, lodItems, newWorldCaches, selectLods, type WorldScene 
 import { Vfs } from "./vfs.ts";
 import { parseNpcEntities, parseEntityIndex, propEntities, type EntityInfo, type NpcEntity } from "./levelEntities.ts";
 import { Schedules } from "./schedule.ts";
+import { NavMesh } from "./navmesh.ts";
 import { NpcWorld, npcItems, animateNpcs, type WorldNpc } from "./npcs.ts";
 import { ASSET_RE } from "./assets.ts";
 
@@ -74,6 +75,20 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         const npcEntities = parseNpcEntities(xml);
         const ents = parseEntityIndex(xml);
         const schedules = new Schedules(npcEntities, ents);
+        // the level's navmesh (recast.pak), for NPC walking routes
+        const recast = paks.find((x) => x.path.toLowerCase() === `data/levels/${level}/recast.pak`);
+        if (recast) {
+          try {
+            const rb = await recast.open();
+            const ne = (await readCentralDirectory(rb)).find((e) => e.name.toLowerCase() === "recast/rdnavmesh_1.nav");
+            if (ne) {
+              status.textContent = `Reading navigation mesh (${Math.round(ne.usize / 2 ** 20)} MiB)…`;
+              schedules.setNavMesh(new NavMesh(await readEntry(rb, ne)));
+            }
+          } catch (err) {
+            console.warn("navmesh:", err);
+          }
+        }
         return { terrain, objects, cover, npcEntities, schedules, props: propEntities(ents) };
       })();
       p.catch(() => terrainCache.delete(pakPath));
