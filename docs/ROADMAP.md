@@ -1,0 +1,103 @@
+# Roadmap
+
+The milestones come in order. Every feature ships with a **Potato** preset,
+because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
+
+## Done so far (foundations)
+
+These came before the milestones were set. They are the base for all of them.
+
+- **Game data access.**
+  - Reads every `.pak` in place from the installed game, via the File System
+    Access API; nothing is copied.
+  - Case-insensitive VFS with patch layering.
+- **Textures.** Split DDS assembly, and BC1–BC7 decoding on the GPU and the
+  CPU.
+- **Models and characters.**
+  - Static and skinned models (.cgf/.cga/.skin/.chr), materials, and a
+    WebGPU renderer.
+  - Every NPC soul and clothing preset is assembled from the game database.
+- **Animation data.**
+  - All 8,233 `.caf` clips and 5,155 `.dba` databases decode.
+  - Skinned playback and mannequin fragment lookup.
+- **World.**
+  - Rataje's terrain, cover colours, water, and static objects and
+    vegetation, streamed around the camera.
+  - Editor layers are filtered.
+- **Navigation.** The navmesh decodes. Routes use A* plus a funnel, with
+  NPC collision avoidance.
+- **Game logic.**
+  - Behaviour trees: all 4,911 parse, and an interpreter runs NPC work
+    routines against a smart-object world.
+  - Lua 5.1 (WebAssembly) boots the game's `main.lua`.
+  - Daily schedules place NPCs at work, at home, at meals and in bed.
+
+## 1. Walking simulator (current)
+
+Walk through Rataje (then the whole map) as Henry, in first person, at
+playable frame rates on the Potato preset.
+
+- [ ] Research how KCD stores animations, skeletons and character
+      controllers (`docs/ANIMATION.md`).
+- [ ] Player character controller: capsule, ground following, slopes,
+      steps, collision with buildings and terrain.
+- [ ] First-person camera on Henry's skeleton (head bone), with body
+      awareness.
+- [ ] Locomotion: idle, walk, run and turn blending from the game's
+      locomotion clips.
+- [ ] Physics proxies for collision (from the models' physics meshes).
+- [ ] Whole-world streaming beyond Rataje, plus LOD.
+- [ ] Time of day and sky (lighting is basic for now).
+- [ ] Performance presets: Potato / Low / Medium / High.
+
+## 2. Installer converter and slim format
+
+- [ ] Read the GOG offline installer (setup `.exe` + `.bin` files) in the
+      browser.
+- [ ] One streaming pass into a slim package in OPFS:
+  - compressed textures (GPU formats), compressed meshes, and Opus audio;
+  - region chunks plus an index.
+- [ ] Afterwards the original install or installer can be deleted.
+- [ ] Installed-folder mode stays as an alternative.
+- [ ] No game data is ever hosted or distributed by the project.
+
+## 3. Public GitHub release
+
+- [ ] Choose a license.
+- [ ] Final clean-room and history audit (no game data, no decompiled code,
+      no branding).
+- [ ] Make the `openkcd` repo public, with build and run docs and a
+      compatibility list.
+
+## 4. Living world (partly done)
+
+- [x] Behaviour-tree interpreter, smart objects, work routines.
+- [x] Daily schedules, collision avoidance.
+- [ ] Route search matching the game's.
+- [ ] Remaining world-side nodes:
+  - helpers, messaging between NPCs, semaphores, teleport;
+  - smart-object init behaviours.
+- [ ] Meal, leisure and sleep routines.
+- [ ] Dialogue barks.
+
+## 5. Diet planning
+
+A config that disables boring fetch and errand side quests and optional
+content, without deleting anything.
+
+- [ ] Map the quest graph (flowgraphs, quest dependencies).
+- [ ] Classify optional content. Multi-part questlines stay whole, and
+      nothing the main quest depends on is ever cut.
+
+## 6. Core gameplay
+
+- [ ] Combat.
+- [ ] Inventory.
+- [ ] Saves.
+- [ ] Horses.
+- [ ] Dialogue and quests.
+- [ ] The RPG layer.
+
+## 7. Diet playthrough
+
+- [ ] Play the main story start to finish with diet mode on.

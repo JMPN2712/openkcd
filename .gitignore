@@ -1,31 +1,65 @@
 # --- Game files & extracted assets: NEVER commit ---
+# (also enforced by .githooks/pre-commit; enable with: git config core.hooksPath .githooks)
+# installers, binaries, archives
 *.pak
 *.bin
 *.exe
 *.dll
 *.pdb
+*.so
+# textures, geometry, characters, animation
 *.dds
 *.dds.*
+*.tif
 *.cgf
+*.cgfm
 *.cga
+*.cgam
 *.chr
+*.chrm
+*.chrparams
 *.skin
+*.skinm
+*.cdf
 *.caf
 *.dba
+*.img
+*.animevents
+*.bspace
+*.comb
+*.adb
+*.mtl
+# audio, video, UI
 *.fsb
 *.wem
 *.bnk
 *.bik
 *.usm
 *.ogg
+*.opus
 *.mp3
 *.wav
+*.gfx
+*.swf
+# level data
+*.ctc
+*.nav
+# game folders, extracted files, converted (OPFS) packages, render output
 /kcd1/
 /game/
 /extracted/
 /assets/
 /dump/
 /out-assets/
+/packages/
+*.okpkg
+/renders/
+
+# --- Reverse engineering: decompiled output stays in ~/tools/ghidra-out, never here ---
+ghidra-out/
+*.gzf
+*.rep/
+*.gpr
 
 # --- Node / build ---
 node_modules/

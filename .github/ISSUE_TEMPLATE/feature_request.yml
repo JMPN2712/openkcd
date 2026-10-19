@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest something OpenKCD should support.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What should it do?
+      description: Describe the feature, and how the original game behaves if it's a game feature.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it matters
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Related milestone
+      options: [Walking simulator, Installer converter, Living world, Diet mode, Core gameplay, Performance / Potato preset, Other]

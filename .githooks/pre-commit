@@ -1,0 +1,45 @@
+#!/bin/sh
+# OpenKCD pre-commit guard: no game files, extracted or converted assets,
+# large binaries or decompiled code. Enabled with:
+#   git config core.hooksPath .githooks
+# (Bypassing it with --no-verify is never the fix; see CONTRIBUTING.md.)
+
+fail=0
+MAX_BYTES=1048576        # any file over 1 MB
+MAX_BINARY_BYTES=102400  # binary files over 100 KB
+
+# Game and engine file types (CryEngine / KCD), audio, video, archives, installers.
+GAME_EXT='pak|dds|dds\.[0-9a-z]+|cgf|cgfm|cga|cgam|chr|chrm|chrparams|skin|skinm|cdf|caf|dba|img|animevents|bspace|comb|adb|mtl|fsb|wem|bnk|bik|usm|ogg|opus|mp3|wav|gfx|swf|ctc|nav|tif|exe|bin|dll|pdb|so|gzf|rep'
+
+z=$(printf '\001')
+git diff --cached --name-only --diff-filter=ACMR -z | tr '\0' "$z" | tr "$z" '\n' | while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  lower=$(printf '%s' "$f" | tr 'A-Z' 'a-z')
+  if printf '%s' "$lower" | grep -Eq "\.($GAME_EXT)\$"; then
+    echo "pre-commit: blocked game/binary file type: $f"; echo x
+    continue
+  fi
+  size=$(git cat-file -s ":$f" 2>/dev/null || echo 0)
+  if [ "$size" -gt "$MAX_BYTES" ]; then
+    echo "pre-commit: blocked large file ($size bytes): $f"; echo x
+    continue
+  fi
+  if [ "$size" -gt "$MAX_BINARY_BYTES" ] && git diff --cached --numstat -- "$f" | grep -q '^-'; then
+    echo "pre-commit: blocked binary file over 100 KB ($size bytes): $f"; echo x
+  fi
+done | { out=$(cat); [ -z "$out" ] || { printf '%s\n' "$out" | grep -v '^x$'; exit 1; }; } || fail=1
+
+# Decompiler output markers in added lines (Ghidra names: FUN_/DAT_/LAB_ + address, undefined8, …).
+markers=$(git diff --cached -U0 --diff-filter=ACMR -- . ':(exclude).githooks/*' ':(exclude)CONTRIBUTING.md' \
+  | grep -E '^\+[^+]' | grep -nE '\b(FUN|DAT|LAB|PTR|thunk_FUN)_[0-9a-fA-F]{8,}\b|\bundefined[1248]\b|\bin_stack_[0-9a-f]+\b|\bextraout_[A-Z]' | head -5)
+if [ -n "$markers" ]; then
+  echo "pre-commit: blocked decompiler output (Ghidra-style names) in staged changes:"
+  printf '%s\n' "$markers" | cut -c1-160
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo "pre-commit: commit refused. Game data and decompiled code never go in this repo."
+  exit 1
+fi
+exit 0

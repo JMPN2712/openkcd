@@ -1,0 +1,61 @@
+name: Bug report
+description: Something renders wrong, crashes, or behaves differently from the original game.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please don't attach game files or extracted assets. Screenshots of the problem are fine.
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      placeholder: Chromium 141 (Linux, --ozone-platform=x11)
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver
+      placeholder: AMD Radeon Vega 7 (Mesa 25.2)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Kubuntu 26.04
+  - type: dropdown
+    id: preset
+    attributes:
+      label: Quality preset
+      options: [Potato, Low, Medium, High, Not applicable]
+    validations:
+      required: true
+  - type: input
+    id: location
+    attributes:
+      label: Location in the world
+      description: Coordinates from the HUD, or the nearest town/landmark, and the in-game time.
+      placeholder: Rataje market, 2192,1050 at 10:00
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the World view
+        2. Fly to ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs. actual
+      description: What the original game does, and what OpenKCD does.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console output
+      description: Errors from the browser console (F12).
+      render: text

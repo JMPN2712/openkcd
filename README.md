@@ -1,12 +1,47 @@
-# kcd-web
+# OpenKCD
 
-Private, long-term experiment: running Kingdom Come: Deliverance (PC, GOG) in the
-browser via WebAssembly + WebGPU. Requires your own legally owned copy of the game.
+An unofficial, open-source engine that runs **Kingdom Come: Deliverance** (2018)
+in your browser, from **your own copy of the game**, using WebGPU and WebAssembly.
 
-This repository contains **only original code and documentation**. No game files,
-extracted assets or derived data are ever committed.
+> **Disclaimer.** OpenKCD is a fan project. It is **not affiliated with,
+> endorsed by or connected to Warhorse Studios or PLAION**. "Kingdom Come:
+> Deliverance" is a trademark of its owners. OpenKCD **contains no game data**
+> (no models, textures, audio, scripts or other assets) and never distributes
+> any. To use it you need a **legally owned copy** of the game (currently the
+> PC version from GOG). Like OpenMW or OpenRCT2, it is a reimplementation of
+> the engine that reads the original game's files on your machine.
 
-## Layout
+## Status
+
+Early development. What works today, inside an installed-folder viewer:
+
+- Browsing every pak, texture, model and character.
+- Flying over Rataje: terrain, buildings, vegetation and water, streamed
+  around the camera.
+- NPCs placed by their daily schedules, running their work routines from the
+  game's behaviour trees.
+
+There is no player, combat, dialogue or quest system yet. See
+[docs/ROADMAP.md](docs/ROADMAP.md). The current milestone is **1: walking
+simulator**. The game data will later be converted once, in the browser, from
+the GOG offline installer into a compact local package (OPFS).
+
+## Browser requirements
+
+- A Chromium-based browser (Chrome, Edge, Chromium) with **WebGPU** and the
+  **File System Access API**. Firefox and Safari are not supported yet.
+- On Linux, Chromium may need `--ozone-platform=x11` (and possibly
+  `--enable-unsafe-webgpu`) for WebGPU.
+- A GPU with BC texture compression. Integrated GPUs such as AMD Vega 7 are
+  a target; a "Potato" preset is planned for every feature.
+- 16 GB RAM recommended.
+
+## License
+
+None yet. A license will be chosen before the repository goes public. Until
+then, all rights are reserved by the contributors.
+
+## Repository layout
 
 - `docs/RECON.md`: Phase 1 survey of the install (binaries, middleware, pak format quirks).
 - `docs/CHARACTERS.md`: how NPCs are assembled from the database, .cdf files and clothing materials.
@@ -14,12 +49,13 @@ extracted assets or derived data are ever committed.
 - `docs/LEVELS.md`: level files and the compiled terrain heightmap.
 - `docs/GAMELOGIC.md`: where gameplay logic lives (behaviour trees, quests, Lua, WHGame.dll structure) and a porting plan.
 - `tools/`: read-only Python recon scripts (`pe_info.py`, `pak_survey.py`, `pak_report.py`, `pakread.py`, `rtti_survey.py`, `navmesh.py`).
-- `web/`: browser pak reader (Vite + TypeScript, no backend, no runtime dependencies).
+- `docs/ROADMAP.md`: milestones and status.
+- `web/`: the engine (Vite + TypeScript, no backend). Runtime dependency: `wasmoon-lua5.1` (Lua 5.1 VM in WebAssembly).
 
-## Pak browser
+## Running it locally
 
-Requires Chrome/Chromium (File System Access API). Game files are read locally
-through `Blob.slice()`; nothing is uploaded or copied.
+You need Node.js 24+ and your own installed copy of Kingdom Come: Deliverance
+(PC). Game files are read locally through `Blob.slice()`; nothing is uploaded or copied.
 
 ```sh
 cd web
@@ -53,3 +89,8 @@ Click **Open KCD folder** and pick the game root (the folder containing `Data` a
 Click a `.dds*` file for the texture viewer, a `.cgf/.cga/.skin` for the WebGPU model viewer, a `.cdf`
 for a character, **Characters (game database)** to browse every NPC soul and clothing preset, or
 **World: Rataje** to fly over the level (terrain, buildings and vegetation, streamed around the camera).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). In short: never commit game files,
+extracted assets or decompiled code.
