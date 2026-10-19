@@ -1,18 +1,36 @@
-# Animation
+# Animation, skeletons and character controllers
 
-Skeletal animation as decoded by the pak browser (`web/src/anim.ts`,
-`pose.ts`, `clips.ts`). Verified with `web/scripts/test-anim.ts` and headless
-renders (`render-model.ts --anim … --frames …`).
+How KCD stores skeletal animation, skeletons, blend spaces, Mannequin
+fragments and the player's character controller.
+
+- **Already implemented:** clip and database decoding, posing and skinning
+  (`web/src/anim.ts`, `dba.ts`, `clips.ts`, `pose.ts`, `skeleton.ts`,
+  `mannequin.ts`). Verified with `web/scripts/test-anim.ts`, `test-dba.ts`
+  and headless renders (`render-model.ts --anim … --frames …`).
+- **Researched for milestone 1** (the walking simulator), from the game's
+  data files only:
+  - the skeleton's special bones;
+  - motion parameters;
+  - blend spaces;
+  - Mannequin;
+  - the player's physics and camera.
 
 ## Files
 
 | File | Contents |
 |---|---|
+| `*.chr` (75) | Skeleton: CompiledBones (0x2000 v0x800), physical bones and proxies (0x2001, 0x2003) |
+| `*.cdf` (266) | Character definition: skeleton, skin and bone attachments, procedural modifiers (DrivenTwist, …) |
+| `*.chrparams` (64) | Per-skeleton animation list (`#filepath` folders, `$TracksDatabase` `.dba` files, `$AnimEventDatabase`, `$Include`), plus the IK, look-IK and aim-IK setup |
 | `*.caf` (8,233) | One clip. A Controller chunk (0x100d v0x829) per animated bone, plus MotionParameters (0x3002 v0x925) |
 | `*.dba` (5,155) | Animation databases: many clips sharing one pool of tracks in a single Controller chunk (0x100d **v0x905**). This is where gameplay locomotion, idles and combat live (`male_general.dba` alone has 1,715 animations). See below |
 | `Animations.img` | 141,177 GlobalAnimationHeaderCAF chunks (0x3007 v0x971), one per clip |
 | `DirectionalBlends.img` | AIM pose headers (0x3008 v0x970) |
-| `*.chrparams` | Per-skeleton animation list: `#filepath` folders whose `.caf` files apply, `$TracksDatabase` `.dba` files, `$Include`, IK setup |
+| `*.bspace` (533), `*.comb` (24) | Blend spaces (XML): parametric locomotion, turns, stairs, jumps |
+| `*.animevents` (26) | Animation events (footsteps, sounds, effects) per skeleton |
+| `Animations/Mannequin/ADB/*` | Mannequin: controller definitions (scopes, fragment IDs), tags, and fragment databases (`.adb`, 28) |
+| `Scripts/Entities/actor/*.lua`, `Parameters/*.xml` | Actor and player script classes: physics (`Living`), stances, speed multipliers, camera limits |
+| `Libs/Tables/ai/DeltaMovementParamsDatabase.xml` | AI movement smoothing per entity class (turn rates, throttle) |
 
 The loose male `.caf` clips are mostly cinematics (about 4,100), plus combat,
 look and aim poses. Gameplay animation is in the `.dba` files.
@@ -116,7 +134,277 @@ male/female controller IDs 100%. Layout:
 - **Bone attachments** (props, weapons) follow
   world(bone) × inverse(bind(bone)) × their bind-pose transform.
 
-## Not yet
+## The human skeleton (`male.chr`)
 
-- Blend spaces (`.bspace`, `.comb`), Mannequin (`.adb`) and animation events.
-- Facial animation, IK, and cloth or pendulum attachment simulation.
+259 bones, listed parents first.
+
+- **`Human_Male` (bone 0): the locomotion locator.** Every bone hangs off it.
+  - Its track is the clip's **root motion**. In `relaxed_walk_medium_player`
+    it moves 3.03 m along +Y over the 65-frame cycle, which matches the
+    motion parameters below.
+  - Characters face **+Y**, and Z is up.
+- **`Hips`** sits at 0.90 m.
+- **Head chain:** `Spine`…`Spine4` → `Neck` → `Neck1` → `Head`.
+- **Bones under `Head`:**
+
+  | Bone | Bind position | Notes |
+  |---|---|---|
+  | `Look` | (0, 0.101, 1.624) | Look-IK parameter joint |
+  | `camera` | (0, 0.123, 1.624) | Its axes are rotated so that one points forward. Locomotion clips don't animate it, so it follows the head |
+  | `eye_left_bone`, `eye_right_bone` | ±0.029, 0.101, 1.624 | |
+
+  The `camera` bone matches the stance `viewOffset` (0, 0.10, 1.625) in
+  `BasicActor.lua`, so it is the natural first-person eye point.
+- **Helper bones:**
+  - alignment: `Align`, `Align_Secondary`;
+  - ground alignment: `GroundAlignLeft`/`Right`, and `LeftHeel`/`RightHeel`
+    under the feet;
+  - weapon and item slots: `RightHandSlot`, `LeftWeaponSheath`,
+    `BackSlot_*`, `CS_Slot1`–`6`;
+  - IK targets and blend weights: `*_IKTarget`, `*_IKBlend`;
+  - about 95 facial blend-weight bones under the root
+    (`*_blendWeightVertex`);
+  - cloth and skirt helpers (`ring*`, `v_*`).
+- **`male.cdf` (the player model):**
+  - `male.chr`, with `animbody.skin` and head `s1_head_v001.skin`;
+  - bone attachments: `eye_*`, `hand_*`, `entity_*`, `weapon_*`,
+    `scabbard_left`, and `dialog_cameras` (on `Align`);
+  - DrivenTwist modifiers for knees and other twist bones.
+
+## IK and procedural setup (`male.chrparams`)
+
+- **Limb IK:**
+  - arms use 2-bone IK (`LftArm01`/`RgtArm01`, root `*Arm`, end `*Hand`);
+  - legs use 3-bone leg IK (`LftLeg01`/`RgtLeg01`, `*UpLeg` → `*ToeBase`);
+  - ground alignment uses CCD5 chains (`*UpLeg`, `*Leg`, `*Foot`, `*Heel`,
+    `*ToeBase`);
+  - the spine uses `Spine_IK` (MRDX, `Spine` → `Spine4`).
+- **Animation-driven IK targets:**
+  - `Spine_IK` / `LftArm01` / `LftArm02` / `RgtArm01` are driven by the
+    `*_IKTarget` bones;
+  - the weights come from the `*_IKBlend` bones.
+- **Feet lock** on the two leg handles.
+- **Look IK:**
+  - eye attachments;
+  - directional blends of the `lookposes` token on joint `Look`;
+  - an additive rotation list from `Hips` to `Look`, with arms and legs as
+    secondary;
+  - procedural adjustment on `Neck`, `Neck1`, `Head` and `Look`.
+- **Aim IK:** the same structure, with `aimposes`.
+
+## Motion parameters
+
+Each clip carries MotionParams905: in `.caf` files in the 0x3002 chunk; in
+databases, inside each animation header. The 132 bytes are:
+
+| Bytes | Fields |
+|---|---|
+| 0–23 | `u32 assetFlags`, `u32 compression`, `i32 ticksPerFrame`, `f32 secsPerTick`, `i32 start`, `i32 end` |
+| 24–43 | `f32 moveSpeed`, `turnSpeed`, `assetTurn`, `distance`, `slope` |
+| 44–71 | Start location (quaternion x, y, z, w; position) |
+| 72–99 | End location (quaternion x, y, z, w; position) |
+| 100–131 | Foot plants: left/right heel and toe start/end. All −10000 (unset) in the locomotion clips checked |
+
+The **end location** is the locator's offset over one cycle. **moveSpeed**
+is distance ÷ duration.
+
+**Player locomotion clips** (`male_general.dba`, `*_player.caf`):
+
+| Clip | Cycle | Speed (m/s) | Distance per cycle |
+|---|---|---|---|
+| `relaxed_walk_slow_player` | 3.83 s | 0.56 | 2.16 m |
+| `relaxed_walk_medium_player` | 2.17 s | 1.40 | 3.03 m |
+| `relaxed_walk_fast_player` | 1.83 s | 1.93 | 3.54 m |
+| `relaxed_run_slow_player` | 1.63 s | 2.08 | 3.40 m |
+| `relaxed_run_slow_bwd_player` | 1.20 s | 2.64 | 3.17 m |
+| `relaxed_run_medium_player` | 0.73 s | 3.57 | 2.62 m |
+| `relaxed_run_fast_player` | 1.27 s | 4.45 | 5.64 m |
+| `relaxed_sprint_fast_player` | 1.03 s | 6.27 | 6.48 m |
+
+- **Variants.** Each speed has `_left`, `_right`, `_bwd`, `_left_bwd` and
+  `_right_bwd` strafes, plus `_turn_left`/`_turn_right` versions that rotate
+  the locator 90° per cycle.
+- **`turnSpeed` is unreliable:** the stored value is 0 for left turns.
+  Derive the turn from the start and end quaternions instead.
+- The NPC clips (no `_player` suffix) have the same speeds.
+
+## Blend spaces (`.bspace`, `.comb`)
+
+Parametric blending, in plain XML.
+
+- **`.bspace` (`<ParaGroup>`):**
+  - `<Dimensions>`: one or two `<Param name min max cells [scale]>`, named
+    `MoveSpeed`, `TravelAngle`, `TurnSpeed`, `TravelSlope`, …;
+  - `<ExampleList>`: examples, each naming an **animation by its clip name**
+    (the `.caf` basename, found in the skeleton's databases);
+  - `<Blendable>`: quads (`<Face p0 p1 p2 p3>`) over the example indices.
+  - Each example's parameter values are not in the XML. They come from the
+    clip's motion parameters: speed, travel direction from the end
+    location, and turn.
+- **`.comb` (`<CombinedBlendSpace>`):**
+  - joins 2D blend spaces into a 3D one: `MoveSpeed` × `TravelAngle` ×
+    `TurnSpeed`, with a `ParaScale` per dimension;
+  - each `<BlendSpace AName>` covers a subset of the dimensions.
+- **The player's main locomotion:**
+
+  | Blend space | Dimensions and examples |
+  |---|---|
+  | `3d_relaxed_walk_turn_strafe_player.comb` | `2d_relaxed_walk_strafe_spd_fwd_ext_player` (MoveSpeed 0.6–2.12 × TravelAngle ±π, 9 examples) + `2d_relaxed_walk_turn_spd_fwd_ext_player` (MoveSpeed 0.55–2.0 × TurnSpeed ±1.7) |
+  | `3d_relaxed_run_turn_strafe_player.comb` | run strafe (MoveSpeed 2.0–4.2 × TravelAngle ±π) + run turn |
+  | `2d_sprint_turn_player.bspace` | MoveSpeed 4.4–6.2 × TurnSpeed ±1.3: run fast, and sprint with 90° turns |
+
+- **Start and stop transitions:**
+  - starting: `2d_relaxed_idle_to_walk`, `…_to_run` and `…_to_sprint` combs,
+    split into left-foot and right-foot blend spaces;
+  - stopping: `2d_relaxed_walk_to_idle` and `…_run_to_idle`;
+  - big turns on the spot: `1d_relaxed_idle_bigturns_nw`;
+  - stairs: `1d_stairs_walk`/`run`;
+  - jumps: `1d_jump_*`, `2d_jump_height`.
+
+## Mannequin (`Animations/Mannequin/ADB`)
+
+The player's script names its controller and database:
+
+- `ActionController = kcd_male_controllerdefs.xml`;
+- `AnimDatabase3P = kcd_male_database.adb`.
+
+There is no 1P database (`AnimDatabase1P` is commented out): first person
+uses the same full-body animation.
+
+- **Controller definitions:**
+  - Tags and fragment-ID files.
+  - `<FragmentDefs>`: per fragment ID, the scopes it plays in, and tag
+    overrides.
+  - `<ScopeDefs>`: scope → animation layer range:
+    - FullBody: layers 0–2;
+    - HoldItemLeft: 3; HoldItemRight: 4–5;
+    - UpperBody: 6–7;
+    - TorsoDetail: 8; FacialExpression: 9;
+    - AlignOffset: 10; GameLogic: 11; CombatCamera: 13;
+    - AimPose: 14; LookPose: 15.
+  - The `Char3P` scope context is shared by the player and the NPCs.
+- **Database (`.adb`, XML):**
+  - `<FragmentList>` → one element per fragment ID → `<Fragment Tags="a+b">`
+    variants.
+  - Each variant has an `<AnimLayer>`: a `<Blend>` and an
+    `<Animation name flags="Loop">`, where the name may be a blend space.
+    It may also have `<ProcLayer>`s: procedural clips such as
+    `AnimationOverride`, `CameraNear`, `MovementControlMethod`,
+    `DisableMoveTransitions`.
+  - `<FragmentBlendList>` holds the transitions between fragment IDs.
+  - The best tag match wins. `mannequin.ts` already resolves this for NPC
+    behaviours.
+- **Fragments a walking player needs (tag `player`):**
+
+  | Fragment ID | Tags | Animation |
+  |---|---|---|
+  | `MotionIdle` | `player` | `relaxed_idle_both` |
+  | `MotionMovement` | `walk+player` | `3d_relaxed_walk_turn_strafe_player` |
+  | `MotionMovement` | `run+player` | `3d_relaxed_run_turn_strafe_player` |
+  | `MotionMovement` | `sprint+player` | `2d_sprint_turn_player` |
+  | `MotionMovement` | `stealth+walk/run(+backward)+player` | `2d_stealth_*_player` |
+  | `MotionTurn` | `""` | `1d_relaxed_idle_bigturns_nw` |
+  | `IdleToMove` | `walk` / `run` | `2d_relaxed_idle_to_walk` / `…_to_run` |
+  | `MotionJump` | `""` | `1d_jump_start`, then `2d_jump_height` |
+  | `MotionLand` | `walk` / `run` / `""` | `1d_jump_land_*`, `relaxed_jump_land_idle` |
+
+## Character controller (player)
+
+From `Scripts/Entities/actor/BasicActor.lua` (`BasicActorParams`),
+`player.lua` and `Parameters/Player_Params.xml`.
+
+- **Physics (`physicsParams.Living`):**
+
+  | Parameter | Value |
+  |---|---|
+  | mass | 80 kg |
+  | gravity | 13 m/s² |
+  | inertia, inertiaAccel | 11 (higher = faster speed change) |
+  | air control | 0.1 |
+  | max ground speed | 16 m/s |
+  | slide from | 49° |
+  | max climb | 50° |
+  | fall from | 90° |
+  | max jump angle | 40° |
+  | impulse recovery | 1 s |
+  | collider material | `mat_player_collider` |
+
+- **Stances** (`gameParams.stance`, all `useCapsule = 1`):
+
+  | Stance | Collider height | Size (x, z) | View offset |
+  |---|---|---|---|
+  | normal | 1.05 | 0.3, 0.4 | (0, 0.10, 1.625) |
+  | combat | 1.05 | 0.3, 0.4 | (0, 0.10, 1.625) |
+  | crouch | 0.8 | 0.35, 0.1 | (0, 0, 1.1) |
+  | carryCorpse | 0.90 | 0.4, 0.15 | (0, 0.10, 1.625) |
+
+  The player's own `Properties.stance.normal.size` is (0.35, 0, 0.4).
+  - **Reading these as CryEngine living-entity sizes** (an interpretation,
+    still to be checked in game): x is the capsule radius and z the
+    half-height of the cylinder part, centred at `heightCollider` above the
+    feet.
+  - That gives a 0.3–0.35 m radius capsule from about 0.35 m to 1.75 m. The
+    gap under it lets the living entity step over small obstacles.
+- **Movement multipliers:**
+
+  | Multiplier | Value |
+  |---|---|
+  | sprint | 1.5 |
+  | strafe | 0.75 |
+  | backward | 0.7 |
+  | carrying the maximum load | 0.5 |
+
+  Other movement settings:
+  - jump height: 1 m;
+  - slope slowdown: 3;
+  - lean: 0.35 m and 15°.
+
+  The base speeds are not in these scripts. The blend-space ranges (walk
+  0.6–2.1, run 2–4.2, sprint 4.4–6.2 m/s) bound them. The RPG table adds
+  costs (`SprintCost` 3.5, `JumpCostBase` 6 stamina).
+- **Camera:**
+  - Pitch limits (`PlayerRotation`): −70° to +80° normally, −35° to +45°
+    while sprinting.
+  - Landing bob: up to 0.5 over 0.6 s, for falls up to 3 m.
+- **First person is full body.** The local player is drawn (`DrawSlot`)
+  with `firstPersonBody`; a comment in `player.lua` says the head and its
+  attachments are hidden by the game code on revive. So the view is Henry's
+  real body, animated by the same 3P locomotion, with the eye at the
+  `camera` bone and the head hidden. The `CameraNear` procedural clip sets
+  a 1 cm near plane in some fragments.
+- **AI smoothing (NPCs, not the player):** `DeltaMovementParamsDatabase.xml`
+  gives turn-rate limits per logical speed (for example 0.8–4 rad/s at
+  run).
+
+## Collision geometry
+
+- Models carry physics proxies as `$physics_proxy…` nodes, each with a
+  MeshPhysicsData chunk (0x1018: serialised physics geometry, not decoded
+  yet).
+- In a sample of 25 building models:
+  - 6 have proxies (1 to 121);
+  - the rest have **no** physics chunk, for example `rataje_bakery`, which
+    is presumably physicalised from its render mesh by material.
+- **Terrain** collision is the heightmap.
+- **Vegetation** uses its own physics.
+
+## Open questions
+
+- **Player speeds.** The base walk, run and sprint speeds, and how
+  stamina, encumbrance and skills change them. These are game code; a
+  behaviour note is needed. Until then, use the blend-space ranges:
+  1.4 / 3.6 / 6.3 m/s.
+- **Physics proxies.** The MeshPhysicsData format, and which render
+  subsets are physicalised when a model has no proxy (the material's
+  physicalise type).
+- **Capsule geometry.** Whether the `size`/`heightCollider` reading above
+  matches the game.
+- **Root motion or code-driven movement.** Whether the player moves by
+  root motion or by code-driven velocity, with the blend space following
+  (the usual CryEngine setup for players).
+- **Start, stop and turn transitions.** How they choose a foot
+  (`_lleg`/`_rleg`).
+- **Not done yet:**
+  - facial animation;
+  - cloth and pendulum attachments;
+  - animation events (footstep sounds come later, with audio).
