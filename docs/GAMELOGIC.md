@@ -407,14 +407,19 @@ phase. Test: `web/scripts/test-npcs.ts`.
      41 KB tree).
    - Combat and the RPG layer are the largest
      modules and come last.
+4. **Clean room.** Where the data doesn't specify a behaviour, it is
+   researched separately and written up as plain-language behaviour notes
+   outside this repository. The code here is written from those notes;
+   decompiled code is never committed (see CONTRIBUTING.md).
 
 ## Licensing note
 
 The scripts and data (Lua, XML, tables) are the game's content: they're
 read from your own install at runtime, like every other asset, and never
-committed. Reimplementing behaviour from observation and decompilation for
-private interoperability is a different legal question than redistributing
-code; keep decompiled output out of the repo.
+committed. Game logic is reimplemented clean-room: from the game's data,
+observation, open-source libraries and plain-language behaviour notes kept
+outside this repository. Decompiled code is never committed (see
+CONTRIBUTING.md).
 
 ## Collision avoidance
 

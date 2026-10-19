@@ -90,12 +90,8 @@ questlines whole and never cuts anything the main quest depends on.
 - **Checks before committing:** `cd web && npx tsc --noEmit`, plus the
   relevant test scripts.
 
-## Local tools (not in the repo)
+## Research (private, not in this repo)
 
-- **Ghidra 12.1.4** headless, with project `~/tools/ghidra-projects/kcd`
-  (WHGame.dll). Scripts are in `~/tools/ghidra-scripts`.
-- **Run:**
-
-  ```
-  JAVA_HOME=~/tools/jdk-21.0.12.1+1 ~/tools/ghidra_12.1.4_PUBLIC/support/analyzeHeadless ~/tools/ghidra-projects kcd -process WHGame.dll -noanalysis -readOnly -scriptPath ~/tools/ghidra-scripts -postScript X.java OUTDIR args
-  ```
+Reverse-engineering workflow, tools and behaviour notes live in the private
+`openkcd-research` repo (local: `~/openkcd-research`, see its `CLAUDE.md`).
+Read the relevant note before implementing game behaviour.
