@@ -35,12 +35,19 @@ legitimate, raise it in an issue.
 - **No decompiled code.** Never commit decompiler output, or code
   translated line by line from it. That includes Ghidra/IDA names such as
   `FUN_1801234567`, addresses and `undefined8`, in code, comments or docs.
-- **Behaviour notes.**
-  - Reverse-engineering findings are written up as plain-language behaviour
-    notes (what the game does, constants, formats) in a separate private
-    research repository.
-  - Public code is written from those notes, from the game's own data files,
-    and from observation.
+- **Two roles, kept apart.**
+  - **Research:** whoever looks at the game's binaries writes up findings as
+    plain-language behaviour notes (what the game does, constants, formats,
+    edge cases) in a separate private research repository. Researchers
+    don't write engine code for the same feature.
+  - **Implementation:** engine code is written only from those notes, the
+    game's own data files, observation of the running game, and
+    open-source libraries. Implementers never look at decompiler output.
+    If a note is missing or ambiguous, ask for it to be researched and
+    extended; don't look it up yourself.
+  - **AI assistants:** the repo's `.claude/settings.json` blocks Claude Code
+    from reading the local decompiler output folder during implementation
+    work.
 - **No CryEngine source.** Do not copy code from Crytek's CryEngine source
   release (any version). It may be consulted as a reference for file
   formats only; write your own implementation.

@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(~/tools/ghidra-out/**)",
+      "Edit(~/tools/ghidra-out/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command // \"\"' | grep -q 'tools/ghidra-out' && { echo 'Clean room: implementation sessions in openkcd must not read ~/tools/ghidra-out. Do research in ~/openkcd-research and implement from its notes.' >&2; exit 2; } || exit 0",
+            "statusMessage": "Clean-room check"
+          }
+        ]
+      }
+    ]
+  }
+}

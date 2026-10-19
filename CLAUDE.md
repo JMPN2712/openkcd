@@ -13,15 +13,20 @@ affiliated with or endorsed by Warhorse Studios or PLAION. Local folder is
 - **Never commit** game files, extracted assets, converted packages, renders
   of game content or large binaries. `.gitignore` plus `.githooks/pre-commit`
   enforce this. After cloning, run `git config core.hooksPath .githooks`.
-- **Clean room.**
-  - Decompiled output stays in `~/tools/ghidra-out` and is never committed
-    to any repo.
-  - Behaviour notes derived from decompiled code go in the private
-    `openkcd-research` repo (local: `~/openkcd-research`), as plain language
-    only.
-  - Public code is written from those notes, the game's data files and
+- **Clean room: two kinds of session, never mixed.**
+  - **Research sessions** run in `~/openkcd-research`. They may read
+    `~/tools/ghidra-out` (decompiled output, never committed anywhere), and
+    they write plain-language behaviour notes only, to the private
+    `openkcd-research` repo. They don't write OpenKCD code.
+  - **Implementation sessions** run in `~/kcd-web` (this repo). They **must
+    not read `~/tools/ghidra-out`**, or run the decompiler. They work from
+    the notes in `~/openkcd-research/notes`, the game's data files and
     open-source libraries (e.g. Recast/Detour, RVO2).
-  - No decompiler names (`FUN_…`, addresses) in this repo.
+    `.claude/settings.json` denies the path, and a Bash hook blocks commands
+    that mention it.
+  - **When a note is missing or unclear,** stop and ask for a research
+    session. Never peek.
+  - **In this repo:** no decompiler names (`FUN_…`, addresses).
 - **CryEngine source** is reference only. Never copy code from it.
 - **Branding.** Never use Warhorse's logos, artwork or branding.
 - **Hosting.** We never host or distribute game data. Players supply their
