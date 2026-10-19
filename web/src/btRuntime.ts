@@ -90,6 +90,8 @@ export interface Host {
   /** simulation seconds, real time: timeType="GameTime" (waits of 500ms, 2s, 5s; 3,664 of 3,866 Waits) */
   realTime(): number;
   random(): number;
+  /** an entity's position (NumericalOperation *_wuid) */
+  position?(id: number): [number, number, number] | null;
   /** resolve an IncludeTree target (file relative to Libs/AI, tree name) */
   tree(file: string, name: string): BtTree | undefined;
   /** run Lua; `scope` gives `data.<var>` access */
@@ -175,6 +177,29 @@ function assignPath(scope: Scope, path: string[], v: Value): void {
   (obj as Record<string, Value>)[path[path.length - 1]] = v;
 }
 
+/** The object or array an assignment target lives in, creating empty structs on the way. */
+function container(e: Expr, scope: Scope, host: Host): Value[] | Record<string, Value> | null {
+  if (e.k === "var") {
+    const cur = lookup(scope, e.path, host);
+    if (cur !== null && typeof cur === "object") return cur as Value[] | Record<string, Value>;
+    const fresh: Record<string, Value> = {};
+    assignPath(scope, e.path, fresh);
+    return fresh;
+  }
+  if (e.k === "index") {
+    const box = container(e.of, scope, host);
+    if (!box) return null;
+    const at = evaluate(e.at, scope, host);
+    const key = Array.isArray(box) ? num(at) : String(at);
+    const cur = (box as Record<string | number, Value>)[key];
+    if (cur !== null && typeof cur === "object") return cur as Value[] | Record<string, Value>;
+    const fresh: Record<string, Value> = {};
+    (box as Record<string | number, Value>)[key] = fresh;
+    return fresh;
+  }
+  return null;
+}
+
 export function evaluate(e: Expr, scope: Scope, host: Host): Value | undefined {
   switch (e.k) {
     case "num": case "dur": return e.v;
@@ -221,14 +246,23 @@ export function evaluate(e: Expr, scope: Scope, host: Host): Value | undefined {
     }
     case "cond": return truthy(evaluate(e.c, scope, host)) ? evaluate(e.a, scope, host) : evaluate(e.b, scope, host);
     case "assign": {
-      if (e.target.k !== "var") return undefined;
+      if (e.target.k !== "var" && e.target.k !== "index") return undefined;
       let v = evaluate(e.e, scope, host) ?? null;
       if (e.op !== "=") {
-        const cur = lookup(scope, e.target.path, host);
+        const cur = evaluate(e.target, scope, host);
         v = e.op === "+=" ? num(cur) + num(v) : e.op === "-=" ? num(cur) - num(v) : e.op === "*=" ? num(cur) * num(v) : num(cur) / num(v);
       }
       // ASSUMPTION: assignment copies structs (behaviour-tree variables are values)
-      assignPath(scope, e.target.path, typeof v === "object" && v !== null ? structuredClone(v) : v);
+      const val = typeof v === "object" && v !== null ? structuredClone(v) : v;
+      if (e.target.k === "var") assignPath(scope, e.target.path, val);
+      else {
+        // $a[0].name = …, $a['k'] = …: the container, created where missing (sa_home.xml#housework
+        // builds its $houseworks list this way)
+        const box = container(e.target.of, scope, host);
+        const at = evaluate(e.target.at, scope, host);
+        if (Array.isArray(box)) box[num(at)] = val;
+        else if (box) (box as Record<string, Value>)[String(at)] = val;
+      }
       return v;
     }
     case "list": {
@@ -265,6 +299,52 @@ class Slot {
   }
   get active(): boolean { return this.task !== null; }
 }
+
+/** Value at a dotted variable path ("t_params.pos"). */
+function lookupPathValue(scope: Scope, path: string): Value {
+  const [head, ...rest] = path.split(".");
+  let v: Value | undefined = scope.get(head);
+  for (const f of rest) v = v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, Value>)[f] : undefined;
+  return v ?? null;
+}
+
+const vec = (v: Value): [number, number, number] | null => Array.isArray(v) && v.length >= 3 ? [num(v[0]), num(v[1]), num(v[2])] : null;
+
+/** NumericalOperation (207 uses; operations by frequency). Vectors are [x, y, z]; *_wuid take entity ids. */
+export function numericalOperation(op: string, a: Value, b: Value, c: Value, random: () => number, position: (id: number) => [number, number, number] | null): Value | undefined {
+  const at = (v: Value) => (op.endsWith("_wuid") ? (typeof v === "number" ? position(v) : null) : vec(v));
+  const d2 = (p: [number, number, number] | null, q: [number, number, number] | null, flat: boolean) => p && q ? (p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 + (flat ? 0 : (p[2] - q[2]) ** 2) : null;
+  const va = vec(a), vb = vec(b);
+  switch (op) {
+    case "randRange": return num(a) + random() * (num(b) - num(a));
+    case "rand": return random();
+    case "distance2d": { const r = d2(at(a), at(b), true); return r === null ? undefined : Math.sqrt(r); }
+    case "distance2dSq": case "distance2dSq_wuid": return d2(at(a), at(b), true) ?? undefined;
+    case "distanceSq": case "distanceSq_wuid": return d2(at(a), at(b), false) ?? undefined;
+    case "distance": { const r = d2(at(a), at(b), false); return r === null ? undefined : Math.sqrt(r); }
+    case "sqrt": return Math.sqrt(num(a));
+    case "int2float": return num(a);
+    case "float2int": return Math.trunc(num(a));
+    case "round": return Math.round(num(a));
+    case "max": return Math.max(num(a), num(b));
+    case "mod": return num(a) % num(b);
+    case "sin": return Math.sin(num(a));
+    case "cos": return Math.cos(num(a));
+    case "pow2": return num(a) ** 2;
+    case "len": return va ? Math.hypot(...va) : undefined;
+    case "lenSq": return va ? va[0] ** 2 + va[1] ** 2 + va[2] ** 2 : undefined;
+    case "normalize": { if (!va) return undefined; const l = Math.hypot(...va) || 1; return va.map((x) => x / l); }
+    case "scale": return va ? va.map((x) => x * num(b)) : undefined;
+    case "dot": return va && vb ? va[0] * vb[0] + va[1] * vb[1] + va[2] * vb[2] : undefined;
+    case "cross": return va && vb ? [va[1] * vb[2] - va[2] * vb[1], va[2] * vb[0] - va[0] * vb[2], va[0] * vb[1] - va[1] * vb[0]] : undefined;
+    case "randVec": { const t = random() * 2 * Math.PI; return [Math.cos(t), Math.sin(t), 0]; }
+  }
+  void c;
+  return undefined;
+}
+
+/** Nested tree calls within one tick before a call fails (a tree reaching itself without waiting). */
+export const MAX_NESTING = 40;
 
 export class Runner {
   readonly host: Host;
@@ -318,6 +398,8 @@ export class Runner {
 
   /** debugging: record, per tick, the deepest chain of nodes still running (see `deepest`) */
   debug = false;
+  /** trees included or called inside one another in the current tick (see MAX_NESTING) */
+  nesting = 0;
   /** debugging: called with the node chain whenever a node fails */
   onFail: ((chain: string[]) => void) | null = null;
   /** the deepest running chain of the last ticks since reset (outermost first) */
@@ -516,7 +598,10 @@ export class Runner {
               if (!t) { this.report(`IncludeTree: ${file}#${name} not found`); return "failure"; }
               inner = this.instantiate(t, scope).task;
             }
-            const s = inner.tick();
+            if (this.nesting > MAX_NESTING) { this.report(`IncludeTree: nesting over ${MAX_NESTING} at ${file}#${name}`); inner.abort(); inner = null; return "failure"; }
+            this.nesting++;
+            let s: Status;
+            try { s = inner.tick(); } finally { this.nesting--; }
             if (s !== "running") inner = null;
             return s;
           },
@@ -601,9 +686,59 @@ export class Runner {
           return "success";
         });
       case "AllowSituations": return kids[0] ? this.make(kids[0], scope) : constant("success");
-      case "ProcessMessage":
-        // waits for a message in an inbox; NPC messaging is not modelled yet, so nothing arrives
-        return { tick: () => "running", abort: () => {} };
+      case "LoopUntil": {
+        // repeats its child until it ends with `until` (Success/Failure); attemptCount 0 or -1: no limit
+        const body = only(kids[0]);
+        const until: Status = text("until") === "Failure" ? "failure" : "success";
+        let attempts = 0;
+        return {
+          tick: () => {
+            for (let guard = 0; guard < LOOP_BUDGET; guard++) {
+              if (!body) return "success";
+              const s = body.tick();
+              if (s === "running") return s;
+              if (s === until) { attempts = 0; return "success"; }
+              const max = num(c.eval("attemptCount", 0));
+              if (max > 0 && ++attempts >= max) { attempts = 0; return "failure"; }
+            }
+            return "running";
+          },
+          abort: () => { body?.abort(); attempts = 0; },
+        };
+      }
+      case "NumericalOperation":
+        return leaf(() => {
+          // In*VariableName: a variable name or a literal number
+          const arg = (k: string): Value => { const t = n.props[k] ?? ""; if (t === "") return null; const x = Number(t); return Number.isFinite(x) ? x : (scope.get(t) ?? lookupPathValue(scope, t)); };
+          const out = numericalOperation(n.props.Operation ?? "", arg("In1VariableName"), arg("In2VariableName"), arg("In3VariableName"), () => this.host.random(), (id) => this.host.position?.(id) ?? null);
+          if (out === undefined) { this.report(`NumericalOperation ${n.props.Operation}`); return "failure"; }
+          if (n.props.OutVariableName) scope.set(n.props.OutVariableName, out);
+          return "success";
+        });
+      case "LuaGate": {
+        // runs its Lua chunk; a true result takes Then, else Else
+        let branch: Task | null = null;
+        return {
+          tick: () => {
+            if (!branch) {
+              scope.set("__kcd_result", false);
+              this.lua(text("code"), scope);
+              const go = truthy(scope.get("__kcd_result"));
+              const k = kids.find((x) => x.tag === (go ? "Then" : "Else"))?.children[0];
+              if (!k) return go ? "success" : "failure";
+              branch = this.make(k, scope);
+            }
+            const s = branch.tick();
+            if (s !== "running") branch = null;
+            return s;
+          },
+          abort: () => { branch?.abort(); branch = null; },
+        };
+      }
+      // animations end with their PlayAnimation (it runs for the clip's length); no items or stances
+      case "AnimationEndWait": case "MakeMeIdle": case "SetItemProperty": return constant("success");
+      case "NotSeenByPlayer":
+        return leaf(() => { if (text("result")) scope.set(text("result"), true); return "success"; });
       case "IfGate": {
         // KeepRunning: wait until the condition holds, then run the child; Halt: fail if it does not hold
         const body = only(kids[0]);

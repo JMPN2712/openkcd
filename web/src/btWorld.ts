@@ -16,7 +16,7 @@
 import { parseTreeFile, type BtNode, type BtTree, type BtVariable } from "./bt.ts";
 import type { Vfs } from "./vfs.ts";
 import { readTable } from "./tables.ts";
-import { Runner, Scope, type Context, type Host, type Status, type Task, type Value } from "./btRuntime.ts";
+import { MAX_NESTING, Runner, Scope, type Context, type Host, type Status, type Task, type Value } from "./btRuntime.ts";
 import { entityProperties, type EntityInfo } from "./levelEntities.ts";
 import type { Row } from "./tables.ts";
 import { setTypeDefs } from "./btRuntime.ts";
@@ -436,7 +436,10 @@ export class AiWorld {
           this.emit("RequestOK");
           inner = this.runner.instantiate(tree, this.globals(this.current.npc, { __object: { id: target }, __behaviorName: b.name, __area: c.scope.get("__area") ?? null }, c.scope)).task;
         }
-        const s = inner.tick();
+        if (this.runner.nesting > MAX_NESTING) { this.runner.report(`CallBehavior: nesting over ${MAX_NESTING} at ${String(c.eval("BehaviorName", ""))}`); inner.abort(); inner = null; release(); this.emit("BehFail"); return "failure"; }
+        this.runner.nesting++;
+        let s: Status;
+        try { s = inner.tick(); } finally { this.runner.nesting--; }
         if (s !== "running") { inner = null; release(); this.emit(s === "success" ? "BehSucces" : "BehFail"); }
         return s;
       },
@@ -706,12 +709,18 @@ export class AiWorld {
         const body = kids.find((k) => k.tag === "Subtree")?.children[0];
         const catches = kids.filter((k) => k.tag === "BehaviorTagCatch");
         const inner = body ? this.runner.make(body, c.scope) : null;
+        // a handler's own events (its CallBehavior failing) are not caught again by this TryCatch
+        let handling = false;
         const onEvent = (reason: string) => {
+          if (handling) return;
           const k = catches.find((x) => this.prop(x, "Reason") === reason);
           if (k?.children[0]) {
             // ASSUMPTION: catch handlers are instant (Expression nodes in practice)
-            const t = this.runner.make(k.children[0], c.scope);
-            for (let i = 0; i < 16 && t.tick() === "running"; i++);
+            handling = true;
+            try {
+              const t = this.runner.make(k.children[0], c.scope);
+              for (let i = 0; i < 16 && t.tick() === "running"; i++);
+            } finally { handling = false; }
           }
         };
         return {

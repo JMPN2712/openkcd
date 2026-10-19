@@ -298,7 +298,7 @@ function __kcd_exec(code, entityId, entityName, dataJson)
   local f, err = loadstring("local entity, data = ...\\n" .. code, "=tree")
   if not f then __kcd_error(err) return nil end
   local ok, e = pcall(f, entity, data)
-  if not ok then __kcd_error(tostring(e)) end
+  if not ok then __kcd_error(tostring(e)) elseif data.__kcd_result ~= nil then data.__kcd_result = (e ~= nil and e ~= false) end
   return json(data, 0)
 end
 `;
