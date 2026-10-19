@@ -281,7 +281,16 @@ export class Runner {
   /** Instantiate a tree: its variables in a new scope under `parent`, its Root as a task. */
   instantiate(tree: BtTree, parent: Scope | null = null): { task: Task; scope: Scope } {
     const scope = new Scope(parent);
-    for (const v of tree.variables) scope.declare(v);
+    // t_ variables are the NPC's temporaries, shared by all its trees: each tree declares the ones it
+    // uses (for their type), but they live in the outermost (brain) scope, created on first
+    // declaration (sa_home.xml#Eater sets $t_nextBehavior; utils.xml#doNextBehavior reads it two
+    // calls below, through so_multislot.xml#useItem, which does not declare it)
+    let brain: Scope = scope;
+    while (brain.parent) brain = brain.parent;
+    for (const v of tree.variables) {
+      if (v.name.startsWith("t_") && brain !== scope) { if (!brain.vars.has(v.name)) brain.declare(v); }
+      else scope.declare(v);
+    }
     const root = tree.root;
     if (!root) return { task: constant("success"), scope };
     return { task: this.make(root, scope), scope };
@@ -307,7 +316,35 @@ export class Runner {
     };
   }
 
+  /** debugging: record, per tick, the deepest chain of nodes still running (see `deepest`) */
+  debug = false;
+  /** debugging: called with the node chain whenever a node fails */
+  onFail: ((chain: string[]) => void) | null = null;
+  /** the deepest running chain of the last ticks since reset (outermost first) */
+  deepest: string[] = [];
+  private stack: string[] = [];
+
   make(n: BtNode, scope: Scope): Task {
+    const t = this.makeNode(n, scope);
+    if (!this.debug) return t;
+    const p = n.props;
+    const what = p.Name ?? p.BehaviorName ?? p.SemaphoreName ?? p.LockName ?? p.condition ?? p.expressions ?? p.duration ?? "";
+    const label = `${n.tag}${what ? ` ${(quoted(what) ?? what).slice(0, 60)}` : ""}`;
+    return {
+      tick: () => {
+        this.stack.push(label);
+        try {
+          const s = t.tick();
+          if (s === "running" && this.stack.length > this.deepest.length) this.deepest = [...this.stack];
+          if (s === "failure" && this.onFail) this.onFail(this.stack);
+          return s;
+        } finally { this.stack.pop(); }
+      },
+      abort: () => t.abort(),
+    };
+  }
+
+  private makeNode(n: BtNode, scope: Scope): Task {
     const c = this.ctx(scope, n);
     const kids = n.children;
     const child = (tag: string) => kids.find((k) => k.tag === tag);
@@ -417,7 +454,9 @@ export class Runner {
           abort: () => { body?.abort(); iterations = 0; },
         };
       }
-      case "ForEach": {
+      case "ForEach": case "For": {
+        // For: as ForEach, up to endIndex (exclusive; -1 = the whole array): endIndex="'$soulCount'"
+        // with $soulCount = #t_souls in sa_event_ambushplr.xml
         const body = only(kids[0]);
         const arrName = text("array"), it = text("iterator"), val = text("value"), brk = text("break");
         let idx: number | null = null;
@@ -427,7 +466,8 @@ export class Runner {
               const arr = scope.get(arrName);
               const list = Array.isArray(arr) ? arr : [];
               if (idx === null) idx = num(c.eval("startIndex", 0));
-              if (idx >= list.length || (brk && truthy(scope.get(brk)))) { idx = null; return "success"; }
+              const end = n.tag === "For" && num(c.eval("endIndex", -1)) >= 0 ? Math.min(list.length, num(c.eval("endIndex", -1))) : list.length;
+              if (idx >= end || (brk && truthy(scope.get(brk)))) { idx = null; return "success"; }
               if (!body?.active) {
                 if (it) scope.set(it, idx);
                 if (val) scope.set(val, list[idx] ?? null);
@@ -581,6 +621,18 @@ export class Runner {
           abort: () => { body?.abort(); open = false; },
         };
       }
+      // a fresh game, never a loaded save: the Else branch
+      case "IsLoadedGate": {
+        const branch = kids.find((k) => k.tag === "Else")?.children[0];
+        return branch ? this.make(branch, scope) : constant("success");
+      }
+      // the full-detail branch / plain child: the viewer always simulates in detail
+      case "LODCheck": {
+        const branch = kids.find((k) => k.tag === "Detail")?.children[0];
+        return branch ? this.make(branch, scope) : constant("success");
+      }
+      case "LODLock": case "DisableMoveTransitions":
+        return kids[0] ? this.make(kids[0], scope) : constant("success");
       case "SuppressFailure": case "AtomicDecorator": {
         const body = only(kids[0]);
         return {

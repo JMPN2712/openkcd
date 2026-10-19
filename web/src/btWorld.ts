@@ -130,6 +130,11 @@ const wuid = (v: Value | undefined): number | null => {
 export class AiWorld {
   readonly o: WorldOptions;
   readonly runner: Runner;
+  /** debugging (runner.debug): per NPC, the deepest chain of nodes running after its last tick */
+  readonly stuckAt = new Map<number, string[]>();
+  private brains = new Map<number, Scope>();
+  /** first-come-first-served queues (Synchronize with SemaphoreCount 1), by semaphore key */
+  private queues = new Map<string, object[]>();
   /** reverse links (for "parent" edges) */
   private parents = new Map<number, { target: number; name: string }[]>();
   /** active behaviour instances per "entity/behaviour" (max_instances) */
@@ -186,12 +191,32 @@ export class AiWorld {
    * t_* parameters they read ($t_timeChanged, $t_nextBehavior, …): until that brain runs here, its
    * declared variables are provided with their initial values.
    */
-  private globals(npc: number, extra: Record<string, Value> = {}): Scope {
-    const g = new Scope();
-    for (const v of this.o.brainVars ?? []) g.declare(v);
-    for (const v of this.o.trees("final/sb_daycycles.xml", "root")?.variables ?? []) g.declare(v);
-    g.vars.set("this", { id: npc, name: this.o.ents.get(npc)?.name ?? "" });
-    g.vars.set("__player", { id: -1 });
+  /**
+   * An NPC's brain scope, shared by every behaviour it runs: brain variables and the daily-cycle
+   * root's (sb_daycycles.xml), including the t_ ones behaviours pass to those they call
+   * ($t_nextBehavior set by sa_home.xml#Eater, read in utils.xml#doNextBehavior under useItem).
+   */
+  private brain(npc: number): Scope {
+    let g = this.brains.get(npc);
+    if (!g) {
+      g = new Scope();
+      for (const v of this.o.brainVars ?? []) g.declare(v);
+      for (const v of this.o.trees("final/sb_daycycles.xml", "root")?.variables ?? []) g.declare(v);
+      g.vars.set("this", { id: npc, name: this.o.ents.get(npc)?.name ?? "" });
+      g.vars.set("__player", { id: -1 });
+      this.brains.set(npc, g);
+    }
+    return g;
+  }
+
+  /**
+   * A behaviour's system variables (__area, __object, __behaviorName) over `outer`: the NPC's brain
+   * scope for the behaviour of its activity, the caller's scope for a CallBehavior (names a called
+   * tree does not declare resolve in its caller: sa_city.xml#CityWalk_walking reads the $points
+   * and $startPoint CityWalk fills).
+   */
+  private globals(npc: number, extra: Record<string, Value> = {}, outer: Scope = this.brain(npc)): Scope {
+    const g = new Scope(outer);
     for (const [k, v] of Object.entries(extra)) {
       // system structs (__area, __object) carry the entity's name too
       const id = v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, Value>).id : undefined;
@@ -207,14 +232,22 @@ export class AiWorld {
     const tree = b && this.o.trees(b.file, b.tree);
     if (!tree) { this.trace(`no area behaviour "${name}" for ${a?.name ?? area}`); return null; }
     this.trace(`npc ${npc}: area ${a!.name} behaviour "${b!.name}" → ${b!.file}#${b!.tree}`);
-    const { task } = this.runner.instantiate(tree, this.globals(npc, { __area: { id: area } }));
+    const { task } = this.runner.instantiate(tree, this.globals(npc, { __area: { id: area }, __behaviorName: b!.name }));
     return this.bind(npc, task);
   }
 
   /** Wrap a task so world nodes know which NPC is ticking. */
   private bind(npc: number, task: Task): Task {
     return {
-      tick: () => { const prev = this.current; this.current = { npc }; try { return task.tick(); } finally { this.current = prev; } },
+      tick: () => {
+        const prev = this.current;
+        this.current = { npc };
+        if (this.runner.debug) this.runner.deepest = [];
+        try { return task.tick(); } finally {
+          this.current = prev;
+          if (this.runner.debug) this.stuckAt.set(npc, this.runner.deepest);
+        }
+      },
       abort: () => task.abort(),
     };
   }
@@ -235,8 +268,9 @@ export class AiWorld {
     const depth = Number(c.eval("depth", 1));
     const pruned = new Set(String(c.eval("EdgePruning", "")).split(",").map((s) => s.trim()).filter(Boolean));
     const or = String(c.eval("SetOperationChoice", "")).startsWith("Union");
-    const filters = n.children.filter((k) => k.tag !== "Nodalyzer");
+    const filters = n.children.filter((k) => k.tag !== "Nodalyzer" && k.tag !== "Datalyzer");
     const nodalyzers = n.children.filter((k) => k.tag === "Nodalyzer");
+    const datalyzers = n.children.filter((k) => k.tag === "Datalyzer");
     const found: { parent: number; child: number }[] = [];
     const seen = new Set<number>([origin]);
     let frontier = [origin];
@@ -261,7 +295,23 @@ export class AiWorld {
         c.scope.set(childVar, all || Array.isArray(cur) ? found.map((f) => f.child) : (found[0]?.child ?? null));
       }
     }
-    this.trace(`npc ${this.current.npc}: GraphSearch from ${this.name(origin)} → [${found.map((f) => this.name(f.child)).join(", ")}]`);
+    // Datalyzer: the found children linked from their parent by link Tag, and that link's data
+    // (the bracketed part: "animalSpawn[amount(2),class(Boar)]" → "amount(2),class(Boar)")
+    for (const z of datalyzers) {
+      const tag = this.prop(z, "Tag").replace(/^'|'$/g, "").toLowerCase(), all = this.prop(z, "Quantifiers") !== "Exists";
+      const hits: { child: number; data: string }[] = [];
+      for (const f of found) {
+        for (const l of this.o.ents.get(f.parent)?.links ?? []) {
+          if (l.target !== f.child) continue;
+          const part = l.name.split(",").map((x) => x.trim()).find((x) => x.replace(/\[.*$/, "").toLowerCase() === tag);
+          if (part) hits.push({ child: f.child, data: /\[(.*)\]$/.exec(part)?.[1] ?? "" });
+        }
+      }
+      const childVar = this.prop(z, "Child"), dataVar = this.prop(z, "Data");
+      if (childVar) c.scope.set(childVar, all ? hits.map((h) => h.child) : (hits[0]?.child ?? null));
+      if (dataVar) c.scope.set(dataVar, all ? hits.map((h) => h.data) : (hits[0]?.data ?? null));
+    }
+    this.trace(`npc ${this.current.npc}: GraphSearch from ${this.name(origin)}${found.length ? "" : ` [${filters.map((f) => `${f.tag}(${Object.entries(f.props).filter(([k]) => /tag|categor|Behavior|Class|Expres/i.test(k)).map(([k, v]) => `${k}=${v}`).join(" ")})`).join(", ")}]`} → [${found.map((f) => this.name(f.child)).join(", ")}]`);
     return found.length || !truthyProp(c.eval("failOnEmpty", true)) ? "success" : "failure";
   }
 
@@ -345,9 +395,12 @@ export class AiWorld {
 
   // ---- smart-object behaviours ----
 
+  /** A target's behaviour by name: a smart object's type, or a smart area's template (a home's "Eater_withBowl"). */
   private behaviour(target: number, name: string): Behaviour | undefined {
-    const t = this.o.ents.get(target)?.soType;
-    return t ? this.o.ai.so.get(t)?.find((b) => b.name.toLowerCase() === name.toLowerCase()) : undefined;
+    const e = this.o.ents.get(target);
+    const lower = name.toLowerCase();
+    const so = e?.soType ? this.o.ai.so.get(e.soType)?.find((b) => b.name.toLowerCase() === lower) : undefined;
+    return so ?? (e?.saTemplate ? this.o.ai.sa.get(e.saTemplate)?.find((b) => b.name.toLowerCase() === lower) : undefined);
   }
 
   private available(target: number, b: Behaviour): boolean {
@@ -375,13 +428,13 @@ export class AiWorld {
           const name = String(c.eval("BehaviorName", ""));
           const b = target === null ? undefined : this.behaviour(target, name);
           const tree = b && this.o.trees(b.file, b.tree);
-          if (target === null || !b || !tree) { this.trace(`npc ${this.current.npc}: CallBehavior "${name}" on ${target === null ? "nothing" : this.name(target)}: not found`); this.emit("BehFail"); return "failure"; }
+          if (target === null || !b || !tree) { this.trace(`npc ${this.current.npc}: CallBehavior "${name}" on ${target === null ? "nothing" : this.name(target)}: not found`); this.emit("NotFound"); return "failure"; }
           if (!this.available(target, b)) { this.emit("MaxInstance"); return "failure"; }
           this.reserve(target, b, 1);
           held = { target, b };
           this.trace(`npc ${this.current.npc}: CallBehavior "${b.name}" on ${this.name(target)} → ${b.file}#${b.tree}`);
           this.emit("RequestOK");
-          inner = this.runner.instantiate(tree, this.globals(this.current.npc, { __object: { id: target } })).task;
+          inner = this.runner.instantiate(tree, this.globals(this.current.npc, { __object: { id: target }, __behaviorName: b.name, __area: c.scope.get("__area") ?? null }, c.scope)).task;
         }
         const s = inner.tick();
         if (s !== "running") { inner = null; release(); this.emit(s === "success" ? "BehSucces" : "BehFail"); }
@@ -446,8 +499,41 @@ export class AiWorld {
     switch (n.tag) {
       case "InstantSendMessageToNPC": case "SendMessageToNPC": case "InstantMultiSendMessageToNPC":
         return leaf(() => { this.trace(`npc ${this.current.npc}: message ${n.props.type ?? ""} to ${n.props.target ?? ""}`); return "success"; });
-      case "Synchronize": {
-        // a semaphore: running until SemaphoreCount participants are inside, then the child runs
+      case "Synchronize": case "InstantSynchronize": {
+        // SemaphoreCount 1: a first-come-first-served queue (entityUtils.xml#queue): the head runs the
+        // child, the others wait, their place in OutsideQueuePosVariable (0 = inside; -1 before joining)
+        if (Number(c.eval("SemaphoreCount", 2)) === 1) {
+          const me = {};
+          let key: string | null = null;
+          let body: Task | null = null;
+          const leave = () => {
+            if (!key) return;
+            const q = this.queues.get(key);
+            if (q) { const i = q.indexOf(me); if (i >= 0) q.splice(i, 1); }
+            key = null;
+          };
+          return {
+            tick: () => {
+              if (!body) {
+                key ??= this.lockKey(n, c, "SemaphoreName");
+                const q = this.queues.get(key) ?? [];
+                this.queues.set(key, q);
+                if (!q.includes(me)) q.push(me);
+                const pos = q.indexOf(me);
+                setVar("OutsideQueuePosVariable", pos);
+                setVar("InsidePosVariable", pos);
+                if (pos > 0) return this.prop(n, "RunLogic") === "Halt" ? (leave(), "failure") : "running";
+                body = kids[0] ? this.runner.make(kids[0], c.scope) : null;
+                if (!body) { leave(); return "success"; }
+              }
+              const s = body.tick();
+              if (s !== "running") { body = null; leave(); }
+              return s;
+            },
+            abort: () => { body?.abort(); body = null; leave(); },
+          };
+        }
+        // a barrier: running until SemaphoreCount participants are inside, then the child runs
         const me = {};
         let key: string | null = null;
         let body: Task | null = null;
@@ -540,7 +626,36 @@ export class AiWorld {
         };
       }
       case "SetExternalLock":
-        return leaf(() => { this.locks.set(this.lockKey(n, c, "LockName"), c.eval("Locked", true) === true || c.eval("Locked", true) === "true"); return "success"; });
+        return leaf(() => {
+          const k = this.lockKey(n, c, "LockName"), v = c.eval("Locked", true) === true || c.eval("Locked", true) === "true";
+          this.locks.set(k, v);
+          this.trace(`npc ${this.current.npc}: lock ${k} ${v ? "closed" : "opened"}`);
+          return "success";
+        });
+      // no inventories: hands are empty
+      case "HandCheck":
+        return leaf(() => { setVar("LeftHand", null); setVar("RightHand", null); return "success"; });
+      // no player body in the viewer: everything is "not near the player"
+      case "NotNearPlayer":
+        return leaf(() => { setVar("result", true); return "success"; });
+      case "InstantExternalLock": {
+        // runs its child while the named lock is open; when the lock closes (the child or another tree
+        // locking it, as entityUtils.xml#queue does when its action is done) the child is halted: success
+        let body: Task | null = null;
+        return {
+          tick: () => {
+            const locked = () => !!this.locks.get(this.lockKey(n, c, "SemaphoreName"));
+            if (locked()) { body?.abort(); body = null; return this.prop(n, "RunLogic") === "Halt" ? "success" : "running"; }
+            body ??= kids[0] ? this.runner.make(kids[0], c.scope) : null;
+            if (!body) return "success";
+            const s = body.tick();
+            if (s !== "running") { body = null; return s; }
+            if (locked()) { this.trace(`npc ${this.current.npc}: ${this.lockKey(n, c, "SemaphoreName")} closed: halt`); body.abort(); body = null; return "success"; }
+            return s;
+          },
+          abort: () => { body?.abort(); body = null; },
+        };
+      }
       case "ExternalLock": {
         // runs its child once the named lock is free (KeepRunning waits, Halt fails)
         let body: Task | null = null;
