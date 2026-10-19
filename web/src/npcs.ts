@@ -40,6 +40,9 @@ interface Mover {
   goalZ?: number;
 }
 
+/** Body (physics capsule) radius for NPC-NPC contact: the avoidance radius less a little give. */
+const BODY_RADIUS = 0.3;
+
 /** Plans further than this (m) from where an NPC is restart it there instead of walking. */
 const SNAP_DISTANCE = 8;
 
@@ -116,6 +119,8 @@ export class NpcWorld {
     return r;
   }
 
+  /** per NPC id: the area/behaviour its tree runs (updateAi; "!…" when it could not start) */
+  readonly running = new Map<number, string>();
   /** actual movement with collision avoidance, per NPC id (stepCrowd) */
   private movers = new Map<number, Mover>();
   /** NPCs' planned spots moved off one another (key: planned spot), see stepCrowd */
@@ -198,9 +203,11 @@ export class NpcWorld {
         a.pref = dist > 1e-3 ? [(dx / dist) * Math.max(0, v), (dy / dist) * Math.max(0, v)] : [0, 0];
         a.avoids = true;
       } else {
-        // arriving: within ai_CollisionAvoidancePathEndCutoffRange the agent stops avoiding
+        // arriving: within ai_CollisionAvoidancePathEndCutoffRange the agent stops avoiding; a goal
+        // someone stands on is reached at body contact (waiting beside them, not pushing in)
+        const blocked = dist < 2 * BODY_RADIUS + 0.2 && npcs.some((o) => o !== n && this.bodyAt(o.entity.id, goal));
         const v = Math.min(speed, dist / dt);
-        a.pref = dist > 0.02 ? [(dx / dist) * v, (dy / dist) * v] : [0, 0];
+        a.pref = dist > 0.02 && !blocked ? [(dx / dist) * v, (dy / dist) * v] : [0, 0];
         a.avoids = dist > CA.pathEndCutoff;
       }
       a.vel = a.avoids ? a.vel : a.pref;
@@ -208,12 +215,16 @@ export class NpcWorld {
       agents.push(a);
     });
     avoid(agents, dt);
+    for (const n of npcs) {
+      const m = this.movers.get(n.entity.id)!;
+      m.agent.pos[0] += m.agent.vel[0] * dt;
+      m.agent.pos[1] += m.agent.vel[1] * dt;
+      m.agent.pos[2] = m.goalZ ?? m.agent.pos[2];
+    }
+    this.collideBodies(npcs);
     npcs.forEach((n) => {
       const m = this.movers.get(n.entity.id)!;
       const a = m.agent;
-      a.pos[0] += a.vel[0] * dt;
-      a.pos[1] += a.vel[1] * dt;
-      a.pos[2] = m.goalZ ?? a.pos[2];
       const moving = Math.hypot(a.vel[0], a.vel[1]) > 0.15;
       // turn towards the walking direction (up to 2 turns a second), else the planned facing
       const want = moving ? Math.atan2(a.vel[1], a.vel[0]) - Math.PI / 2 : yawOf(m.ref.rot);
@@ -223,6 +234,38 @@ export class NpcWorld {
       const pose: Pose = moving ? "walk" : settled && m.ref.pose !== "walk" ? m.ref.pose : "stand";
       m.shown = { ...m.ref, pos: [...a.pos], rot: [Math.cos(m.yaw / 2), 0, 0, Math.sin(m.yaw / 2)], pose };
     });
+  }
+
+  /** Whether NPC `id`'s body covers point `p` (same floor). */
+  private bodyAt(id: number, p: Vec3): boolean {
+    const a = this.movers.get(id)?.agent;
+    return !!a && Math.hypot(a.pos[0] - p[0], a.pos[1] - p[1]) < 2 * BODY_RADIUS && Math.abs(a.pos[2] - p[2]) < 1;
+  }
+
+  /**
+   * Bodies don't pass through one another (in the game, the characters' physics capsules): overlapping
+   * pairs are pushed apart, the moving one taking the push, and NPCs at work, eating or in bed (playing
+   * a behaviour animation) not at all.
+   */
+  private collideBodies(npcs: WorldNpc[]): void {
+    const ms = npcs.map((n) => this.movers.get(n.entity.id)!);
+    const fixed = (m: Mover) => m.ref.pose === "act" || m.ref.pose === "sleep";
+    const moving = (m: Mover) => Math.hypot(m.agent.vel[0], m.agent.vel[1]) > 0.05;
+    for (let i = 0; i < ms.length; i++) for (let j = i + 1; j < ms.length; j++) {
+      const a = ms[i].agent, b = ms[j].agent;
+      if (Math.abs(a.pos[2] - b.pos[2]) > 1) continue;
+      let dx = b.pos[0] - a.pos[0], dy = b.pos[1] - a.pos[1];
+      let d = Math.hypot(dx, dy);
+      const overlap = 2 * BODY_RADIUS - d;
+      if (overlap <= 0) continue;
+      if (d < 1e-4) { dx = 1; dy = 0; d = 1; }
+      // share of the push each takes
+      let wa = fixed(ms[i]) ? 0 : moving(ms[i]) ? 2 : 1, wb = fixed(ms[j]) ? 0 : moving(ms[j]) ? 2 : 1;
+      if (wa + wb === 0) continue;
+      const k = overlap / d / (wa + wb);
+      a.pos[0] -= dx * k * wa; a.pos[1] -= dy * k * wa;
+      b.pos[0] += dx * k * wb; b.pos[1] += dy * k * wb;
+    }
   }
 
   /** The placement stepCrowd last produced for an NPC (undefined before it runs). */
@@ -317,9 +360,33 @@ export class NpcWorld {
 }
 
 /**
- * Start or stop the NPCs' workplace behaviour trees: an NPC that has arrived at work (schedule
- * activity "work", not walking) runs its work area's behaviour named by its Work link
- * (Work['tailor'] → "tailor"); when the activity changes, the tree stops.
+ * The area behaviour an NPC runs for a schedule activity, as the game's daily cycle maps them
+ * (Libs/AI/final/sa_city.xml interpretBehavior): work → the Work link's area and the behaviour
+ * its link names (Work[tailor], Work['tailor'], Work[('merchant')]); morning → home
+ * "BreakfastEater"; eat → home "Eater" (the game may send them to a pub instead). fun → home
+ * "hangingOut" is an APPROXIMATION: the game picks a fun setting (pub, bench, walk) in its "fun"
+ * tree. Sleep stays with the schedule's bed placement.
+ */
+export function activityBehaviour(e: NpcEntity, activity: string): { area: number; behaviour: string; where: string } | null {
+  const a = activity.toLowerCase();
+  const link = (role: string) => [...e.links].find(([k]) => k.split(",").some((x) => x.trim().startsWith(role)));
+  if (a === "work") {
+    const l = link("Work[") ?? link("Work");
+    const name = l && /Work\[([^\]]+)\]/.exec(l[0])?.[1].replace(/[()'"\s]/g, "");
+    return l && name ? { area: l[1], behaviour: name, where: "work" } : null;
+  }
+  const home = link("Home");
+  if (!home) return null;
+  if (a === "morning") return { area: home[1], behaviour: "BreakfastEater", where: "home" };
+  if (a === "eat") return { area: home[1], behaviour: "Eater", where: "home" };
+  if (a === "fun") return { area: home[1], behaviour: "hangingOut", where: "home" };
+  return null;
+}
+
+/**
+ * Start or stop the NPCs' area behaviour trees: an NPC that has arrived where its schedule puts it
+ * (not walking) runs the behaviour for its current activity (activityBehaviour); when the activity
+ * changes, the tree stops and the next one starts on arrival.
  */
 export function updateAi(npcs: WorldNpc[], world: NpcWorld, minute: number): void {
   const ai = world.ai;
@@ -328,13 +395,14 @@ export function updateAi(npcs: WorldNpc[], world: NpcWorld, minute: number): voi
   for (const id of ai.ids()) if (!inView.has(id)) ai.stop(id);
   for (const n of npcs) {
     const p = world.scheduled(n.entity, n.schedule, minute);
-    const atWork = p.where === "work" && p.pose === "stand";
-    if (!atWork) { ai.stop(n.entity.id); continue; }
-    if (ai.has(n.entity.id)) continue;
-    const link = [...n.entity.links].find(([k]) => k.split(",").some((x) => x.startsWith("Work")));
-    if (!link) continue;
-    const behaviour = /Work\['?([^'\]]+)'?\]/.exec(link[0])?.[1];
-    if (behaviour) ai.start(n.entity, link[1], behaviour, p.pos, p.rot);
+    const want = p.pose === "stand" ? activityBehaviour(n.entity, p.activity) : null;
+    const key = want && want.where === p.where ? `${want.area}/${want.behaviour}` : "";
+    if (!key) { ai.stop(n.entity.id); world.running.delete(n.entity.id); continue; }
+    if (ai.has(n.entity.id) && world.running.get(n.entity.id) === key) continue;
+    // a tree that could not start (no such behaviour in the area) is not retried every check
+    if (world.running.get(n.entity.id) === `!${key}`) continue;
+    const ok = ai.start(n.entity, want!.area, want!.behaviour, p.pos, p.rot);
+    world.running.set(n.entity.id, ok ? key : `!${key}`);
   }
 }
 
