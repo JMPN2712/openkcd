@@ -64,6 +64,9 @@ playable frame rates on the Potato preset.
 ## 3. Public GitHub release
 
 - [ ] Choose a license.
+- [x] Clean-room rebuilds of code first written with decompiler output in view: collision
+      avoidance (`crowd.ts`) and the navmesh decoder (`navmesh.ts`, `tools/navmesh.py`), now
+      written from research notes (2026-10-19).
 - [ ] Final clean-room and history audit (no game data, no decompiled code,
       no branding).
 - [ ] Make the `openkcd` repo public, with build and run docs and a
