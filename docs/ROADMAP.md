@@ -46,8 +46,11 @@ playable frame rates on the Potato preset.
         movement at the clip speeds, spawning in Rataje's market
         (`player.ts`, `playerSession.ts`, `scripts/test-player.ts`).
   - [ ] Collision with buildings and objects.
-- [ ] First-person camera on Henry's skeleton (head bone), with body
-      awareness.
+- [x] First-person camera on Henry's skeleton (head bone), with body
+      awareness: the eye at the `camera` bone, pitch −70° to +80° (−35° to
+      +45° sprinting), the full body drawn with the head and hair hidden, a
+      1 cm near plane (reversed-Z depth). The eye pivots about the neck with
+      the pitch, standing in for the game's look IK.
 - [ ] Locomotion: idle, walk, run and turn blending from the game's
       locomotion clips.
 - [ ] Physics proxies for collision (from the models' physics meshes).

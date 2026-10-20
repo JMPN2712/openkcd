@@ -13,6 +13,7 @@ import { readCentralDirectory, readEntry } from "../src/zip.ts";
 import { parseTerrain, heightAt } from "../src/terrain.ts";
 import { PlayerController, terrainSurroundings, targetSpeed, PLAYER, GAIT_SPEED, type MoveInput } from "../src/player.ts";
 import { PlayerAvatar, SimpleLocomotion } from "../src/playerAvatar.ts";
+import { PlayerSession, PITCH } from "../src/playerSession.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
@@ -166,6 +167,25 @@ check(targetSpeed({ ...run, forward: -1, sprint: true }).gait !== "sprint", "no 
   loco.update(0.1, 3.57, "run");
   const cam = avatar.bonePos("camera");
   check(!!cam && Math.abs(cam[2] - PLAYER.eyeHeight) < 0.15, `camera bone while running at ${cam?.map((v) => v.toFixed(2))} (stance eye height ${PLAYER.eyeHeight})`);
+
+  // first person: eye at the camera bone, head hidden, pitch limits, nodding forward
+  const session = new PlayerSession(world, avatar, [2192, 1000, 0], Math.PI / 2);
+  session.update(1 / 60, { ...run, forward: 0 });
+  const feet = session.controller.pos;
+  const level = session.firstPerson();
+  check(Math.abs(level.pos[2] - feet[2] - PLAYER.eyeHeight) < 0.1, `first-person eye ${(level.pos[2] - feet[2]).toFixed(2)} m above the feet`);
+  const hidden = [...avatar.hidden].map((k) => avatar.character.parts[k].part.kind);
+  check(hidden.includes("head") && hidden.includes("hair") && !hidden.includes("body"), `first person hides ${hidden.join(", ")}`);
+  session.look(0, -10);
+  check(Math.abs(session.pitch - PITCH.min) < 1e-6, `pitch stops at ${((session.pitch * 180) / Math.PI).toFixed(0)}°`);
+  session.look(0, 10);
+  check(Math.abs(session.pitch - PITCH.max) < 1e-6, `pitch stops at +${((session.pitch * 180) / Math.PI).toFixed(0)}°`);
+  session.look(0, PITCH.min - session.pitch);
+  const down = session.firstPerson();
+  const ahead = (down.pos[0] - level.pos[0]) * Math.cos(Math.PI / 2) + (down.pos[1] - level.pos[1]) * Math.sin(Math.PI / 2);
+  check(ahead > 0.05, `looking down moves the eye ${ahead.toFixed(2)} m forward (over the collar)`);
+  session.setView("third");
+  check(avatar.hidden.size === 0, "third person draws all of Henry");
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nall checks passed");
