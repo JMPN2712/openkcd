@@ -13,7 +13,7 @@ import { parseCover, type Cover } from "./cover.ts";
 import { setGpuBlockCompression } from "./model.ts";
 import { ModelRenderer } from "./renderer.ts";
 import { WaterRenderer } from "./waterRenderer.ts";
-import { buildWorldScene, lodItems, newWorldCaches, selectLods, type WorldScene } from "./world.ts";
+import { buildWorldScene, isUberLod, lodItems, newWorldCaches, selectLods, trimWorldCaches, type WorldScene } from "./world.ts";
 import { Vfs } from "./vfs.ts";
 import { parseNpcEntities, parseEntityIndex, propEntities, type EntityInfo, type NpcEntity } from "./levelEntities.ts";
 import { Schedules } from "./schedule.ts";
@@ -224,6 +224,17 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const water = new WaterRenderer(device, format, objects.water, passSetup);
   const npcR = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
   const playerR = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
+  // the far field: every town's uber-LOD (94 in Rataje), drawn beyond the streamed objects
+  const farR = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
+  let far: { scene: WorldScene; out: Float32Array[]; counts: number[] } | null = null;
+  void buildWorldScene(vfs, terrain, objects, [terrain.size / 2, terrain.size / 2], terrain.size, {
+    maxModels: 1000, maxTextureDim: q.maxTextureDim, caches: newWorldCaches(), hiddenLayers, normalMaps: false, onlyBrushes: isUberLod,
+  }).then((scene) => {
+    if (stopped) return;
+    const items = lodItems(scene);
+    farR.setModels(items);
+    far = { scene, out: items.map((it) => new Float32Array(it.capacity * 16)), counts: items.map(() => 0) };
+  }).catch((err) => console.warn("far field:", err));
   const sky = new SkyRenderer(device, format, passSetup);
   const todProfile = tod ? pickProfile(tod) : null;
   // Henry: the player character (loaded in the background; free-fly until then)
@@ -231,7 +242,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let mode: "player" | "fly" = "fly";
   let playerInfo = "Henry: loading…";
   // terrain plus the streamed objects' collision geometry (physics proxies first, collision.ts)
-  const surroundings = new CollisionWorld((x, y) => heightAt(terrain, x, y));
+  const surroundings = new CollisionWorld((x, y) => heightAt(terrain, x, y), terrain.size);
   void PlayerAvatar.load(vfs, { maxTextureDim: Math.max(256, q.maxTextureDim) }).then((avatar) => {
     if (stopped) return;
     player = new PlayerSession(surroundings, avatar, SPAWN, SPAWN_YAW);
@@ -324,6 +335,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         lodCounts = items.map(() => 0);
         scene = next;
         streamedAt = at;
+        // forget what the last two positions' scenes (two builds each) didn't use
+        trimWorldCaches(caches!, 4);
         sceneInfo = `${next.models.length} models, ${next.instances.toLocaleString()} instances within ${STREAM_RADIUS} m${next.modelsSkipped ? ` (loading ${next.modelsSkipped} more…)` : ""}`;
         if (!next.modelsSkipped) break;
       }
@@ -447,8 +460,13 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const vp = TerrainRenderer.viewProj(cam, target.width / target.height, { reversed: true, near: mode === "player" && player?.viewMode === "first" ? 0.01 : 0.1 });
     // day and night from the level's time of day at the game clock
     const skyState = todProfile ? skyAt(todProfile, minute / 60) : null;
+    if (far) {
+      const f = far;
+      selectLods(f.scene, cam.pos, vp, f.out, f.counts, { uberNear: STREAM_RADIUS * 0.9 });
+      f.counts.forEach((n, k) => farR.setInstances(k, f.out[k], n));
+    }
     if (skyState) {
-      models.lighting = npcR.lighting = playerR.lighting = skyState.lighting;
+      models.lighting = npcR.lighting = playerR.lighting = farR.lighting = skyState.lighting;
       sky.update(invert(vp), cam.pos, skyState);
     }
     renderer.prepare(cam, vp, { lighting: skyState?.lighting, lodDistance: q.terrainLod });
@@ -456,6 +474,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85], undefined, skyState?.lighting, skyState?.horizon);
     npcR.setCamera(vp, cam.pos);
     playerR.setCamera(vp, cam.pos);
+    farR.setCamera(vp, cam.pos);
     npcWorld.stepCrowd(npcs, minute, simDt);
     animateNpcs(npcs, npcWorld, minute, simSeconds, npcR, cam.pos);
     if (scene) {
@@ -476,6 +495,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     });
     if (skyState) sky.draw(pass);
     renderer.draw(pass);
+    farR.draw(pass);
     models.draw(pass);
     npcR.draw(pass);
     if (player && mode === "player") playerR.draw(pass);
@@ -495,6 +515,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     models.destroy();
     npcR.destroy();
     playerR.destroy();
+    farR.destroy();
     sky.destroy();
     shadowMap?.destroy();
     water.destroy();

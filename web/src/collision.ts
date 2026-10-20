@@ -109,8 +109,12 @@ export class CollisionWorld implements Surroundings {
   /** shapes chosen, by source (for the HUD and the report) */
   readonly stats: Record<CollisionSource, number> = { proxy: 0, render: 0, visible: 0, none: 0 };
 
-  constructor(terrainHeight: (x: number, y: number) => number) {
+  /** the map's extent (heightmap size), kept a couple of metres in */
+  readonly bounds?: [number, number];
+
+  constructor(terrainHeight: (x: number, y: number) => number, mapSize?: number) {
     this.terrainHeight = terrainHeight;
+    if (mapSize) this.bounds = [2, mapSize - 2];
   }
 
   floor(x: number, y: number): number {

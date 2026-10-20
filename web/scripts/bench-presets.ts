@@ -93,7 +93,7 @@ for (const pp of gpus) {
       if (shadowMap) casters.setScene(scene, items.map((it) => it.capacity), shadowMap.cascades);
       const lodOut = items.map((it) => new Float32Array(it.capacity * 16));
       const lodCounts = items.map(() => 0);
-      const world = new CollisionWorld(h);
+      const world = new CollisionWorld(h, lvl.terrain.size);
       world.setScene(scene);
       const session = new PlayerSession(world, avatar, [sc.at[0], sc.at[1], 0], sc.yaw);
       session.pitch = sc.pitch;

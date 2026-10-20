@@ -11,7 +11,7 @@ import { heightAt } from "../src/terrain.ts";
 import { TerrainRenderer, type FlyCamera } from "../src/terrainRenderer.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 import { WaterRenderer } from "../src/waterRenderer.ts";
-import { buildWorldScene, lodItems, newWorldCaches, selectLods } from "../src/world.ts";
+import { buildWorldScene, isUberLod, lodItems, newWorldCaches, selectLods } from "../src/world.ts";
 import { PlayerAvatar } from "../src/playerAvatar.ts";
 import { PlayerSession } from "../src/playerSession.ts";
 import { type MoveInput } from "../src/player.ts";
@@ -32,6 +32,8 @@ const view = opt("--view", "third");
 const pitch0 = Number(opt("--pitch", "-10"));
 const radius = Number(opt("--radius", "250"));
 const clock = opt("--clock", "12:00").split(":").map(Number);
+// a free camera instead of Henry's view: x,y,z,yawDeg,pitchDeg (z 0 = 2 m above the ground)
+const fly = opt("--fly", "");
 const [outDir] = args;
 if (!outDir) throw new Error("usage: render-player.ts OUT_DIR [options]");
 await mkdir(outDir, { recursive: true });
@@ -64,8 +66,15 @@ const lodOut = items.map((it) => new Float32Array(it.capacity * 16));
 const lodCounts = items.map(() => 0);
 console.log(`world: ${scene.models.length} models, ${scene.instances} instances within ${radius} m (${((performance.now() - t0) / 1000).toFixed(1)} s)`);
 
+// the far field: every uber-LOD, drawn beyond the streamed radius
+const farR = new ModelRenderer(device, format, 4, passSetup);
+const farScene = args.includes("--no-far") ? null : await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, [lvl.terrain.size / 2, lvl.terrain.size / 2], lvl.terrain.size, { maxModels: 1000, caches: newWorldCaches(), hiddenLayers: lvl.hiddenLayers, normalMaps: false, onlyBrushes: isUberLod });
+const farItems = farScene ? lodItems(farScene) : [];
+farR.setModels(farItems);
+const farOut = farItems.map((it) => new Float32Array(it.capacity * 16)), farCounts = farItems.map(() => 0);
+if (farScene) console.log(`far field: ${farScene.instances} uber-LOD instances of ${farScene.models.length} models`);
 const avatar = await PlayerAvatar.load(lvl.vfs);
-const surroundings = new CollisionWorld((x, y) => heightAt(lvl.terrain, x, y));
+const surroundings = new CollisionWorld((x, y) => heightAt(lvl.terrain, x, y), lvl.terrain.size);
 if (!args.includes("--no-collision")) surroundings.setScene(scene);
 const session = new PlayerSession(surroundings, avatar, [ax, ay, 0], (ayaw * Math.PI) / 180);
 session.pitch = (pitch0 * Math.PI) / 180;
@@ -77,20 +86,29 @@ terrainR.setShadow(shadowMap);
 const profile = lvl.tod ? pickProfile(lvl.tod) : null;
 async function render(name: string): Promise<void> {
   session.avatar.upload(playerR);
-  const cam: FlyCamera = session.camera(1);
+  let cam: FlyCamera = session.camera(1);
+  if (fly) {
+    const [fx, fy, fz, fyaw, fpitch] = fly.split(",").map(Number);
+    cam = { pos: [fx, fy, fz || heightAt(lvl.terrain, fx, fy) + 2], yaw: (fyaw * Math.PI) / 180, pitch: (fpitch * Math.PI) / 180 };
+  }
   const g = heightAt(lvl.terrain, cam.pos[0], cam.pos[1]);
   if (session.viewMode === "third" && cam.pos[2] < g + 0.3) cam.pos[2] = g + 0.3;
   const vp = TerrainRenderer.viewProj(cam, W / H, { reversed: true, near: session.viewMode === "first" ? 0.01 : 0.1 });
   const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts);
   lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
   const state = profile ? skyAt(profile, clock[0] + clock[1] / 60) : null;
+  if (farScene) {
+    selectLods(farScene, cam.pos, vp, farOut, farCounts, { uberNear: radius * 0.9 });
+    farCounts.forEach((n, k) => farR.setInstances(k, farOut[k], n));
+  }
   if (state) {
-    models.lighting = playerR.lighting = state.lighting;
+    models.lighting = playerR.lighting = farR.lighting = state.lighting;
     sky.update(invert(vp), cam.pos, state);
   }
   terrainR.prepare(cam, vp, { lighting: state?.lighting });
   models.setCamera(vp, cam.pos);
   playerR.setCamera(vp, cam.pos);
+  farR.setCamera(vp, cam.pos);
   water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85], undefined, state?.lighting, state?.horizon);
   const enc = device.createCommandEncoder();
   if (shadowMap && state) {
@@ -103,6 +121,7 @@ async function render(name: string): Promise<void> {
   });
   if (state) sky.draw(pass);
   terrainR.draw(pass);
+  farR.draw(pass);
   models.draw(pass);
   playerR.draw(pass);
   water.draw(pass);

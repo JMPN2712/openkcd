@@ -18,12 +18,16 @@ in your browser, from **your own copy of the game**, using WebGPU and WebAssembl
 Early development. What works today, inside an installed-folder viewer:
 
 - Browsing every pak, texture, model and character.
-- Flying over Rataje: terrain, buildings, vegetation and water, streamed
-  around the camera.
+- **Walking the whole map as Henry**, in first or third person:
+  - the game's locomotion animations;
+  - collision from the models' physics proxies;
+  - day and night from the level's time of day;
+  - sun shadows, normal maps and terrain detail;
+  - four quality presets, from Potato to High.
 - NPCs placed by their daily schedules, running their work routines from the
   game's behaviour trees.
 
-There is no player, combat, dialogue or quest system yet. See
+There is no combat, dialogue or quest system yet. See
 [docs/ROADMAP.md](docs/ROADMAP.md). The current milestone is **1: walking
 simulator**. The game data will later be converted once, in the browser, from
 the GOG offline installer into a compact local package (OPFS).
@@ -87,6 +91,7 @@ node scripts/render-world.ts /tmp/w --at-npc rat_baker --npc-dist 6 --npcs --clo
 node scripts/render-world.ts /tmp/w --at-entity SO_tailorsTable_40ee6671 --npc-dist 3 --npcs --clock 10:00 --ai 30   # NPCs at work run by their behaviour trees
 node scripts/test-player.ts                      # player controller on Rataje: ground following, climb limit, jump, fall, speeds; Henry's clips
 node scripts/test-collision.ts                   # collision sources by object type around the market, random runs: no penetration, no falling through
+node --expose-gc scripts/test-streaming.ts       # two laps through the map's towns: scene rebuild times, memory levels off with cache trimming
 node scripts/test-sky.ts                         # time-of-day profiles, sunrise/sunset, the sun's path, light levels over the day
 node scripts/bench-presets.ts --gpu both         # frame rates per quality preset (Potato/Low/Medium/High), market and fields, each GPU Dawn finds
 node scripts/render-player.ts /tmp/p --walk "1:;2:w;1.5:w+shift;1:"   # headless walk as Henry with scripted input, a frame per segment

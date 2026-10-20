@@ -54,8 +54,8 @@ affiliated with or endorsed by Warhorse Studios or PLAION. Local folder is
 
 See `docs/ROADMAP.md`. In order:
 
-1. Walking simulator. **Current.**
-2. Installer converter and slim format.
+1. Walking simulator. Done (follow-ups listed in the roadmap).
+2. Installer converter and slim format. **Current.**
 3. Public GitHub release.
 4. Living world (NPC routines; partly done).
 5. Diet planning.
