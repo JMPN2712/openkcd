@@ -34,6 +34,11 @@ export interface Terrain {
   sectorSize: number; // leaf size in metres (64)
   /** (size+1)² heights in 5 cm units, row-major [y][x] */
   heights: Uint16Array;
+  /**
+   * (size+1)² surface types, row-major [y][x]: the level's SurfaceTypeID (leveldata.xml
+   * <SurfaceTypes>), from the sample's low 4 bits indexing its leaf's surface-type list; 255 none
+   */
+  surface: Uint8Array;
   minHeight: number;
   maxHeight: number;
   vegetation: VegetationGroup[];
@@ -82,6 +87,7 @@ export function parseTerrain(bytes: Uint8Array): Terrain {
 
   const side = size / unit + 1;
   const heights = new Uint16Array(side * side);
+  const surface = new Uint8Array(side * side).fill(255);
   let minHeight = Infinity, maxHeight = -Infinity, leaves = 0;
   const leafResolutions = new Map<number, number>();
 
@@ -103,6 +109,11 @@ export function parseTerrain(bytes: Uint8Array): Terrain {
       const x0 = Math.round(bx / unit), y0 = Math.round(by / unit);
       const step = span / (n - 1);
       const at = (ix: number, iy: number) => offset + (dv.getUint16(samples + (ix * n + iy) * 2, true) & 0xfff0) / 320;
+      const types = samples + align4(n * n * 2) + 24;
+      const surf = (ix: number, iy: number) => {
+        const k = dv.getUint16(samples + (ix * n + iy) * 2, true) & 15;
+        return k < nSurf ? dv.getUint8(types + k) : 255;
+      };
       for (let gy = 0; gy <= span; gy++) {
         const fy = gy / step, iy = Math.min(n - 2, Math.floor(fy)), ty = fy - iy;
         for (let gx = 0; gx <= span; gx++) {
@@ -111,6 +122,7 @@ export function parseTerrain(bytes: Uint8Array): Terrain {
             ? at(gx, gy)
             : (at(ix, iy) * (1 - tx) + at(ix + 1, iy) * tx) * (1 - ty) + (at(ix, iy + 1) * (1 - tx) + at(ix + 1, iy + 1) * tx) * ty;
           heights[(y0 + gy) * side + x0 + gx] = Math.max(0, Math.round(h / HEIGHT_UNIT));
+          surface[(y0 + gy) * side + x0 + gx] = surf(Math.min(n - 1, Math.round(fx)), Math.min(n - 1, Math.round(fy)));
           if (h < minHeight) minHeight = h;
           if (h > maxHeight) maxHeight = h;
         }
@@ -119,7 +131,7 @@ export function parseTerrain(bytes: Uint8Array): Terrain {
     if (depth < 32 && (bx1 - bx) > sectorSize + 0.5) for (let c = 0; c < 4; c++) node(depth + 1);
   };
   node(0);
-  return { size, unit, sectorSize, heights, minHeight, maxHeight, vegetation, brushNames, materials, objectsOffset: o, leaves, leafResolutions };
+  return { size, unit, sectorSize, heights, surface, minHeight, maxHeight, vegetation, brushNames, materials, objectsOffset: o, leaves, leafResolutions };
 }
 
 /** Height in metres at world (x, y), bilinear. */

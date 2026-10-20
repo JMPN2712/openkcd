@@ -44,14 +44,14 @@ export interface LoadedModel {
 }
 
 /** Decode a texture's mip chain from the largest level <= maxDim down to 1×1-ish. */
-export async function loadMipChain(vfs: Vfs, stem: string, maxDim: number): Promise<MipChain> {
+export async function loadMipChain(vfs: Vfs, stem: string, maxDim: number, opts: { rgba?: boolean } = {}): Promise<MipChain> {
   const t = await openTexture(vfs, stem);
   if (!t.header.format) throw new Error(`unsupported format ${t.header.formatLabel}`);
   let level = t.firstLevel;
   while (level < t.header.mipCount - 1 && Math.max(...mipDims(t.header, level)) > maxDim) level++;
   const levels: MipChain["levels"] = [];
   const bcFormat = BC_FORMATS[t.header.format.name];
-  if (gpuBc && bcFormat && !t.attached) {
+  if (gpuBc && bcFormat && !t.attached && !opts.rgba) {
     // the GPU decodes BCn itself: keep the blocks (4–8× smaller than RGBA, no CPU decode)
     for (let l = level; l < t.header.mipCount; l++) {
       const [w, h] = mipDims(t.header, l);

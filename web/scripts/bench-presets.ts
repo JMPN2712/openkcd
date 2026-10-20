@@ -27,6 +27,7 @@ import { Schedules } from "../src/schedule.ts";
 import { readCentralDirectory, readEntry } from "../src/zip.ts";
 import type { MoveInput } from "../src/player.ts";
 import { openRataje } from "./lib.ts";
+import { loadDetailLayers } from "../src/terrainDetail.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
@@ -68,7 +69,7 @@ for (const pp of gpus) {
     const q = PRESETS[name];
     const pass: PassSetup = { sampleCount: q.msaa, reversedZ: true };
     const w = Math.round(W * q.renderScale), hgt = Math.round(H * q.renderScale);
-    const terrainR = new TerrainRenderer(device, format, lvl.terrain, lvl.cover, pass);
+    const terrainR = new TerrainRenderer(device, format, lvl.terrain, lvl.cover, pass, await loadDetailLayers(lvl.vfs, lvl.surfaceTypes, q.terrainDetail), { detailFade: q.detailFade });
     const models = new ModelRenderer(device, format, q.msaa, pass);
     const water = new WaterRenderer(device, format, lvl.objects.water, pass);
     const playerR = new ModelRenderer(device, format, q.msaa, pass);

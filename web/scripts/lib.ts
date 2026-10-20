@@ -17,6 +17,7 @@ import { parseEntityIndex, propEntities, type EntityInfo } from "../src/levelEnt
 import { parseLayerNames, defaultHiddenLayers } from "../src/levelLayers.ts";
 import { setGpuBlockCompression } from "../src/model.ts";
 import { parseTimeOfDay, type TimeOfDay } from "../src/tod.ts";
+import { parseSurfaceTypes } from "../src/terrainDetail.ts";
 
 Object.assign(globalThis, globals);
 
@@ -39,6 +40,8 @@ export interface Level {
   props: EntityInfo[];
   hiddenLayers: Set<number>;
   tod: TimeOfDay | null;
+  /** surface type id → detail material (leveldata.xml) */
+  surfaceTypes: Map<number, string>;
 }
 
 /** Rataje with the asset VFS (level files on top), like the world view. */
@@ -65,10 +68,12 @@ export async function openRataje(root: string, opts: { cover?: boolean; hd?: boo
   const mission = await read("objects_mission0.xml");
   const props = mission ? propEntities(parseEntityIndex(new TextDecoder().decode(mission))) : [];
   const ld = await read("leveldata.xml");
-  const hiddenLayers = ld ? defaultHiddenLayers(parseLayerNames(new TextDecoder().decode(ld))) : new Set<number>();
+  const ldText = ld ? new TextDecoder().decode(ld) : "";
+  const hiddenLayers = ld ? defaultHiddenLayers(parseLayerNames(ldText)) : new Set<number>();
+  const surfaceTypes = parseSurfaceTypes(ldText);
   const missionEnv = await read("mission_mission0.xml");
   const tod = missionEnv ? parseTimeOfDay(new TextDecoder().decode(missionEnv)) : null;
-  return { sources, vfs, terrain, objects, cover, props, hiddenLayers, tod };
+  return { sources, vfs, terrain, objects, cover, props, hiddenLayers, tod, surfaceTypes };
 }
 
 /** The Dawn instance must outlive its devices (collected, it aborts the process on the next map). */

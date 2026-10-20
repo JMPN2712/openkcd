@@ -34,6 +34,7 @@ import { depthClear, depthFormat, type PassSetup } from "./mat4.ts";
 import { parseTimeOfDay, type TimeOfDay } from "./tod.ts";
 import { SkyRenderer, skyAt, pickProfile, invert } from "./sky.ts";
 import { PRESETS, savedPreset, savePreset, type PresetName } from "./quality.ts";
+import { loadDetailLayers, parseSurfaceTypes } from "./terrainDetail.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -43,7 +44,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 }
 
 let stopActive: (() => void) | null = null;
-const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules; props: EntityInfo[]; ents: Map<number, EntityInfo>; hiddenLayers: Set<number>; tod: TimeOfDay | null }>>();
+const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules; props: EntityInfo[]; ents: Map<number, EntityInfo>; hiddenLayers: Set<number>; tod: TimeOfDay | null; surfaceTypes: Map<number, string> }>>();
 const vfsCache = new Map<string, Promise<Vfs>>();
 // model caches per texture size (presets load textures at different sizes)
 const worldCaches = new Map<number, ReturnType<typeof newWorldCaches>>();
@@ -73,6 +74,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let ents: Map<number, EntityInfo>;
   let hiddenLayers: Set<number>;
   let tod: TimeOfDay | null;
+  let surfaceTypes: Map<number, string>;
   let vfs: Vfs;
   let device: GPUDevice;
   try {
@@ -97,7 +99,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         const xml = mission ? new TextDecoder().decode(await readEntry(blob, mission, undefined, false)) : "";
         // editor layers: alternative states and cutscene sets hidden at game start (levelLayers.ts)
         const ld = entries.find((e) => e.name.toLowerCase() === "leveldata.xml");
-        const hiddenLayers = ld ? defaultHiddenLayers(parseLayerNames(new TextDecoder().decode(await readEntry(blob, ld, undefined, false)))) : new Set<number>();
+        const ldText = ld ? new TextDecoder().decode(await readEntry(blob, ld, undefined, false)) : "";
+        const hiddenLayers = ld ? defaultHiddenLayers(parseLayerNames(ldText)) : new Set<number>();
+        const surfaceTypes = parseSurfaceTypes(ldText);
         const npcEntities = parseNpcEntities(xml);
         const ents = parseEntityIndex(xml);
         const schedules = new Schedules(npcEntities, ents);
@@ -118,12 +122,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         // the level's time of day (sun, sky, fog over the day, per weather profile)
         const me = entries.find((e) => e.name.toLowerCase() === "mission_mission0.xml");
         const tod = me ? parseTimeOfDay(new TextDecoder().decode(await readEntry(blob, me, undefined, false))) : null;
-        return { terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers, tod };
+        return { terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers, tod, surfaceTypes };
       })();
       p.catch(() => terrainCache.delete(pakPath));
       terrainCache.set(pakPath, p);
     }
-    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, tod } = await p);
+    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, tod, surfaceTypes } = await p);
     let v = vfsCache.get(pakPath);
     if (!v) {
       // assets from every non-level pak, with this level's own files (brush/*.cgf, …) on top
@@ -207,7 +211,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   ctx.configure({ device, format, alphaMode: "opaque" });
   // reversed-Z: the first-person view needs a 1 cm near plane (Henry's own body) and the horizon
   const passSetup: PassSetup = { sampleCount: q.msaa, reversedZ: true };
-  const renderer = new TerrainRenderer(device, format, terrain, cover, passSetup);
+  const renderer = new TerrainRenderer(device, format, terrain, cover, passSetup, undefined, { detailFade: q.detailFade });
+  // the ground's detail layers (grass, soil, cobbles…) decode in the background
+  void loadDetailLayers(vfs, surfaceTypes, q.terrainDetail).then((d) => { if (!stopped) renderer.setDetail(d); }).catch((err) => console.warn("terrain detail:", err));
   const models = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
   const water = new WaterRenderer(device, format, objects.water, passSetup);
   const npcR = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);

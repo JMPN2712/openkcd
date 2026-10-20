@@ -17,6 +17,7 @@ import { PlayerSession } from "../src/playerSession.ts";
 import { type MoveInput } from "../src/player.ts";
 import { CollisionWorld } from "../src/collision.ts";
 import { openRataje, gpuDevice, Offscreen } from "./lib.ts";
+import { loadDetailLayers } from "../src/terrainDetail.ts";
 import { depthClear, depthFormat, type PassSetup } from "../src/mat4.ts";
 import { SkyRenderer, skyAt, pickProfile, invert } from "../src/sky.ts";
 
@@ -38,7 +39,9 @@ const lvl = await openRataje(root);
 const device = await gpuDevice();
 const format: GPUTextureFormat = "rgba8unorm";
 const passSetup: PassSetup = { sampleCount: 4, reversedZ: true };
-const terrainR = new TerrainRenderer(device, format, lvl.terrain, lvl.cover, passSetup);
+const detail = args.includes("--no-detail") ? undefined : await loadDetailLayers(lvl.vfs, lvl.surfaceTypes, 512);
+if (detail) console.log(`terrain detail: ${detail.layers.length} layers (${detail.names.map((n) => n.split("/").pop()).join(", ")})`);
+const terrainR = new TerrainRenderer(device, format, lvl.terrain, lvl.cover, passSetup, detail);
 const models = new ModelRenderer(device, format, 4, passSetup);
 const water = new WaterRenderer(device, format, lvl.objects.water, passSetup);
 const playerR = new ModelRenderer(device, format, 4, passSetup);
