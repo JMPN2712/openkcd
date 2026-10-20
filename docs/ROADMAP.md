@@ -112,6 +112,9 @@ playable frame rates on the Potato preset.
       home item slots (eaters find no bowl).
 - [ ] Far vegetation (forests beyond the streamed radius are terrain colour
       only); clouds; weather profiles.
+- [ ] Water: the volumes are flat tinted polygons with a glint (no
+      reflections, waves, depth fade or shoreline blending); the most visible
+      issues found walking the whole map.
 
 ## 2. Installer converter and slim format (current)
 
