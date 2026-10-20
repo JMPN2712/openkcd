@@ -33,6 +33,7 @@ import { CollisionWorld } from "./collision.ts";
 import { depthClear, depthFormat, type PassSetup } from "./mat4.ts";
 import { parseTimeOfDay, type TimeOfDay } from "./tod.ts";
 import { SkyRenderer, skyAt, pickProfile, invert } from "./sky.ts";
+import { PRESETS, savedPreset, savePreset, type PresetName } from "./quality.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -44,10 +45,9 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 let stopActive: (() => void) | null = null;
 const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules; props: EntityInfo[]; ents: Map<number, EntityInfo>; hiddenLayers: Set<number>; tod: TimeOfDay | null }>>();
 const vfsCache = new Map<string, Promise<Vfs>>();
-const worldCaches = newWorldCaches();
-const STREAM_RADIUS = 500; // metres of objects around the camera
-const STREAM_STEP = 150; // rebuild after moving this far
-const NPC_RADIUS = 120, NPC_MAX = 40;
+// model caches per texture size (presets load textures at different sizes)
+const worldCaches = new Map<number, ReturnType<typeof newWorldCaches>>();
+const NPC_RADIUS = 120;
 const SPEEDS: [string, number][] = [["paused", 0], ["×15 (game speed)", 15], ["×60", 60], ["×720 (1 h per 5 s)", 720]];
 /** Where Henry starts: Rataje's market, under the town wall, facing south. */
 const SPAWN: [number, number, number] = [2577.8, 574, 0];
@@ -146,6 +146,13 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     return;
   }
 
+  const presetName = savedPreset();
+  const q = PRESETS[presetName];
+  const STREAM_RADIUS = q.streamRadius; // metres of objects around the camera
+  const STREAM_STEP = q.streamRadius * 0.3; // rebuild after moving this far
+  const NPC_MAX = q.npcMax;
+  let caches = worldCaches.get(q.maxTextureDim);
+  if (!caches) worldCaches.set(q.maxTextureDim, (caches = newWorldCaches()));
   const canvas = el("canvas", "model-canvas level-canvas");
   canvas.tabIndex = 0;
   const hud = el("p", "note level-hud");
@@ -165,6 +172,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const speedSel = el("select");
   for (const [label, v] of SPEEDS) speedSel.append(new Option(label, String(v), v === 15, v === 15));
   clockBar.append(el("span", "dim", "Time"), clockLabel, clockRange, speedSel);
+  // quality preset (changing it rebuilds the view: MSAA is baked into the pipelines)
+  const presetSel = el("select", "level-preset");
+  for (const [k, v] of Object.entries(PRESETS)) presetSel.append(new Option(`Quality: ${v.label}`, k, k === presetName, k === presetName));
+  presetSel.addEventListener("change", () => { savePreset(presetSel.value as PresetName); void showLevel(host, paks, level); });
+  clockBar.append(presetSel);
   stage.append(canvas, fullBtn, marketBtn, clockBar, hud);
   host.replaceChildren(
     el("p", "scene-title", `${level}: ${terrain.size} × ${terrain.size} m terrain, ${objects.brushName.length.toLocaleString()} brushes, ${objects.vegGroup.length.toLocaleString()} vegetation instances`),
@@ -194,7 +206,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const format = navigator.gpu.getPreferredCanvasFormat();
   ctx.configure({ device, format, alphaMode: "opaque" });
   // reversed-Z: the first-person view needs a 1 cm near plane (Henry's own body) and the horizon
-  const passSetup: PassSetup = { sampleCount: 4, reversedZ: true };
+  const passSetup: PassSetup = { sampleCount: q.msaa, reversedZ: true };
   const renderer = new TerrainRenderer(device, format, terrain, cover, passSetup);
   const models = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
   const water = new WaterRenderer(device, format, objects.water, passSetup);
@@ -208,7 +220,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let playerInfo = "Henry: loading…";
   // terrain plus the streamed objects' collision geometry (physics proxies first, collision.ts)
   const surroundings = new CollisionWorld((x, y) => heightAt(terrain, x, y));
-  void PlayerAvatar.load(vfs, { maxTextureDim: 512 }).then((avatar) => {
+  void PlayerAvatar.load(vfs, { maxTextureDim: Math.max(256, q.maxTextureDim) }).then((avatar) => {
     if (stopped) return;
     player = new PlayerSession(surroundings, avatar, SPAWN, SPAWN_YAW);
     playerR.setModels(avatar.renderItems());
@@ -285,7 +297,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       // dense towns like Rattay missing floors and walls, with their props floating)
       for (const maxModels of [800, 20000]) {
         const next = await buildWorldScene(vfs, terrain, objects, at, STREAM_RADIUS, {
-          maxModels, maxTextureDim: 256, caches: worldCaches, props, hiddenLayers,
+          maxModels, maxTextureDim: q.maxTextureDim, caches, props, hiddenLayers,
           onStatus: (s) => { sceneInfo = s; },
         });
         if (stopped) return;
@@ -360,7 +372,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   });
 
   const ro = new ResizeObserver(() => {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2) * q.renderScale;
     canvas.width = Math.max(1, Math.round(canvas.clientWidth * dpr));
     canvas.height = Math.max(1, Math.round(canvas.clientHeight * dpr));
   });
@@ -368,9 +380,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
 
   let raf = 0;
   let last = 0;
+  let fpsAvg = 16.7; // smoothed frame time, ms
   const frame = (now: number) => {
     raf = requestAnimationFrame(frame);
     const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
+    if (last) fpsAvg += ((now - last) - fpsAvg) * 0.05;
     last = now;
     if (mode === "player" && player) {
       player.update(dt, player.input(keys));
@@ -412,7 +426,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       depth?.destroy();
       msaa?.destroy();
       depth = device.createTexture({ size: [target.width, target.height], format: depthFormat(passSetup), sampleCount: passSetup.sampleCount, usage: GPUTextureUsage.RENDER_ATTACHMENT });
-      msaa = device.createTexture({ size: [target.width, target.height], format, sampleCount: passSetup.sampleCount, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+      msaa = passSetup.sampleCount > 1 ? device.createTexture({ size: [target.width, target.height], format, sampleCount: passSetup.sampleCount, usage: GPUTextureUsage.RENDER_ATTACHMENT }) : null;
     }
     const vp = TerrainRenderer.viewProj(cam, target.width / target.height, { reversed: true, near: mode === "player" && player?.viewMode === "first" ? 0.01 : 0.1 });
     // day and night from the level's time of day at the game clock
@@ -421,7 +435,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       models.lighting = npcR.lighting = playerR.lighting = skyState.lighting;
       sky.update(invert(vp), cam.pos, skyState);
     }
-    renderer.prepare(cam, vp, { lighting: skyState?.lighting });
+    renderer.prepare(cam, vp, { lighting: skyState?.lighting, lodDistance: q.terrainLod });
     models.setCamera(vp, cam.pos);
     water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85], undefined, skyState?.lighting, skyState?.horizon);
     npcR.setCamera(vp, cam.pos);
@@ -429,13 +443,15 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     npcWorld.stepCrowd(npcs, minute, simDt);
     animateNpcs(npcs, npcWorld, minute, simSeconds, npcR);
     if (scene) {
-      const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts);
+      const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts, { lodScale: q.lodScale, distanceScale: q.distanceScale });
       lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
       lodInfo = ` · drawing ${st.drawn.toLocaleString()} (LOD ${st.perLod.map((n) => n ?? 0).join("/")}), culled ${st.culledDistance.toLocaleString()} by distance, ${st.culledFrustum.toLocaleString()} off-screen`;
     }
     const enc = device.createCommandEncoder();
     const pass = enc.beginRenderPass({
-      colorAttachments: [{ view: msaa!.createView(), resolveTarget: target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.70, a: 1 }, loadOp: "clear", storeOp: "discard" }],
+      colorAttachments: [msaa
+        ? { view: msaa.createView(), resolveTarget: target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.70, a: 1 }, loadOp: "clear", storeOp: "discard" }
+        : { view: target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.70, a: 1 }, loadOp: "clear", storeOp: "store" }],
       depthStencilAttachment: { view: depth.createView(), depthClearValue: depthClear(passSetup), depthLoadOp: "clear", depthStoreOp: "discard" },
     });
     if (skyState) sky.draw(pass);
@@ -448,7 +464,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     device.queue.submit([enc.finish()]);
     const pc = player?.controller;
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
-    hud.textContent = `${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${sceneInfo}${lodInfo} · ${npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
+    hud.textContent = `${(1000 / fpsAvg).toFixed(0)} fps (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${sceneInfo}${lodInfo} · ${npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();

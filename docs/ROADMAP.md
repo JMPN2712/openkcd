@@ -74,6 +74,12 @@ playable frame rates on the Potato preset.
       sun follows an astronomical path fitted to the profile's sunrise and
       sunset. Clouds, shadows and weather changes are not done yet.
 - [ ] Performance presets: Potato / Low / Medium / High.
+  - [x] Presets defined and selectable in the world view; headless benchmark
+        (`scripts/bench-presets.ts`, results in `docs/PERFORMANCE.md`).
+  - [ ] Rataje's market is CPU-bound (draw recording, LOD selection, NPC
+        animation): 29 fps on Medium even on an RTX 5070 Ti, 62 fps on
+        Potato on a 2-CU integrated Radeon. Needs render bundles or merged
+        instancing, and a test on the real Vega 7 laptop.
 
 ## 2. Installer converter and slim format
 

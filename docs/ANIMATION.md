@@ -420,8 +420,9 @@ From `Scripts/Entities/actor/BasicActor.lua` (`BasicActorParams`),
 
 - **Player speeds.** The base walk, run and sprint speeds, and how
   stamina, encumbrance and skills change them. These are game code; a
-  behaviour note is needed. Until then, use the blend-space ranges:
-  1.4 / 3.6 / 6.3 m/s.
+  behaviour note is needed. OpenKCD uses the player clips' own speeds for
+  now: walk 1.40 (`relaxed_walk_medium_player`), run 3.57
+  (`relaxed_run_medium_player`) and sprint = run × 1.5 = 5.35 m/s.
 - **Physics proxies.** The MeshPhysicsData format, and which render
   subsets are physicalised when a model has no proxy (the material's
   physicalise type).
@@ -429,9 +430,13 @@ From `Scripts/Entities/actor/BasicActor.lua` (`BasicActorParams`),
   matches the game.
 - **Root motion or code-driven movement.** Whether the player moves by
   root motion or by code-driven velocity, with the blend space following
-  (the usual CryEngine setup for players).
+  (the usual CryEngine setup for players). OpenKCD is code-driven for now
+  (`player.ts`, `locomotion.ts`); root motion stays an option.
+- **Look IK in first person.** OpenKCD pivots the eye about the neck by the
+  look pitch (`playerSession.ts`) instead of solving the chrparams look IK.
 - **Start, stop and turn transitions.** How they choose a foot
-  (`_lleg`/`_rleg`).
+  (`_lleg`/`_rleg`). Starts: the TurnAngle ranges decide (a straight start
+  falls in the right-foot space). Stops: OpenKCD matches the current pose.
 - **Not done yet:**
   - facial animation;
   - cloth and pendulum attachments;
