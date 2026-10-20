@@ -21,7 +21,7 @@
 // Key-time format 6 is a bitset: u16 start, end, keyCount, then one bit per
 // frame from start (LSB first); its "length" counts u16 words.
 
-import { readRotation, ROT_SIZE, type Clip, type Quat, type Track, type Vec3 } from "./anim.ts";
+import { readMotion, readRotation, ROT_SIZE, type Clip, type Motion, type Quat, type Track, type Vec3 } from "./anim.ts";
 
 const POS_SIZE: Record<number, number> = { 0: 12, 2: 12 };
 const TIME_UNIT: Record<number, number> = { 0: 4, 1: 2, 2: 1, 6: 2 };
@@ -31,6 +31,7 @@ export interface DbaAnim {
   start: number;
   end: number;
   fps: number;
+  motion: Motion;
   records: { controllerId: number; posTime: number; pos: number; rotTime: number; rot: number }[];
 }
 
@@ -93,6 +94,7 @@ export class Dba {
       const secsPerTick = dv.getFloat32(p + 12, true);
       const start = dv.getInt32(p + 16, true);
       const stop = dv.getInt32(p + 20, true);
+      const motion = readMotion(dv, p);
       p += 132;
       const nCtl = dv.getUint16(p + 2, true);
       const recOff = dv.getUint32(p + 4, true);
@@ -109,7 +111,7 @@ export class Dba {
         });
       }
       const fps = ticksPerFrame > 0 && secsPerTick > 0 ? Math.round(1 / (ticksPerFrame * secsPerTick)) : 30;
-      this.anims.push({ name, start, end: stop, fps, records });
+      this.anims.push({ name, start, end: stop, fps, motion, records });
     }
   }
 
@@ -169,7 +171,7 @@ export class Dba {
         positions: r.pos >= 0 ? this.positions(r.pos) : [],
       });
     }
-    return { tracks, start: a.start, end: a.end, fps: a.fps };
+    return { tracks, start: a.start, end: a.end, fps: a.fps, motion: a.motion };
   }
 }
 
