@@ -300,3 +300,34 @@ Decoded by `web/src/navmesh.ts` and `tools/navmesh.py`.
   same prefix has a state 0. That is 652 layers.
 - **Before this,** drawing every layer together doubled buildings up and
   left set dressing floating in Rattay.
+
+## Time of day (`mission_mission0.xml`)
+
+The mission file's `<Environment>` holds the level's lighting setup.
+
+- **`<TimeOfDay>`:** `Time="11.9"`, `TimeAnimSpeed="15"`, and 7 weather
+  profiles (`<Profile Name Priority>`: cloudless_sunny 0.5, semicloudy_clear
+  1, cloudy_no_rain 0.3, cloudy_frequent_showers 0.35, foggy_drizzly 0.1,
+  foggy_storm 0.05, dream 0). There is also one set of variables outside any
+  profile.
+- **Variables:** each profile has about 143, as `<Variable Name Value|Color>`
+  with a `<Spline Keys="t:value:flags,…">` over the day (t = fraction of 24
+  h; colours are `(r:g:b)`). Among them:
+  - Sun color, Sun intensity;
+  - Fog color, Fog color (top), with their multipliers;
+  - Sky light (Rayleigh, Mie, sun intensity);
+  - Night sky (horizon, zenith, moon, star intensity);
+  - volumetric fog, film curve, exposure.
+- **Sun intensity** in semicloudy_clear:
+  - 100,000 at noon, 5,300 at 05:30, and a grey 65 at night, which is the
+    moonlight;
+  - it jumps at 05:01 and 20:54, i.e. sunrise and sunset.
+- **Fog colour multiplier:** 4 at noon, 0.001 at night.
+- **`<Moon Latitude="10" Longitude="45" Size="0.4">`** and
+  **`<SkyBox Material="Materials/Sky/Sky">`** sit beside it.
+
+The sun's direction is not in the profiles. `web/src/sky.ts` uses the
+astronomical path at 49.7° N, with the declination fitted to the profile's
+day length (16 h gives about 23°). It compresses the HDR values with one fixed
+adaptation curve instead of the game's auto exposure. `scripts/test-sky.ts`
+checks the profiles, the sunrise and sunset, and the light levels.

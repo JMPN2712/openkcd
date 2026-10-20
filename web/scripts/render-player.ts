@@ -1,7 +1,7 @@
 // Headless walk as Henry: runs the player session on Rataje with scripted input and renders
 // the view at the end of each input segment.
 // usage: node scripts/render-player.ts OUT_DIR [--at x,y,yawDeg] [--walk "SECONDS:KEYS;…"]
-//          [--view third|first] [--pitch DEG] [--radius R] [--root GAME_ROOT]
+//          [--view third|first] [--pitch DEG] [--radius R] [--clock HH:MM] [--root GAME_ROOT]
 // KEYS: w a s d, shift (sprint), walk (walk gait), jump; e.g. --walk "1:;2:w;1.5:w+shift;1:"
 
 import { writeFile, mkdir } from "node:fs/promises";
@@ -18,6 +18,7 @@ import { type MoveInput } from "../src/player.ts";
 import { CollisionWorld } from "../src/collision.ts";
 import { openRataje, gpuDevice, Offscreen } from "./lib.ts";
 import { depthClear, depthFormat, type PassSetup } from "../src/mat4.ts";
+import { SkyRenderer, skyAt, pickProfile, invert } from "../src/sky.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
@@ -27,6 +28,7 @@ const walk = opt("--walk", "0.5:;2:w;1.5:w+shift;1:");
 const view = opt("--view", "third");
 const pitch0 = Number(opt("--pitch", "-10"));
 const radius = Number(opt("--radius", "250"));
+const clock = opt("--clock", "12:00").split(":").map(Number);
 const [outDir] = args;
 if (!outDir) throw new Error("usage: render-player.ts OUT_DIR [options]");
 await mkdir(outDir, { recursive: true });
@@ -40,6 +42,7 @@ const terrainR = new TerrainRenderer(device, format, lvl.terrain, lvl.cover, pas
 const models = new ModelRenderer(device, format, 4, passSetup);
 const water = new WaterRenderer(device, format, lvl.objects.water, passSetup);
 const playerR = new ModelRenderer(device, format, 4, passSetup);
+const sky = new SkyRenderer(device, format, passSetup);
 const off = new Offscreen(device, W, H, format);
 const msaa = device.createTexture({ size: [W, H], format, sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
 const depth = device.createTexture({ size: [W, H], format: depthFormat(passSetup), sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
@@ -60,7 +63,7 @@ session.pitch = (pitch0 * Math.PI) / 180;
 session.setView(view === "first" ? "first" : "third");
 playerR.setModels(avatar.renderItems());
 
-const sun: [number, number, number] = [0.45, 0.25, 0.85];
+const profile = lvl.tod ? pickProfile(lvl.tod) : null;
 async function render(name: string): Promise<void> {
   session.avatar.upload(playerR);
   const cam: FlyCamera = session.camera(1);
@@ -69,13 +72,21 @@ async function render(name: string): Promise<void> {
   const vp = TerrainRenderer.viewProj(cam, W / H, { reversed: true, near: session.viewMode === "first" ? 0.01 : 0.1 });
   const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts);
   lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
-  terrainR.prepare(cam, vp);
-  for (const r of [models, water, playerR]) r.setCamera(vp, cam.pos, sun);
+  const state = profile ? skyAt(profile, clock[0] + clock[1] / 60) : null;
+  if (state) {
+    models.lighting = playerR.lighting = state.lighting;
+    sky.update(invert(vp), cam.pos, state);
+  }
+  terrainR.prepare(cam, vp, { lighting: state?.lighting });
+  models.setCamera(vp, cam.pos);
+  playerR.setCamera(vp, cam.pos);
+  water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85], undefined, state?.lighting, state?.horizon);
   const enc = device.createCommandEncoder();
   const pass = enc.beginRenderPass({
     colorAttachments: [{ view: msaa.createView(), resolveTarget: off.target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.7, a: 1 }, loadOp: "clear", storeOp: "discard" }],
     depthStencilAttachment: { view: depth.createView(), depthClearValue: depthClear(passSetup), depthLoadOp: "clear", depthStoreOp: "discard" },
   });
+  if (state) sky.draw(pass);
   terrainR.draw(pass);
   models.draw(pass);
   playerR.draw(pass);
