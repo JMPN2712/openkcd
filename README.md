@@ -1,5 +1,7 @@
 # OpenKCD
 
+**AI Disclaimer** -- This project so far is entirely vibe coded, please keep this in mind  
+
 An unofficial, open-source engine that runs **Kingdom Come: Deliverance** (2018)
 in your browser, from **your own copy of the game**, using WebGPU and WebAssembly.
 
