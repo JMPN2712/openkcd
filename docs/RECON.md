@@ -440,3 +440,16 @@ files (86.7M triangles), and visually via headless WebGPU renders from
 | `localization/German_DLC2.pak` | 84.1 | 3,459 | 83.4 | 0:3459 |  | DLC2 Hans Capon |
 | `localization/Japanese_DLC2.pak` | 90.6 | 3,447 | 90.0 | 0:3447 |  | DLC2 Hans Capon |
 
+
+
+## Normal maps (`_ddn`, `_ddna`)
+
+- **Format.** Material `Bumpmap` textures are BC5, and their DDS headers say
+  BC5_UNORM (DXGI 84). Decoded as unsigned, though, they are bimodal: 20% of
+  texels below 20 and 20% above 235, with means near 128. That is signed
+  data read as unsigned, so a flat normal's 0 lands at 0 or 255.
+- **Upload.** OpenKCD uploads them as `bc5-rg-snorm` and rebuilds Z. That
+  removed the speckle seen with the UNORM upload.
+- **Gloss.** The `_ddna` attached alpha (gloss) is not used yet.
+- **Tangents.** Every mesh checked carries the Tangents stream (type 6,
+  16 bytes: int16 tangent with handedness in w, int16 bitangent).

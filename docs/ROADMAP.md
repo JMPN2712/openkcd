@@ -72,7 +72,9 @@ playable frame rates on the Potato preset.
 - [x] Sun shadows: cascaded shadow maps for objects, NPCs and Henry
       (`shadow.ts`, `shadowPass.ts`); off on Potato. The terrain receives but
       doesn't cast yet.
-- [ ] Normal maps (objects and terrain).
+- [x] Normal maps for objects and characters: the meshes' tangent frames
+      and the materials' `_ddn`/`_ddna` maps (BC5 with signed contents, see
+      `docs/RECON.md`). Off on Potato. Terrain normal maps not done yet.
 - [ ] Whole-world streaming beyond Rataje, plus LOD.
 - [x] Time of day and sky: the level's time-of-day profile (sun colour and
       intensity, fog/sky colours, stars, moonlight) drives the light, the

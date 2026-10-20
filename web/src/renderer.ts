@@ -14,8 +14,8 @@ import { colorizeOf } from "./mtl.ts";
 import { ShadowMap, SHADOW_FORMAT, SHADOW_WGSL } from "./shadow.ts";
 import { DEFAULT_LIGHTING, depthCompare, depthFormat, lookAt, multiply, perspective, transformPoint, type Lighting, type PassSetup, type Vec3 } from "./mat4.ts";
 
-// position 3f, normal 3f, uv 2f, bone ids u16×4, weights unorm8×4
-const VERTEX_BYTES = 44;
+// position 3f, normal 3f, uv 2f, bone ids u16×4, weights unorm8×4, tangent 4f (w handedness)
+const VERTEX_BYTES = 60;
 const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
 const SHADER = /* wgsl */ `${SHADOW_WGSL}
@@ -24,7 +24,8 @@ struct Camera { viewProj: mat4x4f, eye: vec4f, light: vec4f, sunColor: vec4f, sk
 // params: x alpha test, y diffuse map, z specular map, w layer
 // colorize: KCD %COLORIZING shader, x/y/z = hue (deg) / saturation / brightness, w = 0 off, 1 global, 2 with mask
 //   (the "Specular" slot then holds the region mask: R/G/B select mask1/2/3)
-struct Draw { model: mat4x4f, color: vec4f, spec: vec4f, params: vec4f, colorize: vec4f, mask1: vec4f, mask2: vec4f, mask3: vec4f };
+// flags: x = 1 with a normal map
+struct Draw { model: mat4x4f, color: vec4f, spec: vec4f, params: vec4f, colorize: vec4f, mask1: vec4f, mask2: vec4f, mask3: vec4f, flags: vec4f };
 @group(0) @binding(0) var<uniform> cam: Camera;
 @group(0) @binding(1) var shadowTex: texture_depth_2d_array;
 @group(0) @binding(2) var shadowSamp: sampler_comparison;
@@ -35,16 +36,19 @@ struct Draw { model: mat4x4f, color: vec4f, spec: vec4f, params: vec4f, colorize
 @group(1) @binding(3) var specTex: texture_2d<f32>;
 // skinning palette: model-space bone matrices × inverse bind pose (identity for static meshes)
 @group(1) @binding(4) var<storage, read> bones: array<mat4x4f>;
+// tangent-space normal map (BC5: X, Y; Z rebuilt)
+@group(1) @binding(5) var normalTex: texture_2d<f32>;
 
 struct VOut {
   @builtin(position) pos: vec4f,
   @location(0) n: vec3f,
   @location(1) uv: vec2f,
   @location(2) wpos: vec3f,
+  @location(3) t: vec4f,
 };
 
 @vertex fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @location(2) uv: vec2f,
-               @location(3) bi: vec4u, @location(4) bw: vec4f,
+               @location(3) bi: vec4u, @location(4) bw: vec4f, @location(9) tan: vec4f,
                @location(5) i0: vec4f, @location(6) i1: vec4f, @location(7) i2: vec4f, @location(8) i3: vec4f) -> VOut {
   var o: VOut;
   let sk = bones[bi.x] * bw.x + bones[bi.y] * bw.y + bones[bi.z] * bw.z + bones[bi.w] * bw.w;
@@ -56,6 +60,7 @@ struct VOut {
   // (reversed-Z: scale the depth up by 0.02% per layer, about 0.4 mm at 2 m)
   if (cam.eye.w > 0.0) { o.pos.z = o.pos.z - drw.params.w * 0.00004 * o.pos.w; } else { o.pos.z = o.pos.z * (1.0 + drw.params.w * 0.0002); }
   o.n = (world * (sk * vec4f(n, 0.0))).xyz;
+  o.t = vec4f((world * (sk * vec4f(tan.xyz, 0.0))).xyz, tan.w);
   o.uv = uv;
   o.wpos = w.xyz;
   return o;
@@ -109,7 +114,17 @@ fn adjust(lin: vec3f, hsb: vec3f) -> vec3f {
   var n = normalize(i.n);
   if (cam.light.w > 0.5) { n = normalize(cross(dpdx(i.wpos), dpdy(i.wpos))); }
   let v = normalize(cam.eye.xyz - i.wpos);
-  if (dot(n, v) < 0.0) { n = -n; }
+  // the side facing the viewer (layered duplicates' windings disagree with their normals)
+  let flip = select(1.0, -1.0, dot(n, v) < 0.0);
+  n = n * flip;
+  // BC5 SNORM: X and Y already in -1..1
+  let nm = textureSample(normalTex, samp, i.uv).rg;
+  if (drw.flags.x > 0.5 && dot(i.t.xyz, i.t.xyz) > 1e-6) {
+    let tt = normalize(i.t.xyz - n * dot(n, i.t.xyz));
+    let bb = cross(n, tt) * i.t.w * flip;
+    let nz = sqrt(max(0.0, 1.0 - dot(nm, nm)));
+    n = normalize(tt * nm.x + bb * nm.y + n * nz);
+  }
   let l = normalize(cam.light.xyz);
   let ndl = max(dot(n, l), 0.0);
   let hemi = mix(cam.groundColor.rgb, cam.skyColor.rgb, n.z * 0.5 + 0.5);
@@ -182,6 +197,7 @@ const VERTEX_LAYOUT: GPUVertexBufferLayout[] = [{
     { shaderLocation: 2, offset: 24, format: "float32x2" },
     { shaderLocation: 3, offset: 32, format: "uint16x4" },
     { shaderLocation: 4, offset: 40, format: "unorm8x4" },
+    { shaderLocation: 9, offset: 44, format: "float32x4" },
   ],
 }, {
   arrayStride: 64,
@@ -207,6 +223,8 @@ export class ModelRenderer {
   private camBind: GPUBindGroup;
   private sampler: GPUSampler;
   private white: GPUTexture;
+  /** (0, 0): the unperturbed normal, for draws without a normal map */
+  private flatNormal: GPUTexture;
   private draws: DrawItem[] = [];
   private palettes: ({ buf: GPUBuffer; count: number } | null)[] = [];
   private itemInst: { buf: GPUBuffer; count: number; capacity: number }[] = [];
@@ -260,6 +278,7 @@ export class ModelRenderer {
         { binding: 2, visibility: F, sampler: { type: "filtering" } },
         { binding: 3, visibility: F, texture: { sampleType: "float" } },
         { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
+        { binding: 5, visibility: F, texture: { sampleType: "float" } },
       ],
     });
     this.pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [this.camLayout, this.drawLayout] });
@@ -280,6 +299,8 @@ export class ModelRenderer {
     device.queue.writeBuffer(this.identityPalette, 0, IDENTITY);
     this.white = device.createTexture({ size: [1, 1], format: "rgba8unorm-srgb", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     device.queue.writeTexture({ texture: this.white }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4 }, [1, 1]);
+    this.flatNormal = device.createTexture({ size: [1, 1], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    device.queue.writeTexture({ texture: this.flatNormal }, new Uint8Array([0, 0, 255, 255]), { bytesPerRow: 4 }, [1, 1]);
   }
 
   private shadowOrStandIn(): ShadowMap {
@@ -356,11 +377,11 @@ export class ModelRenderer {
     return s;
   }
 
-  private upload(chain: MipChain): GPUTexture {
+  private upload(chain: MipChain, linear = false): GPUTexture {
     const top = chain.levels[0];
     if (chain.bc) {
       // raw BCn blocks: the GPU decodes them (sizes rounded up to whole 4×4 blocks for small mips)
-      const format = (/^(bc1|bc2|bc3|bc7)-rgba-unorm$/.test(chain.bc.format) ? `${chain.bc.format}-srgb` : chain.bc.format) as GPUTextureFormat;
+      const format = (!linear && /^(bc1|bc2|bc3|bc7)-rgba-unorm$/.test(chain.bc.format) ? `${chain.bc.format}-srgb` : chain.bc.format) as GPUTextureFormat;
       const t = this.device.createTexture({
         size: [Math.ceil(top.w / 4) * 4, Math.ceil(top.h / 4) * 4],
         mipLevelCount: chain.levels.length,
@@ -374,11 +395,11 @@ export class ModelRenderer {
       this.owned.push(t);
       return t;
     }
-    // diffuse maps are colour data: sample as sRGB even if the DDS says UNORM
+    // diffuse maps are colour data: sample as sRGB even if the DDS says UNORM (normal maps: linear)
     const t = this.device.createTexture({
       size: [top.w, top.h],
       mipLevelCount: chain.levels.length,
-      format: "rgba8unorm-srgb",
+      format: linear ? "rgba8unorm" : "rgba8unorm-srgb",
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     });
     chain.levels.forEach((l, i) => {
@@ -453,6 +474,7 @@ export class ModelRenderer {
         if (mesh.normals) verts.set(mesh.normals.subarray(i * 3, i * 3 + 3), i * F + 3);
         else verts[i * F + 5] = 1;
         if (mesh.uvs) verts.set(mesh.uvs.subarray(i * 2, i * 2 + 2), i * F + 6);
+        if (mesh.tangents) verts.set(mesh.tangents.subarray(i * 4, i * 4 + 4), i * F + 11);
         if (palette) {
           for (let k = 0; k < 4; k++) {
             ids[i * U + 16 + k] = Math.min(mesh.boneIds![i * 4 + k], palette.count - 1);
@@ -480,17 +502,20 @@ export class ModelRenderer {
         if (mat?.nodraw) continue;
         const chain = model.diffuse[mi] ?? null;
         const specChain = model.specular[mi] ?? null;
-        const gpu = (c: MipChain | null) => {
+        const normChain = mesh.tangents ? model.normal?.[mi] ?? null : null;
+        const gpu = (c: MipChain | null, linear = false) => {
           if (!c) return this.white;
           let t = textures.get(c);
-          if (!t) textures.set(c, (t = this.upload(c)));
+          if (!t) textures.set(c, (t = this.upload(c, linear)));
           return t;
         };
+        const normTex = normChain ? gpu(normChain, true) : this.flatNormal;
         const gpuTex = gpu(chain);
         const specTex = gpu(specChain);
         if (chain) this.stats.textured++;
-        const ubuf = this.device.createBuffer({ size: 176, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        const u = new Float32Array(44);
+        const ubuf = this.device.createBuffer({ size: 192, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        const u = new Float32Array(48);
+        u.set([normChain ? 1 : 0, 0, 0, 0], 44);
         u.set(meshTm, 0);
         const col = mat?.diffuse ?? [0.8, 0.8, 0.8];
         u.set([col[0], col[1], col[2], 1], 16);
@@ -514,6 +539,7 @@ export class ModelRenderer {
             { binding: 2, resource: this.sampler },
             { binding: 3, resource: specTex.createView() },
             { binding: 4, resource: { buffer: palette ? palette.buf : this.identityPalette } },
+            { binding: 5, resource: normTex.createView() },
           ],
         });
         const ib2 = instBufs[itemIndex];
@@ -781,6 +807,7 @@ export class ModelRenderer {
     this.depth?.destroy();
     this.msaa?.destroy();
     this.white.destroy();
+    this.flatNormal.destroy();
     this.identityPalette.destroy();
     this.identityInstance.destroy();
     this.camBuf.destroy();

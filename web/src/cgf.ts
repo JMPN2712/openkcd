@@ -67,6 +67,8 @@ export interface CgfMesh {
   transform: Float32Array;
   positions: Float32Array; // xyz
   normals: Float32Array | null; // xyz
+  /** tangent xyz and handedness w (±1: bitangent = cross(normal, tangent) × w), from the Tangents stream */
+  tangents: Float32Array | null;
   uvs: Float32Array | null; // uv
   /** skinning (stream 9): 4 bone indices into the file's own CompiledBones list, 4 weights /255 */
   boneIds: Uint16Array | null;
@@ -242,6 +244,7 @@ export function parseCgf(bytes: Uint8Array): Cgf {
     const positions = decodePositions(pos, nVerts);
     const uvs = decodeUvs(get(STREAM.TexCoords), pos.type === STREAM.P3S_C4B_T2S ? pos : null, nVerts);
     const normals = decodeNormals(get(STREAM.Normals), get(STREAM.Tangents), get(STREAM.QTangents), nVerts);
+    const tangents = decodeTangents(get(STREAM.Tangents), normals, nVerts);
     const { boneIds, boneWeights } = decodeBoneMapping(get(STREAM.BoneMapping), nVerts);
     const indices = new Uint32Array(nIndices);
     for (let i = 0; i < nIndices; i++) indices[i] = idx.elemSize === 2 ? idx.data.getUint16(i * 2, true) : idx.data.getUint32(i * 4, true);
@@ -250,7 +253,7 @@ export function parseCgf(bytes: Uint8Array): Cgf {
     meshes.push({
       nodeName: node.name,
       transform: worldTm(node),
-      positions, normals, uvs, indices, boneIds, boneWeights,
+      positions, normals, tangents, uvs, indices, boneIds, boneWeights,
       subsets: subsets.length ? subsets : [{ firstIndex: 0, numIndices: nIndices, firstVert: 0, numVerts: nVerts, matId: 0 }],
       bboxMin, bboxMax, physicsTriangles,
     });
@@ -336,6 +339,31 @@ function decodeNormals(normals: Stream | null, tangents: Stream | null, qtangent
   return null;
 }
 
+
+/**
+ * Tangent frames from the Tangents stream (SPipTangents: tangent int16×4 with w = handedness,
+ * bitangent int16×4). The handedness stored for the shader is the bitangent's side relative to
+ * cross(normal, tangent), so normal maps work with either normal source.
+ */
+function decodeTangents(tangents: Stream | null, normals: Float32Array | null, n: number): Float32Array | null {
+  if (!tangents || tangents.count < n || tangents.elemSize !== 16) return null;
+  const out = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    const o = i * 16;
+    const t = [0, 1, 2].map((c) => tangents.data.getInt16(o + c * 2, true) / 32767);
+    const b = [0, 1, 2].map((c) => tangents.data.getInt16(o + 8 + c * 2, true) / 32767);
+    const l = Math.hypot(t[0], t[1], t[2]) || 1;
+    let w = tangents.data.getInt16(o + 6, true) < 0 ? -1 : 1;
+    if (normals) {
+      const nx = normals[i * 3], ny = normals[i * 3 + 1], nz = normals[i * 3 + 2];
+      // cross(n, t) · b decides the side
+      const cx = ny * t[2] - nz * t[1], cy = nz * t[0] - nx * t[2], cz = nx * t[1] - ny * t[0];
+      w = cx * b[0] + cy * b[1] + cz * b[2] < 0 ? -1 : 1;
+    }
+    out[i * 4] = t[0] / l; out[i * 4 + 1] = t[1] / l; out[i * 4 + 2] = t[2] / l; out[i * 4 + 3] = w;
+  }
+  return out;
+}
 
 /** Bone mapping stream: 12 bytes = u16×4 ids + u8×4 weights, or 8 bytes = u8×4 + u8×4. */
 function decodeBoneMapping(s: Stream | null, n: number): { boneIds: Uint16Array | null; boneWeights: Uint8Array | null } {

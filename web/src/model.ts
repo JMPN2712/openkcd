@@ -26,7 +26,7 @@ export function setGpuBlockCompression(on: boolean): void {
 }
 
 /** DDS format name → WebGPU block format (sRGB variants are chosen at upload). */
-const BC_FORMATS: Record<string, string> = { BC1: "bc1-rgba-unorm", BC2: "bc2-rgba-unorm", BC3: "bc3-rgba-unorm", BC7: "bc7-rgba-unorm" };
+const BC_FORMATS: Record<string, string> = { BC1: "bc1-rgba-unorm", BC2: "bc2-rgba-unorm", BC3: "bc3-rgba-unorm", BC5: "bc5-rg-unorm", BC7: "bc7-rgba-unorm" };
 
 export interface LoadedModel {
   path: string;
@@ -40,18 +40,28 @@ export interface LoadedModel {
   diffuse: (MipChain | null)[];
   /** specular-colour map per material index; the mtl Specular attribute multiplies it */
   specular: (MipChain | null)[];
+  /** tangent-space normal map per material index (Bumpmap slot, _ddn/_ddna: BC5, X and Y), when loaded */
+  normal: (MipChain | null)[];
   notes: string[];
 }
 
 /** Decode a texture's mip chain from the largest level <= maxDim down to 1×1-ish. */
-export async function loadMipChain(vfs: Vfs, stem: string, maxDim: number, opts: { rgba?: boolean } = {}): Promise<MipChain> {
+export async function loadMipChain(vfs: Vfs, stem: string, maxDim: number, opts: { rgba?: boolean; normalMap?: boolean } = {}): Promise<MipChain> {
   const t = await openTexture(vfs, stem);
   if (!t.header.format) throw new Error(`unsupported format ${t.header.formatLabel}`);
   let level = t.firstLevel;
   while (level < t.header.mipCount - 1 && Math.max(...mipDims(t.header, level)) > maxDim) level++;
   const levels: MipChain["levels"] = [];
-  const bcFormat = BC_FORMATS[t.header.format.name];
-  if (gpuBc && bcFormat && !t.attached && !opts.rgba) {
+  let bcFormat = BC_FORMATS[t.header.format.name];
+  if (opts.normalMap) {
+    // KCD's _ddn/_ddna normal maps say BC5_UNORM, but their blocks hold signed values (decoded as
+    // unsigned, a flat normal's X and Y fall at 0 or 255: 20% of texels below 20 and 20% above
+    // 235). Upload them as BC5 SNORM; their attached alpha (gloss) isn't needed. Without BC
+    // support they are skipped.
+    if (t.header.format.name !== "BC5" || !gpuBc) throw new Error(`normal map ${stem}: ${t.header.formatLabel} not supported`);
+    bcFormat = "bc5-rg-snorm";
+  }
+  if (gpuBc && bcFormat && (!t.attached || opts.normalMap) && !opts.rgba) {
     // the GPU decodes BCn itself: keep the blocks (4–8× smaller than RGBA, no CPU decode)
     for (let l = level; l < t.header.mipCount; l++) {
       const [w, h] = mipDims(t.header, l);
@@ -77,6 +87,8 @@ export async function loadModel(
     material?: string | null;
     /** shared across models (e.g. a model's LODs reuse its textures); keyed by texture and size */
     textureCache?: Map<string, Promise<MipChain | null>>;
+    /** load the materials' normal maps (default true) */
+    normalMaps?: boolean;
   } = {},
 ): Promise<LoadedModel> {
   const notes: string[] = [];
@@ -141,7 +153,7 @@ export async function loadModel(
       let p = cache.get(key);
       if (!p) {
         opts.onStatus?.(`Decoding ${stem.slice(stem.lastIndexOf("/") + 1)}…`);
-        p = loadMipChain(vfs, stem, maxDim).catch((err) => {
+        p = loadMipChain(vfs, stem, maxDim, { normalMap: slotName === "Bumpmap" }).catch((err) => {
           notes.push(`material ${i} (${m.name}) ${slotName} ${stem}: ${(err as Error).message}`);
           return null;
         });
@@ -154,5 +166,6 @@ export async function loadModel(
   const maxDim = opts.maxTextureDim ?? 1024;
   const diffuse = await slot("Diffuse", maxDim);
   const specular = await slot("Specular", Math.min(512, maxDim));
-  return { path, hit, cgf, skeleton, mtlPath: mpath, materials, diffuse, specular, notes };
+  const normal = opts.normalMaps === false ? materials.map(() => null) : await slot("Bumpmap", maxDim);
+  return { path, hit, cgf, skeleton, mtlPath: mpath, materials, diffuse, specular, normal, notes };
 }
