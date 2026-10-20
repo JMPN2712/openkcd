@@ -27,6 +27,36 @@ export function perspective(fovY: number, aspect: number, near: number, far: num
   ]);
 }
 
+/**
+ * Reversed-Z perspective with an infinite far plane: depth is near / distance (1 at the near
+ * plane, → 0 far away). With a depth32float buffer and "greater" this keeps precision from a
+ * 1 cm near plane (the first-person body) out to the horizon.
+ */
+export function perspectiveReversed(fovY: number, aspect: number, near: number): Mat4 {
+  const f = 1 / Math.tan(fovY / 2);
+  // prettier-ignore
+  return new Float32Array([
+    f / aspect, 0, 0, 0,
+    0, f, 0, 0,
+    0, 0, 0, -1,
+    0, 0, near, 0,
+  ]);
+}
+
+/** How a render pass is set up: MSAA samples and the depth convention, shared by every renderer drawing into it. */
+export interface PassSetup {
+  sampleCount: number;
+  /** reversed-Z depth (depth32float, "greater", cleared to 0) */
+  reversedZ: boolean;
+}
+
+/** The model and character viewers: 4× MSAA, depth24plus, "less". */
+export const DEFAULT_PASS: PassSetup = { sampleCount: 4, reversedZ: false };
+
+export const depthFormat = (p: PassSetup): GPUTextureFormat => (p.reversedZ ? "depth32float" : "depth24plus");
+export const depthCompare = (p: PassSetup): GPUCompareFunction => (p.reversedZ ? "greater" : "less");
+export const depthClear = (p: PassSetup): number => (p.reversedZ ? 0 : 1);
+
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const cross = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];

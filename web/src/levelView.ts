@@ -29,6 +29,7 @@ import { ASSET_RE } from "./assets.ts";
 import { PlayerAvatar } from "./playerAvatar.ts";
 import { PlayerSession } from "./playerSession.ts";
 import { terrainSurroundings } from "./player.ts";
+import { depthClear, depthFormat, type PassSetup } from "./mat4.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -185,11 +186,13 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const ctx = canvas.getContext("webgpu")!;
   const format = navigator.gpu.getPreferredCanvasFormat();
   ctx.configure({ device, format, alphaMode: "opaque" });
-  const renderer = new TerrainRenderer(device, format, terrain, cover);
-  const models = new ModelRenderer(device, format, 4);
-  const water = new WaterRenderer(device, format, objects.water);
-  const npcR = new ModelRenderer(device, format, 4);
-  const playerR = new ModelRenderer(device, format, 4);
+  // reversed-Z: the first-person view needs a 1 cm near plane (Henry's own body) and the horizon
+  const passSetup: PassSetup = { sampleCount: 4, reversedZ: true };
+  const renderer = new TerrainRenderer(device, format, terrain, cover, passSetup);
+  const models = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
+  const water = new WaterRenderer(device, format, objects.water, passSetup);
+  const npcR = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
+  const playerR = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
   // Henry: the player character (loaded in the background; free-fly until then)
   let player: PlayerSession | null = null;
   let mode: "player" | "fly" = "fly";
@@ -354,10 +357,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     last = now;
     if (mode === "player" && player) {
       player.update(dt, player.input(keys));
-      Object.assign(cam, player.thirdPerson());
-      // keep the chase camera above the terrain
+      Object.assign(cam, player.camera());
+      // keep a chase camera above the terrain
       const g = heightAt(terrain, cam.pos[0], cam.pos[1]);
-      if (cam.pos[2] < g + 0.3) cam.pos[2] = g + 0.3;
+      if (player.viewMode === "third" && cam.pos[2] < g + 0.3) cam.pos[2] = g + 0.3;
       player.avatar.upload(playerR);
     } else {
       const speed = (keys.has("ShiftLeft") || keys.has("ShiftRight") ? 400 : 60) * dt;
@@ -391,10 +394,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (!depth || depth.width !== target.width || depth.height !== target.height) {
       depth?.destroy();
       msaa?.destroy();
-      depth = device.createTexture({ size: [target.width, target.height], format: "depth24plus", sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
-      msaa = device.createTexture({ size: [target.width, target.height], format, sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+      depth = device.createTexture({ size: [target.width, target.height], format: depthFormat(passSetup), sampleCount: passSetup.sampleCount, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+      msaa = device.createTexture({ size: [target.width, target.height], format, sampleCount: passSetup.sampleCount, usage: GPUTextureUsage.RENDER_ATTACHMENT });
     }
-    const vp = TerrainRenderer.viewProj(cam, target.width / target.height);
+    const vp = TerrainRenderer.viewProj(cam, target.width / target.height, { reversed: true, near: mode === "player" && player?.viewMode === "first" ? 0.01 : 0.1 });
     renderer.prepare(cam, vp);
     models.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
     water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
@@ -410,7 +413,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const enc = device.createCommandEncoder();
     const pass = enc.beginRenderPass({
       colorAttachments: [{ view: msaa!.createView(), resolveTarget: target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.70, a: 1 }, loadOp: "clear", storeOp: "discard" }],
-      depthStencilAttachment: { view: depth.createView(), depthClearValue: 1, depthLoadOp: "clear", depthStoreOp: "discard" },
+      depthStencilAttachment: { view: depth.createView(), depthClearValue: depthClear(passSetup), depthLoadOp: "clear", depthStoreOp: "discard" },
     });
     renderer.draw(pass);
     models.draw(pass);

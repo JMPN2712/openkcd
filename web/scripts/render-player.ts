@@ -16,6 +16,7 @@ import { PlayerAvatar } from "../src/playerAvatar.ts";
 import { PlayerSession } from "../src/playerSession.ts";
 import { terrainSurroundings, type MoveInput } from "../src/player.ts";
 import { openRataje, gpuDevice, Offscreen } from "./lib.ts";
+import { depthClear, depthFormat, type PassSetup } from "../src/mat4.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
@@ -33,13 +34,14 @@ const W = 1280, H = 720;
 const lvl = await openRataje(root);
 const device = await gpuDevice();
 const format: GPUTextureFormat = "rgba8unorm";
-const terrainR = new TerrainRenderer(device, format, lvl.terrain, lvl.cover);
-const models = new ModelRenderer(device, format, 4);
-const water = new WaterRenderer(device, format, lvl.objects.water);
-const playerR = new ModelRenderer(device, format, 4);
+const passSetup: PassSetup = { sampleCount: 4, reversedZ: true };
+const terrainR = new TerrainRenderer(device, format, lvl.terrain, lvl.cover, passSetup);
+const models = new ModelRenderer(device, format, 4, passSetup);
+const water = new WaterRenderer(device, format, lvl.objects.water, passSetup);
+const playerR = new ModelRenderer(device, format, 4, passSetup);
 const off = new Offscreen(device, W, H, format);
 const msaa = device.createTexture({ size: [W, H], format, sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
-const depth = device.createTexture({ size: [W, H], format: "depth24plus", sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+const depth = device.createTexture({ size: [W, H], format: depthFormat(passSetup), sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
 
 const t0 = performance.now();
 const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, [ax, ay], radius, { maxModels: 20000, caches: newWorldCaches(), props: lvl.props, hiddenLayers: lvl.hiddenLayers });
@@ -53,15 +55,16 @@ const avatar = await PlayerAvatar.load(lvl.vfs);
 const surroundings = terrainSurroundings((x, y) => heightAt(lvl.terrain, x, y));
 const session = new PlayerSession(surroundings, avatar, [ax, ay, 0], (ayaw * Math.PI) / 180);
 session.pitch = (pitch0 * Math.PI) / 180;
+session.setView(view === "first" ? "first" : "third");
 playerR.setModels(avatar.renderItems());
 
 const sun: [number, number, number] = [0.45, 0.25, 0.85];
 async function render(name: string): Promise<void> {
   session.avatar.upload(playerR);
-  const cam: FlyCamera = session.thirdPerson();
+  const cam: FlyCamera = session.camera();
   const g = heightAt(lvl.terrain, cam.pos[0], cam.pos[1]);
-  if (cam.pos[2] < g + 0.3) cam.pos[2] = g + 0.3;
-  const vp = TerrainRenderer.viewProj(cam, W / H);
+  if (session.viewMode === "third" && cam.pos[2] < g + 0.3) cam.pos[2] = g + 0.3;
+  const vp = TerrainRenderer.viewProj(cam, W / H, { reversed: true, near: session.viewMode === "first" ? 0.01 : 0.1 });
   const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts);
   lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
   terrainR.prepare(cam, vp);
@@ -69,7 +72,7 @@ async function render(name: string): Promise<void> {
   const enc = device.createCommandEncoder();
   const pass = enc.beginRenderPass({
     colorAttachments: [{ view: msaa.createView(), resolveTarget: off.target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.7, a: 1 }, loadOp: "clear", storeOp: "discard" }],
-    depthStencilAttachment: { view: depth.createView(), depthClearValue: 1, depthLoadOp: "clear", depthStoreOp: "discard" },
+    depthStencilAttachment: { view: depth.createView(), depthClearValue: depthClear(passSetup), depthLoadOp: "clear", depthStoreOp: "discard" },
   });
   terrainR.draw(pass);
   models.draw(pass);

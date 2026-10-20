@@ -11,14 +11,14 @@
 
 import type { LoadedModel, MipChain } from "./model.ts";
 import { colorizeOf } from "./mtl.ts";
-import { lookAt, multiply, perspective, transformPoint, type Vec3 } from "./mat4.ts";
+import { depthCompare, depthFormat, lookAt, multiply, perspective, transformPoint, type PassSetup, type Vec3 } from "./mat4.ts";
 
 // position 3f, normal 3f, uv 2f, bone ids u16×4, weights unorm8×4
 const VERTEX_BYTES = 44;
 const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
 const SHADER = /* wgsl */ `
-struct Camera { viewProj: mat4x4f, eye: vec4f, light: vec4f }; // light.w = 1 for flat shading
+struct Camera { viewProj: mat4x4f, eye: vec4f, light: vec4f }; // light.w = 1 for flat shading; eye.w = -1 for reversed-Z
 // params: x alpha test, y diffuse map, z specular map, w layer
 // colorize: KCD %COLORIZING shader, x/y/z = hue (deg) / saturation / brightness, w = 0 off, 1 global, 2 with mask
 //   (the "Specular" slot then holds the region mask: R/G/B select mask1/2/3)
@@ -48,7 +48,8 @@ struct VOut {
   let w = world * (sk * vec4f(p, 1.0));
   o.pos = cam.viewProj * w;
   // layered character clothing shares the body's surface: pull outer layers slightly towards the camera
-  o.pos.z = o.pos.z - drw.params.w * 0.00004 * o.pos.w;
+  // (reversed-Z: scale the depth up by 0.02% per layer, about 0.4 mm at 2 m)
+  if (cam.eye.w > 0.0) { o.pos.z = o.pos.z - drw.params.w * 0.00004 * o.pos.w; } else { o.pos.z = o.pos.z * (1.0 + drw.params.w * 0.0002); }
   o.n = (world * (sk * vec4f(n, 0.0))).xyz;
   o.uv = uv;
   o.wpos = w.xyz;
@@ -137,6 +138,7 @@ export class ModelRenderer {
   readonly device: GPUDevice;
   readonly format: GPUTextureFormat;
   readonly sampleCount: number;
+  private reversedZ: boolean;
   private pipeline: GPURenderPipeline;
   private camBuf: GPUBuffer;
   private camBind: GPUBindGroup;
@@ -156,10 +158,12 @@ export class ModelRenderer {
   bboxMax: Vec3 = [1, 1, 1];
   stats = { meshes: 0, triangles: 0, vertices: 0, draws: 0, textured: 0 };
 
-  constructor(device: GPUDevice, format: GPUTextureFormat, sampleCount = 4) {
+  constructor(device: GPUDevice, format: GPUTextureFormat, sampleCount = 4, opts: { reversedZ?: boolean } = {}) {
     this.device = device;
     this.format = format;
     this.sampleCount = sampleCount;
+    this.reversedZ = opts.reversedZ ?? false;
+    const pass: PassSetup = { sampleCount, reversedZ: this.reversedZ };
     const module = device.createShaderModule({ code: SHADER });
     this.pipeline = device.createRenderPipeline({
       layout: "auto",
@@ -183,7 +187,7 @@ export class ModelRenderer {
       },
       fragment: { module, entryPoint: "fs", targets: [{ format }] },
       primitive: { topology: "triangle-list", cullMode: "none", frontFace: "ccw" },
-      depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" },
+      depthStencil: { format: depthFormat(pass), depthWriteEnabled: true, depthCompare: depthCompare(pass) },
       multisample: { count: sampleCount },
     });
     this.camBuf = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
@@ -412,12 +416,12 @@ export class ModelRenderer {
   setCamera(viewProj: Float32Array, eye: Vec3, sun: Vec3, flat = false): void {
     const cu = new Float32Array(24);
     cu.set(viewProj, 0);
-    cu.set([...eye, 1], 16);
+    cu.set([...eye, this.reversedZ ? -1 : 1], 16);
     cu.set([...sun, flat ? 1 : 0], 20);
     this.device.queue.writeBuffer(this.camBuf, 0, cu);
   }
 
-  /** Record this renderer's draws into a pass that uses the same format, 4× MSAA and depth24plus. */
+  /** Record this renderer's draws into a pass with the same format, sample count and depth convention. */
   draw(pass: GPURenderPassEncoder): void {
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.camBind);

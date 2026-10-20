@@ -4,7 +4,7 @@
 // after the opaque geometry: depth-tested, not depth-writing.
 
 import type { WaterVolume } from "./levelObjects.ts";
-import type { Vec3 } from "./mat4.ts";
+import { DEFAULT_PASS, depthCompare, depthFormat, type PassSetup, type Vec3 } from "./mat4.ts";
 
 const SHADER = /* wgsl */ `
 struct Cam { viewProj: mat4x4f, eye: vec4f, sun: vec4f, params: vec4f }; // params.z fog density
@@ -73,7 +73,7 @@ export class WaterRenderer {
   private ib: GPUBuffer;
   readonly triangles: number;
 
-  constructor(device: GPUDevice, format: GPUTextureFormat, volumes: WaterVolume[]) {
+  constructor(device: GPUDevice, format: GPUTextureFormat, volumes: WaterVolume[], pass: PassSetup = DEFAULT_PASS) {
     this.device = device;
     const verts: number[] = [];
     const idx: number[] = [];
@@ -102,8 +102,8 @@ export class WaterRenderer {
         targets: [{ format, blend: { color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" }, alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha" } } }],
       },
       primitive: { topology: "triangle-list", cullMode: "none" },
-      depthStencil: { format: "depth24plus", depthWriteEnabled: false, depthCompare: "less" },
-      multisample: { count: 4 },
+      depthStencil: { format: depthFormat(pass), depthWriteEnabled: false, depthCompare: depthCompare(pass) },
+      multisample: { count: pass.sampleCount },
     });
     this.camBuf = device.createBuffer({ size: 112, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.bind = device.createBindGroup({ layout: this.pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.camBuf } }] });

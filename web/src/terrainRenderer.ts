@@ -7,7 +7,7 @@
 import { HEIGHT_UNIT, type Terrain } from "./terrain.ts";
 import type { Cover } from "./cover.ts";
 import { decodeBC1 } from "./bcn.ts";
-import { lookAt, multiply, perspective, type Vec3 } from "./mat4.ts";
+import { DEFAULT_PASS, depthCompare, depthFormat, lookAt, multiply, perspective, perspectiveReversed, type PassSetup, type Vec3 } from "./mat4.ts";
 
 const SHADER = /* wgsl */ `
 struct Cam { viewProj: mat4x4f, eye: vec4f, sun: vec4f, params: vec4f }; // params: x heightUnit, y size, z fog density, w cover gain (0 = none)
@@ -90,7 +90,7 @@ export class TerrainRenderer {
   /** "bc1" (compressed upload), "rgba" (decoded fallback) or "none" */
   readonly coverMode: "bc1" | "rgba" | "none";
 
-  constructor(device: GPUDevice, format: GPUTextureFormat, terrain: Terrain, cover?: Cover) {
+  constructor(device: GPUDevice, format: GPUTextureFormat, terrain: Terrain, cover?: Cover, pass: PassSetup = DEFAULT_PASS) {
     this.device = device;
     this.format = format;
     this.terrain = terrain;
@@ -114,8 +114,8 @@ export class TerrainRenderer {
       },
       fragment: { module, entryPoint: "fs", targets: [{ format }] },
       primitive: { topology: "triangle-list", cullMode: "none" },
-      depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" },
-      multisample: { count: 4 },
+      depthStencil: { format: depthFormat(pass), depthWriteEnabled: true, depthCompare: depthCompare(pass) },
+      multisample: { count: pass.sampleCount },
     });
     this.camBuf = device.createBuffer({ size: 112, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     ({ tex: this.coverTex, mode: this.coverMode } = this.uploadCover(cover));
@@ -193,11 +193,16 @@ export class TerrainRenderer {
     return { vb, ib, count: idx.length };
   }
 
-  /** View-projection for a fly camera (shared with other renderers drawing into the same pass). */
-  static viewProj(cam: FlyCamera, aspect: number): Float32Array {
+  /**
+   * View-projection for a fly camera (shared with other renderers drawing into the same pass).
+   * With `reversed`, a reversed-Z infinite projection from `near` (default 1 cm).
+   */
+  static viewProj(cam: FlyCamera, aspect: number, opts: { reversed?: boolean; near?: number; fovY?: number } = {}): Float32Array {
     const dir: Vec3 = [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)];
     const at: Vec3 = [cam.pos[0] + dir[0], cam.pos[1] + dir[1], cam.pos[2] + dir[2]];
-    return multiply(perspective(Math.PI / 3.2, aspect, 0.5, 12000), lookAt(cam.pos, at, [0, 0, 1]));
+    const fov = opts.fovY ?? Math.PI / 3.2;
+    const proj = opts.reversed ? perspectiveReversed(fov, aspect, opts.near ?? 0.01) : perspective(fov, aspect, opts.near ?? 0.5, 12000);
+    return multiply(proj, lookAt(cam.pos, at, [0, 0, 1]));
   }
 
   /** Upload camera uniforms and choose patch LODs for the next draw(). */
@@ -224,7 +229,7 @@ export class TerrainRenderer {
     });
   }
 
-  /** Record the terrain draws into a pass (format, 4× MSAA, depth24plus). */
+  /** Record the terrain draws into a pass set up like the constructor's PassSetup. */
   draw(pass: GPURenderPassEncoder): void {
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.bind);
