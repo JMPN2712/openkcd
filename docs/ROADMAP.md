@@ -67,6 +67,8 @@ playable frame rates on the Potato preset.
 - [x] Third-person camera as a toggle (V; wheel zooms 1–8 m); its arm is
       cast against the world so walls and the ground pull it in. Free-fly
       stays as a debug toggle (F; T puts Henry under the fly camera).
+- [x] Terrain detail: the 26 surface types' detail textures blended per
+      heightmap sample over the colour map (normal maps still to do).
 - [ ] Whole-world streaming beyond Rataje, plus LOD.
 - [x] Time of day and sky: the level's time-of-day profile (sun colour and
       intensity, fog/sky colours, stars, moonlight) drives the light, the

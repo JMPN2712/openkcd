@@ -217,7 +217,7 @@ elder bushes and branch piles.
 - **Known gaps:**
   - no roads or decals (octree types 7 and 11 are not drawn);
   - road and terrain-blend meshes render as flat dark patches;
-  - no shadows; terrain detail materials (the 26 surface types) aren't blended in.
+  - no shadows.
 
 ## Not yet decoded
 
@@ -331,3 +331,29 @@ astronomical path at 49.7° N, with the declination fitted to the profile's
 day length (16 h gives about 23°). It compresses the HDR values with one fixed
 adaptation curve instead of the game's auto exposure. `scripts/test-sky.ts`
 checks the profiles, the sunrise and sunset, and the light levels.
+
+## Terrain surface types and detail layers
+
+- **Surface types.** `leveldata.xml` `<SurfaceTypes>` lists 26 surface
+  types (`SurfaceTypeID`, `DetailMaterial`). Examples:
+  - `Materials/terrain/grass/grass_default`;
+  - `soil/soil_wet`;
+  - `stones/castle_cobblestones_v3`;
+  - `terrain/invisible`, under buildings.
+- **Per sample.** The low 4 bits of each heightmap sample index the leaf's
+  `u8 surfaceTypes[]` list, which holds `SurfaceTypeID`s. `terrain.ts` keeps
+  a 4097² map; 10% of it is 255 (none). The decoded map forms coherent
+  patches: soil, wet soil and trampled grass around Rataje's market, and
+  `invisible` under houses.
+- **Materials.** Each detail material is a `Terrain.Layer` `.mtl` with
+  Diffuse, Bumpmap (`_ddna`) and Heightmap textures. `TileU 0.25` means one
+  repeat per 4 m. `PublicParams` include DetailTextureStrength, BlendFactor
+  and BlendFalloff.
+- **OpenKCD** (`terrainDetail.ts`, `terrainRenderer.ts`):
+  - the diffuse layers go into one RGBA texture array (256 or 512 px by
+    preset);
+  - each pixel blends the layers of its four surrounding samples;
+  - each layer modulates the cover colour (layer ÷ its average colour);
+  - the detail fades out with distance (preset: Potato 25–80 m to High
+    60–220 m);
+  - normal and height maps are not used yet.

@@ -20,13 +20,16 @@ export interface QualityPreset {
   npcMax: number;
   /** largest texture side loaded for objects and characters */
   maxTextureDim: number;
+  /** terrain detail layers: texture side and the distance (m) over which they fade out */
+  terrainDetail: number;
+  detailFade: [number, number];
 }
 
 export const PRESETS: Record<PresetName, QualityPreset> = {
-  potato: { label: "Potato", renderScale: 0.5, msaa: 1, streamRadius: 200, distanceScale: 0.45, lodScale: 0.5, terrainLod: 100, npcMax: 8, maxTextureDim: 128 },
-  low: { label: "Low", renderScale: 0.75, msaa: 1, streamRadius: 300, distanceScale: 0.65, lodScale: 0.7, terrainLod: 160, npcMax: 16, maxTextureDim: 256 },
-  medium: { label: "Medium", renderScale: 1, msaa: 4, streamRadius: 500, distanceScale: 1, lodScale: 1, terrainLod: 250, npcMax: 40, maxTextureDim: 256 },
-  high: { label: "High", renderScale: 1, msaa: 4, streamRadius: 700, distanceScale: 1.4, lodScale: 1.3, terrainLod: 350, npcMax: 60, maxTextureDim: 512 },
+  potato: { label: "Potato", renderScale: 0.5, msaa: 1, streamRadius: 200, distanceScale: 0.45, lodScale: 0.5, terrainLod: 100, npcMax: 8, maxTextureDim: 128, terrainDetail: 256, detailFade: [25, 80] },
+  low: { label: "Low", renderScale: 0.75, msaa: 1, streamRadius: 300, distanceScale: 0.65, lodScale: 0.7, terrainLod: 160, npcMax: 16, maxTextureDim: 256, terrainDetail: 256, detailFade: [35, 120] },
+  medium: { label: "Medium", renderScale: 1, msaa: 4, streamRadius: 500, distanceScale: 1, lodScale: 1, terrainLod: 250, npcMax: 40, maxTextureDim: 256, terrainDetail: 512, detailFade: [40, 160] },
+  high: { label: "High", renderScale: 1, msaa: 4, streamRadius: 700, distanceScale: 1.4, lodScale: 1.3, terrainLod: 350, npcMax: 60, maxTextureDim: 512, terrainDetail: 512, detailFade: [60, 220] },
 };
 
 const KEY = "openkcd.quality";
