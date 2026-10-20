@@ -45,7 +45,11 @@ playable frame rates on the Potato preset.
         climb, 49° slide, gravity 13 m/s², inertia 11, 1 m jump), code-driven
         movement at the clip speeds, spawning in Rataje's market
         (`player.ts`, `playerSession.ts`, `scripts/test-player.ts`).
-  - [ ] Collision with buildings and objects.
+  - [x] Collision with buildings and objects (`collision.ts`,
+        `scripts/test-collision.ts`): physics proxies first, then
+        physicalised render meshes, then simplified visible meshes where a
+        model has no physics data (`docs/PHYSICS.md` lists the source by
+        object type). Doors don't block yet.
 - [x] First-person camera on Henry's skeleton (head bone), with body
       awareness: the eye at the `camera` bone, pitch −70° to +80° (−35° to
       +45° sprinting), the full body drawn with the head and hair hidden, a
@@ -57,7 +61,9 @@ playable frame rates on the Potato preset.
       speed, travel angle and turn rate, with start and stop clips and 0.2 s
       crossfades. Planted feet slide 4–15% of the speed (`test-player.ts`).
       Turning on the spot (`1d_relaxed_idle_bigturns_nw`) is not used yet.
-- [ ] Physics proxies for collision (from the models' physics meshes).
+- [x] Physics proxies for collision (from the models' physics meshes):
+      MeshPhysicsData boxes, spheres, cylinders, capsules and meshes decoded
+      (`physics.ts`, `docs/PHYSICS.md`).
 - [ ] Whole-world streaming beyond Rataje, plus LOD.
 - [ ] Time of day and sky (lighting is basic for now).
 - [ ] Performance presets: Potato / Low / Medium / High.

@@ -28,7 +28,7 @@ import luaWasm from "wasmoon-lua5.1/dist/liblua5.1.wasm?url";
 import { ASSET_RE } from "./assets.ts";
 import { PlayerAvatar } from "./playerAvatar.ts";
 import { PlayerSession } from "./playerSession.ts";
-import { terrainSurroundings } from "./player.ts";
+import { CollisionWorld } from "./collision.ts";
 import { depthClear, depthFormat, type PassSetup } from "./mat4.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -197,7 +197,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let player: PlayerSession | null = null;
   let mode: "player" | "fly" = "fly";
   let playerInfo = "Henry: loading…";
-  const surroundings = terrainSurroundings((x, y) => heightAt(terrain, x, y));
+  // terrain plus the streamed objects' collision geometry (physics proxies first, collision.ts)
+  const surroundings = new CollisionWorld((x, y) => heightAt(terrain, x, y));
   void PlayerAvatar.load(vfs, { maxTextureDim: 512 }).then((avatar) => {
     if (stopped) return;
     player = new PlayerSession(surroundings, avatar, SPAWN, SPAWN_YAW);
@@ -281,6 +282,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         if (stopped) return;
         const items = lodItems(next);
         models.setModels(items);
+        surroundings.setScene(next);
         lodOut = items.map((it) => new Float32Array(it.capacity * 16));
         lodCounts = items.map(() => 0);
         scene = next;

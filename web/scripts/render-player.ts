@@ -14,7 +14,8 @@ import { WaterRenderer } from "../src/waterRenderer.ts";
 import { buildWorldScene, lodItems, newWorldCaches, selectLods } from "../src/world.ts";
 import { PlayerAvatar } from "../src/playerAvatar.ts";
 import { PlayerSession } from "../src/playerSession.ts";
-import { terrainSurroundings, type MoveInput } from "../src/player.ts";
+import { type MoveInput } from "../src/player.ts";
+import { CollisionWorld } from "../src/collision.ts";
 import { openRataje, gpuDevice, Offscreen } from "./lib.ts";
 import { depthClear, depthFormat, type PassSetup } from "../src/mat4.ts";
 
@@ -52,7 +53,8 @@ const lodCounts = items.map(() => 0);
 console.log(`world: ${scene.models.length} models, ${scene.instances} instances within ${radius} m (${((performance.now() - t0) / 1000).toFixed(1)} s)`);
 
 const avatar = await PlayerAvatar.load(lvl.vfs);
-const surroundings = terrainSurroundings((x, y) => heightAt(lvl.terrain, x, y));
+const surroundings = new CollisionWorld((x, y) => heightAt(lvl.terrain, x, y));
+if (!args.includes("--no-collision")) surroundings.setScene(scene);
 const session = new PlayerSession(surroundings, avatar, [ax, ay, 0], (ayaw * Math.PI) / 180);
 session.pitch = (pitch0 * Math.PI) / 180;
 session.setView(view === "first" ? "first" : "third");
