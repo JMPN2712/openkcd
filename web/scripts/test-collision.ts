@@ -87,5 +87,13 @@ check(ms / steps < 2, "controller costs under 2 ms a frame");
   check(p.pos[1] > 558, `running south from the market spawn stops at the house (y ${p.pos[1].toFixed(2)}, free run would reach ${(574 - 5 * 3.57).toFixed(1)})`);
 }
 
+// --- camera arm: a ray from the market spawn south hits the hay pile or the house (16 m away) first; up is clear
+{
+  const z = h(2577.8, 574) + 1.7;
+  const hit = world.raycast([2577.8, 574, z], [2577.8, 550, z]);
+  check(hit !== null && hit * 24 < 16, `ray south from the spawn hits the house after ${hit === null ? "nothing" : `${(hit * 24).toFixed(1)} m`}`);
+  check(world.raycast([2577.8, 574, z], [2577.8, 574, z + 30]) === null, "ray straight up is clear");
+}
+
 console.log(failures ? `\n${failures} check(s) failed` : "\nall checks passed");
 process.exit(failures ? 1 : 0);

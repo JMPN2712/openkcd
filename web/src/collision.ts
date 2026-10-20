@@ -227,6 +227,39 @@ export class CollisionWorld implements Surroundings {
     return best;
   }
 
+  raycast(from: Vec3, to: Vec3): number | null {
+    let best: number | null = null;
+    // terrain: march the segment in 0.25 m steps
+    const len = Math.hypot(to[0] - from[0], to[1] - from[1], to[2] - from[2]);
+    const n = Math.max(1, Math.ceil(len / 0.25));
+    for (let i = 1; i <= n; i++) {
+      const t = i / n;
+      if (from[2] + (to[2] - from[2]) * t < this.terrainHeight(from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t)) { best = (i - 1) / n; break; }
+    }
+    const d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+    for (const c of this.cellsIn(Math.min(from[0], to[0]), Math.min(from[1], to[1]), Math.max(from[0], to[0]), Math.max(from[1], to[1]))) {
+      const T = c.tris;
+      for (let k = 0; k < c.count; k++) {
+        const o = k * TRI;
+        if (T[o + 15] < Math.min(from[0], to[0]) || T[o + 12] > Math.max(from[0], to[0]) || T[o + 16] < Math.min(from[1], to[1]) || T[o + 13] > Math.max(from[1], to[1]) || T[o + 17] < Math.min(from[2], to[2]) || T[o + 14] > Math.max(from[2], to[2])) continue;
+        // Möller–Trumbore
+        const e1 = [T[o + 3] - T[o], T[o + 4] - T[o + 1], T[o + 5] - T[o + 2]], e2 = [T[o + 6] - T[o], T[o + 7] - T[o + 1], T[o + 8] - T[o + 2]];
+        const p = [d[1] * e2[2] - d[2] * e2[1], d[2] * e2[0] - d[0] * e2[2], d[0] * e2[1] - d[1] * e2[0]];
+        const det = e1[0] * p[0] + e1[1] * p[1] + e1[2] * p[2];
+        if (Math.abs(det) < 1e-12) continue;
+        const s0 = [from[0] - T[o], from[1] - T[o + 1], from[2] - T[o + 2]];
+        const u = (s0[0] * p[0] + s0[1] * p[1] + s0[2] * p[2]) / det;
+        if (u < 0 || u > 1) continue;
+        const q = [s0[1] * e1[2] - s0[2] * e1[1], s0[2] * e1[0] - s0[0] * e1[2], s0[0] * e1[1] - s0[1] * e1[0]];
+        const v = (d[0] * q[0] + d[1] * q[1] + d[2] * q[2]) / det;
+        if (v < 0 || u + v > 1) continue;
+        const t = (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) / det;
+        if (t >= 0 && t <= 1 && (best === null || t < best)) best = t;
+      }
+    }
+    return best;
+  }
+
   depenetrate(a: Vec3, b: Vec3, r: number): { push: Vec3; normal: Vec3 | null } {
     const A = [...a], B = [...b];
     const push: Vec3 = [0, 0, 0];
