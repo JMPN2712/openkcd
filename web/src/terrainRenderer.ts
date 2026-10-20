@@ -7,10 +7,11 @@
 import { HEIGHT_UNIT, type Terrain } from "./terrain.ts";
 import type { Cover } from "./cover.ts";
 import type { DetailLayers } from "./terrainDetail.ts";
+import { ShadowMap, SHADOW_WGSL } from "./shadow.ts";
 import { decodeBC1 } from "./bcn.ts";
 import { DEFAULT_LIGHTING, DEFAULT_PASS, depthCompare, depthFormat, lookAt, multiply, perspective, perspectiveReversed, type Lighting, type PassSetup, type Vec3 } from "./mat4.ts";
 
-const SHADER = /* wgsl */ `
+const SHADER = /* wgsl */ `${SHADOW_WGSL}
 // params: x heightUnit, y size, z fog density, w cover gain (0 = none)
 struct Cam { viewProj: mat4x4f, eye: vec4f, sun: vec4f, params: vec4f, sunColor: vec4f, skyColor: vec4f, groundColor: vec4f, fogColor: vec4f };
 @group(0) @binding(0) var<uniform> cam: Cam;
@@ -25,6 +26,9 @@ struct Layers { info: vec4f, layer: array<vec4f, 32> };
 @group(0) @binding(5) var detail: texture_2d_array<f32>;
 @group(0) @binding(6) var detailSamp: sampler;
 @group(0) @binding(7) var<uniform> layers: Layers;
+@group(0) @binding(8) var shadowTex: texture_depth_2d_array;
+@group(0) @binding(9) var shadowSamp: sampler_comparison;
+@group(0) @binding(10) var<uniform> shadowU: Shadow;
 
 struct VOut { @builtin(position) pos: vec4f, @location(0) wpos: vec3f, @location(1) n: vec3f };
 
@@ -95,7 +99,8 @@ fn h(p: vec2i) -> f32 {
     }
   }
   let ndl = max(dot(n, normalize(cam.sun.xyz)), 0.0);
-  var lit = c * (mix(cam.groundColor.rgb, cam.skyColor.rgb, n.z * 0.5 + 0.5) + cam.sunColor.rgb * ndl);
+  let sh = shadowFactor(i.wpos, n, d0);
+  var lit = c * (mix(cam.groundColor.rgb, cam.skyColor.rgb, n.z * 0.5 + 0.5) + cam.sunColor.rgb * ndl * sh);
   let fog = 1.0 - exp(-d0 * cam.params.z);
   lit = mix(lit, cam.fogColor.rgb, clamp(fog, 0.0, 1.0));
   return vec4f(pow(lit, vec3f(1.0 / 2.2)), 1.0);
@@ -222,8 +227,24 @@ export class TerrainRenderer {
         { binding: 5, resource: this.detailTex.createView({ dimension: "2d-array" }) },
         { binding: 6, resource: this.detailSamp },
         { binding: 7, resource: { buffer: this.layerBuf } },
+        { binding: 8, resource: this.shadowMap().arrayView },
+        { binding: 9, resource: this.shadowMap().sampler },
+        { binding: 10, resource: { buffer: this.shadowMap().buffer } },
       ],
     });
+  }
+
+  private shadow: ShadowMap | null = null;
+  private standIn: ShadowMap | null = null;
+
+  private shadowMap(): ShadowMap {
+    return this.shadow ?? (this.standIn ??= new ShadowMap(this.device, 1, 0));
+  }
+
+  /** Receive shadows from `map` (null: none). */
+  setShadow(map: ShadowMap | null): void {
+    this.shadow = map && map.cascades ? map : null;
+    this.bind = this.bindGroup();
   }
 
   /** Add (or replace) the detail layers after construction (they load in the background). */
@@ -382,6 +403,7 @@ export class TerrainRenderer {
     this.surfaceTex.destroy();
     this.detailTex.destroy();
     this.layerBuf.destroy();
+    this.standIn?.destroy();
     this.camBuf.destroy();
     for (const m of this.meshes) { m.vb.destroy(); m.ib.destroy(); }
     for (const b of this.instBufs) b.destroy();

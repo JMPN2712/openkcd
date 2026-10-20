@@ -28,6 +28,8 @@ import { readCentralDirectory, readEntry } from "../src/zip.ts";
 import type { MoveInput } from "../src/player.ts";
 import { openRataje } from "./lib.ts";
 import { loadDetailLayers } from "../src/terrainDetail.ts";
+import { ShadowMap } from "../src/shadow.ts";
+import { ShadowCasters } from "../src/shadowPass.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
@@ -75,6 +77,9 @@ for (const pp of gpus) {
     const playerR = new ModelRenderer(device, format, q.msaa, pass);
     const npcR = new ModelRenderer(device, format, q.msaa, pass);
     const sky = new SkyRenderer(device, format, pass);
+    const shadowMap = q.shadows.cascades ? new ShadowMap(device, q.shadows.size, q.shadows.cascades, q.shadows.splits) : null;
+    const casters = new ShadowCasters();
+    terrainR.setShadow(shadowMap);
     const target = device.createTexture({ size: [w, hgt], format, usage: GPUTextureUsage.RENDER_ATTACHMENT });
     const msaa = q.msaa > 1 ? device.createTexture({ size: [w, hgt], format, sampleCount: q.msaa, usage: GPUTextureUsage.RENDER_ATTACHMENT }) : null;
     const depth = device.createTexture({ size: [w, hgt], format: depthFormat(pass), sampleCount: q.msaa, usage: GPUTextureUsage.RENDER_ATTACHMENT });
@@ -84,6 +89,8 @@ for (const pp of gpus) {
       const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, sc.at, q.streamRadius, { maxModels: 20000, maxTextureDim: q.maxTextureDim, caches, props: lvl.props, hiddenLayers: lvl.hiddenLayers });
       const items = lodItems(scene);
       models.setModels(items);
+      models.setShadow(shadowMap);
+      if (shadowMap) casters.setScene(scene, items.map((it) => it.capacity), shadowMap.cascades);
       const lodOut = items.map((it) => new Float32Array(it.capacity * 16));
       const lodCounts = items.map(() => 0);
       const world = new CollisionWorld(h);
@@ -91,9 +98,11 @@ for (const pp of gpus) {
       const session = new PlayerSession(world, avatar, [sc.at[0], sc.at[1], 0], sc.yaw);
       session.pitch = sc.pitch;
       playerR.setModels(avatar.renderItems());
+      playerR.setShadow(shadowMap);
       const npcWorld = new NpcWorld(lvl.vfs, npcEnts, schedules, h);
       const npcs = await npcWorld.near([sc.at[0], sc.at[1], h(sc.at[0], sc.at[1])], 120, q.npcMax, 720);
       npcR.setModels(npcItems(npcs));
+      npcR.setShadow(shadowMap);
       const input: MoveInput = { forward: 1, right: 0, gait: "run", sprint: false };
       const times: number[] = [];
       const phase: Record<string, number> = { player: 0, lods: 0, npcs: 0, encode: 0, gpu: 0 };
@@ -125,6 +134,7 @@ for (const pp of gpus) {
         playerR.setCamera(vp, cam.pos);
         water.setCamera(vp, cam.pos, state.lighting.sunDir, undefined, state.lighting, state.horizon);
         const enc = device.createCommandEncoder();
+        if (shadowMap) casters.render(enc, shadowMap, cam.pos, [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)], state.lighting.sunDir, models, [npcR, playerR], { lodScale: q.lodScale });
         const p = enc.beginRenderPass({
           colorAttachments: [msaa
             ? { view: msaa.createView(), resolveTarget: target.createView(), loadOp: "clear", storeOp: "discard", clearValue: [0, 0, 0, 1] }
@@ -158,6 +168,7 @@ for (const pp of gpus) {
       console.log(`     per frame: ${Object.entries(phase).map(([k, v]) => `${k} ${(v / (FRAMES + 30)).toFixed(2)} ms`).join(", ")}`);
     }
     for (const r of [terrainR, models, water, playerR, npcR, sky]) r.destroy();
+    shadowMap?.destroy();
     for (const t of [target, msaa, depth]) t?.destroy();
   }
   device.destroy();

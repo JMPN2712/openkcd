@@ -18,6 +18,8 @@ import { type MoveInput } from "../src/player.ts";
 import { CollisionWorld } from "../src/collision.ts";
 import { openRataje, gpuDevice, Offscreen } from "./lib.ts";
 import { loadDetailLayers } from "../src/terrainDetail.ts";
+import { ShadowMap } from "../src/shadow.ts";
+import { ShadowCasters } from "../src/shadowPass.ts";
 import { depthClear, depthFormat, type PassSetup } from "../src/mat4.ts";
 import { SkyRenderer, skyAt, pickProfile, invert } from "../src/sky.ts";
 
@@ -43,6 +45,8 @@ const detail = args.includes("--no-detail") ? undefined : await loadDetailLayers
 if (detail) console.log(`terrain detail: ${detail.layers.length} layers (${detail.names.map((n) => n.split("/").pop()).join(", ")})`);
 const terrainR = new TerrainRenderer(device, format, lvl.terrain, lvl.cover, passSetup, detail);
 const models = new ModelRenderer(device, format, 4, passSetup);
+const shadowMap = args.includes("--no-shadows") ? null : new ShadowMap(device, 2048, 2, [20, 120]);
+const casters = new ShadowCasters();
 const water = new WaterRenderer(device, format, lvl.objects.water, passSetup);
 const playerR = new ModelRenderer(device, format, 4, passSetup);
 const sky = new SkyRenderer(device, format, passSetup);
@@ -54,6 +58,8 @@ const t0 = performance.now();
 const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, [ax, ay], radius, { maxModels: 20000, caches: newWorldCaches(), props: lvl.props, hiddenLayers: lvl.hiddenLayers });
 const items = lodItems(scene);
 models.setModels(items);
+models.setShadow(shadowMap);
+if (shadowMap) casters.setScene(scene, items.map((it) => it.capacity), shadowMap.cascades);
 const lodOut = items.map((it) => new Float32Array(it.capacity * 16));
 const lodCounts = items.map(() => 0);
 console.log(`world: ${scene.models.length} models, ${scene.instances} instances within ${radius} m (${((performance.now() - t0) / 1000).toFixed(1)} s)`);
@@ -65,6 +71,8 @@ const session = new PlayerSession(surroundings, avatar, [ax, ay, 0], (ayaw * Mat
 session.pitch = (pitch0 * Math.PI) / 180;
 session.setView(view === "first" ? "first" : "third");
 playerR.setModels(avatar.renderItems());
+playerR.setShadow(shadowMap);
+terrainR.setShadow(shadowMap);
 
 const profile = lvl.tod ? pickProfile(lvl.tod) : null;
 async function render(name: string): Promise<void> {
@@ -85,6 +93,10 @@ async function render(name: string): Promise<void> {
   playerR.setCamera(vp, cam.pos);
   water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85], undefined, state?.lighting, state?.horizon);
   const enc = device.createCommandEncoder();
+  if (shadowMap && state) {
+    const f = [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)] as [number, number, number];
+    casters.render(enc, shadowMap, cam.pos, f, state.lighting.sunDir, models, [playerR]);
+  }
   const pass = enc.beginRenderPass({
     colorAttachments: [{ view: msaa.createView(), resolveTarget: off.target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.7, a: 1 }, loadOp: "clear", storeOp: "discard" }],
     depthStencilAttachment: { view: depth.createView(), depthClearValue: depthClear(passSetup), depthLoadOp: "clear", depthStoreOp: "discard" },

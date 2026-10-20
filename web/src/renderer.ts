@@ -11,13 +11,14 @@
 
 import type { LoadedModel, MipChain } from "./model.ts";
 import { colorizeOf } from "./mtl.ts";
+import { ShadowMap, SHADOW_FORMAT, SHADOW_WGSL } from "./shadow.ts";
 import { DEFAULT_LIGHTING, depthCompare, depthFormat, lookAt, multiply, perspective, transformPoint, type Lighting, type PassSetup, type Vec3 } from "./mat4.ts";
 
 // position 3f, normal 3f, uv 2f, bone ids u16×4, weights unorm8×4
 const VERTEX_BYTES = 44;
 const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
-const SHADER = /* wgsl */ `
+const SHADER = /* wgsl */ `${SHADOW_WGSL}
 // light.w = 1 for flat shading; eye.w = -1 for reversed-Z; fog.w = density per metre
 struct Camera { viewProj: mat4x4f, eye: vec4f, light: vec4f, sunColor: vec4f, skyColor: vec4f, groundColor: vec4f, fog: vec4f };
 // params: x alpha test, y diffuse map, z specular map, w layer
@@ -25,6 +26,9 @@ struct Camera { viewProj: mat4x4f, eye: vec4f, light: vec4f, sunColor: vec4f, sk
 //   (the "Specular" slot then holds the region mask: R/G/B select mask1/2/3)
 struct Draw { model: mat4x4f, color: vec4f, spec: vec4f, params: vec4f, colorize: vec4f, mask1: vec4f, mask2: vec4f, mask3: vec4f };
 @group(0) @binding(0) var<uniform> cam: Camera;
+@group(0) @binding(1) var shadowTex: texture_depth_2d_array;
+@group(0) @binding(2) var shadowSamp: sampler_comparison;
+@group(0) @binding(3) var<uniform> shadowU: Shadow;
 @group(1) @binding(0) var<uniform> drw: Draw;
 @group(1) @binding(1) var tex: texture_2d<f32>;
 @group(1) @binding(2) var samp: sampler;
@@ -82,6 +86,12 @@ fn adjust(lin: vec3f, hsb: vec3f) -> vec3f {
   return pow(max(hsv2rgb(hsv), vec3f(0.0)), vec3f(2.2));
 }
 
+// shadow casters: depth only, alpha-tested (leaves)
+@fragment fn fsShadow(i: VOut) {
+  let a = textureSample(tex, samp, i.uv).a;
+  if (drw.params.x > 0.0 && drw.params.y > 0.5 && a < drw.params.x) { discard; }
+}
+
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let t = textureSample(tex, samp, i.uv);
   let st = textureSample(specTex, samp, i.uv);
@@ -106,8 +116,9 @@ fn adjust(lin: vec3f, hsb: vec3f) -> vec3f {
   // Blinn-Phong stand-in for the PBR specular colour, plus a flat "environment" term so metals read as metal
   let specCol = drw.spec.rgb * specMap;
   let spec = specCol * (pow(max(dot(n, normalize(l + v)), 0.0), 48.0) * ndl * 2.0 * cam.sunColor.rgb / 0.9 + hemi * 1.2);
-  var lin = base.rgb * (hemi + cam.sunColor.rgb * ndl) + spec;
   let fd = distance(i.wpos, cam.eye.xyz);
+  let sh = shadowFactor(i.wpos, n, fd);
+  var lin = base.rgb * (hemi + cam.sunColor.rgb * ndl * sh) + spec * mix(0.3, 1.0, sh);
   lin = mix(lin, cam.fog.rgb, clamp(1.0 - exp(-fd * cam.fog.w), 0.0, 1.0));
   // target is a non-sRGB format: encode manually
   return vec4f(pow(clamp(lin, vec3f(0.0), vec3f(1.0)), vec3f(1.0 / 2.2)), 1.0);
@@ -137,12 +148,61 @@ interface DrawItem {
   meshTm: Float32Array;
 }
 
+/**
+ * One way of drawing the items (indirect mode): the camera, or a shadow cascade. Each view has
+ * its own instance counts, packed instances, draw arguments and render bundles (bundles capture
+ * the view's pipeline and camera bind group).
+ */
+interface View {
+  pipeline: GPURenderPipeline;
+  camBuf: GPUBuffer;
+  camBind: GPUBindGroup;
+  colorFormats: GPUTextureFormat[];
+  depthFormat: GPUTextureFormat;
+  sampleCount: number;
+  counts: Uint32Array;
+  pending: (Float32Array | null)[];
+  itemFirst: Uint32Array;
+  packed: GPUBuffer | null;
+  packedCpu: Float32Array;
+  args: Uint32Array;
+  argsBuf: GPUBuffer | null;
+  /** one bundle per item: null not recorded yet, undefined no draws */
+  bundles: (GPURenderBundle | null | undefined)[];
+  live: GPURenderBundle[];
+  triangles: number;
+  calls: number;
+}
+
+const VERTEX_LAYOUT: GPUVertexBufferLayout[] = [{
+  arrayStride: VERTEX_BYTES,
+  attributes: [
+    { shaderLocation: 0, offset: 0, format: "float32x3" },
+    { shaderLocation: 1, offset: 12, format: "float32x3" },
+    { shaderLocation: 2, offset: 24, format: "float32x2" },
+    { shaderLocation: 3, offset: 32, format: "uint16x4" },
+    { shaderLocation: 4, offset: 40, format: "unorm8x4" },
+  ],
+}, {
+  arrayStride: 64,
+  stepMode: "instance",
+  attributes: [0, 1, 2, 3].map((k) => ({ shaderLocation: 5 + k, offset: k * 16, format: "float32x4" as GPUVertexFormat })),
+}];
+
+/** A stand-in shadow map (always lit) per device, for renderers without shadows. */
+const noShadows = new WeakMap<GPUDevice, ShadowMap>();
+
 export class ModelRenderer {
   readonly device: GPUDevice;
   readonly format: GPUTextureFormat;
   readonly sampleCount: number;
   private reversedZ: boolean;
   private pipeline: GPURenderPipeline;
+  private shadowPipeline: GPURenderPipeline | null = null;
+  private module: GPUShaderModule;
+  private camLayout: GPUBindGroupLayout;
+  private drawLayout: GPUBindGroupLayout;
+  private pipelineLayout: GPUPipelineLayout;
   private camBuf: GPUBuffer;
   private camBind: GPUBindGroup;
   private sampler: GPUSampler;
@@ -150,7 +210,9 @@ export class ModelRenderer {
   private draws: DrawItem[] = [];
   private palettes: ({ buf: GPUBuffer; count: number } | null)[] = [];
   private itemInst: { buf: GPUBuffer; count: number; capacity: number }[] = [];
+  private dynamicItems: number[] = [];
   private drawsByItem: Map<number, DrawItem[]> | null = null;
+  private drawIndex: Map<number, number[]> | null = null;
   private identityPalette: GPUBuffer;
   private identityInstance: GPUBuffer;
   private owned: (GPUBuffer | GPUTexture)[] = [];
@@ -158,22 +220,16 @@ export class ModelRenderer {
   private msaa: GPUTexture | null = null;
   private pass: PassSetup;
   /**
-   * Indirect mode (needs "indirect-first-instance"): every draw is recorded once into a render
-   * bundle as drawIndexedIndirect; per frame the instances of all dynamic items are packed into
-   * one buffer and each draw's instance count and first instance are written to one argument
-   * buffer. Recording thousands of draws a frame was the town's biggest CPU cost.
+   * Indirect mode (needs "indirect-first-instance"): every item's draws are recorded once into a
+   * render bundle of drawIndexedIndirect; per frame the instances of all dynamic items are packed
+   * into one buffer and each draw's instance count and first instance written to one argument
+   * buffer, and only the bundles of items with instances run. Recording thousands of draws a
+   * frame was the town's biggest CPU cost.
    */
   readonly indirect: boolean;
-  private packed: GPUBuffer | null = null;
-  private packedCpu = new Float32Array(0);
-  private pending: (Float32Array | null)[] = [];
-  private args = new Uint32Array(0);
-  private argsBuf: GPUBuffer | null = null;
-  /** one bundle per item: only items with something to draw are executed */
-  private bundles: (GPURenderBundle | null | undefined)[] = []; // null: not recorded yet; undefined: no draws
-  private live: GPURenderBundle[] = [];
-  private dynamicItems: number[] = [];
-  private itemFirst = new Uint32Array(0);
+  /** views[0] the camera; views[1 + c] shadow cascade c (indirect mode only) */
+  private views: View[] = [];
+  private shadow: ShadowMap | null = null;
   /** model-space bounds of everything drawn */
   bboxMin: Vec3 = [-1, -1, -1];
   bboxMax: Vec3 = [1, 1, 1];
@@ -187,34 +243,36 @@ export class ModelRenderer {
     const pass: PassSetup = { sampleCount, reversedZ: this.reversedZ };
     this.pass = pass;
     this.indirect = device.features.has("indirect-first-instance");
-    const module = device.createShaderModule({ code: SHADER });
+    this.module = device.createShaderModule({ code: SHADER });
+    const VF = GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, F = GPUShaderStage.FRAGMENT;
+    this.camLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: VF, buffer: { type: "uniform" } },
+        { binding: 1, visibility: F, texture: { sampleType: "depth", viewDimension: "2d-array" } },
+        { binding: 2, visibility: F, sampler: { type: "comparison" } },
+        { binding: 3, visibility: F, buffer: { type: "uniform" } },
+      ],
+    });
+    this.drawLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: VF, buffer: { type: "uniform" } },
+        { binding: 1, visibility: F, texture: { sampleType: "float" } },
+        { binding: 2, visibility: F, sampler: { type: "filtering" } },
+        { binding: 3, visibility: F, texture: { sampleType: "float" } },
+        { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
+      ],
+    });
+    this.pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [this.camLayout, this.drawLayout] });
     this.pipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: {
-        module,
-        entryPoint: "vs",
-        buffers: [{
-          arrayStride: VERTEX_BYTES,
-          attributes: [
-            { shaderLocation: 0, offset: 0, format: "float32x3" },
-            { shaderLocation: 1, offset: 12, format: "float32x3" },
-            { shaderLocation: 2, offset: 24, format: "float32x2" },
-            { shaderLocation: 3, offset: 32, format: "uint16x4" },
-            { shaderLocation: 4, offset: 40, format: "unorm8x4" },
-          ],
-        }, {
-          arrayStride: 64,
-          stepMode: "instance",
-          attributes: [0, 1, 2, 3].map((k) => ({ shaderLocation: 5 + k, offset: k * 16, format: "float32x4" as GPUVertexFormat })),
-        }],
-      },
-      fragment: { module, entryPoint: "fs", targets: [{ format }] },
+      layout: this.pipelineLayout,
+      vertex: { module: this.module, entryPoint: "vs", buffers: VERTEX_LAYOUT },
+      fragment: { module: this.module, entryPoint: "fs", targets: [{ format }] },
       primitive: { topology: "triangle-list", cullMode: "none", frontFace: "ccw" },
       depthStencil: { format: depthFormat(pass), depthWriteEnabled: true, depthCompare: depthCompare(pass) },
       multisample: { count: sampleCount },
     });
     this.camBuf = device.createBuffer({ size: 160, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    this.camBind = device.createBindGroup({ layout: this.pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.camBuf } }] });
+    this.camBind = this.cameraBind(this.camBuf, this.shadowOrStandIn());
     this.sampler = device.createSampler({ magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", addressModeU: "repeat", addressModeV: "repeat", maxAnisotropy: 8 });
     this.identityInstance = device.createBuffer({ size: 64, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(this.identityInstance, 0, IDENTITY);
@@ -222,6 +280,80 @@ export class ModelRenderer {
     device.queue.writeBuffer(this.identityPalette, 0, IDENTITY);
     this.white = device.createTexture({ size: [1, 1], format: "rgba8unorm-srgb", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     device.queue.writeTexture({ texture: this.white }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4 }, [1, 1]);
+  }
+
+  private shadowOrStandIn(): ShadowMap {
+    if (this.shadow) return this.shadow;
+    let s = noShadows.get(this.device);
+    if (!s) noShadows.set(this.device, (s = new ShadowMap(this.device, 1, 0)));
+    return s;
+  }
+
+  private cameraBind(buf: GPUBuffer, map: ShadowMap): GPUBindGroup {
+    return this.device.createBindGroup({
+      layout: this.camLayout,
+      entries: [
+        { binding: 0, resource: { buffer: buf } },
+        { binding: 1, resource: map.arrayView },
+        { binding: 2, resource: map.sampler },
+        { binding: 3, resource: { buffer: map.buffer } },
+      ],
+    });
+  }
+
+  /**
+   * Receive (and, in indirect mode, cast) shadows from `map` (null: none). Casting uses one view
+   * per cascade: fill it with setShadowInstances() and draw it with drawShadow().
+   */
+  setShadow(map: ShadowMap | null): void {
+    this.shadow = map && map.cascades ? map : null;
+    this.camBind = this.cameraBind(this.camBuf, this.shadowOrStandIn());
+    if (this.shadow && this.indirect && !this.shadowPipeline) {
+      this.shadowPipeline = this.device.createRenderPipeline({
+        layout: this.pipelineLayout,
+        vertex: { module: this.module, entryPoint: "vs", buffers: VERTEX_LAYOUT },
+        fragment: { module: this.module, entryPoint: "fsShadow", targets: [] },
+        primitive: { topology: "triangle-list", cullMode: "none" },
+        // slope-scaled bias against acne on surfaces at grazing light
+        depthStencil: { format: SHADOW_FORMAT, depthWriteEnabled: true, depthCompare: "less", depthBias: 2, depthBiasSlopeScale: 2.5 },
+      });
+    }
+    this.buildViews();
+  }
+
+  /** (Re)create the views for the current items: the camera, then one per shadow cascade. */
+  private buildViews(): void {
+    for (const v of this.views) { v.camBuf !== this.camBuf && v.camBuf.destroy(); v.packed?.destroy(); v.argsBuf?.destroy(); }
+    this.views = [];
+    if (!this.indirect) return;
+    const items = this.itemInst.length;
+    const total = this.dynamicItems.reduce((s, k) => s + this.itemInst[k].capacity, 0);
+    const make = (pipeline: GPURenderPipeline, camBuf: GPUBuffer, camBind: GPUBindGroup, colorFormats: GPUTextureFormat[], depth: GPUTextureFormat, samples: number): View => {
+      const packed = this.device.createBuffer({ size: Math.max(1, total) * 64, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+      const args = new Uint32Array(Math.max(1, this.draws.length) * 5);
+      const argsBuf = this.device.createBuffer({ size: args.byteLength, usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST });
+      const counts = new Uint32Array(items);
+      this.itemInst.forEach((it, k) => { if (!this.dynamicItems.includes(k)) counts[k] = it.count; });
+      return {
+        pipeline, camBuf, camBind, colorFormats, depthFormat: depth, sampleCount: samples, counts,
+        pending: new Array(items).fill(null), itemFirst: new Uint32Array(items), packed, packedCpu: new Float32Array(Math.max(1, total) * 16),
+        args, argsBuf, bundles: new Array(items).fill(null), live: [], triangles: 0, calls: 0,
+      };
+    };
+    this.views.push(make(this.pipeline, this.camBuf, this.camBind, [this.format], depthFormat(this.pass), this.sampleCount));
+    if (this.shadow && this.shadowPipeline) {
+      for (let c = 0; c < this.shadow.cascades; c++) {
+        const buf = this.device.createBuffer({ size: 160, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        // casters bind the stand-in map (a texture can't be sampled while it is the depth target)
+        this.views.push(make(this.shadowPipeline, buf, this.cameraBind(buf, noShadows.get(this.device) ?? this.shadowOrStandInFresh()), [], SHADOW_FORMAT, 1));
+      }
+    }
+  }
+
+  private shadowOrStandInFresh(): ShadowMap {
+    const s = new ShadowMap(this.device, 1, 0);
+    noShadows.set(this.device, s);
+    return s;
   }
 
   private upload(chain: MipChain): GPUTexture {
@@ -288,19 +420,13 @@ export class ModelRenderer {
     const textures = new Map<MipChain, GPUTexture>();
     const min: Vec3 = [Infinity, Infinity, Infinity];
     const max: Vec3 = [-Infinity, -Infinity, -Infinity];
-    // indirect mode: one packed buffer for every dynamic item's instances
-    if (this.indirect) {
-      const total = items.reduce((s, it) => s + (it.capacity ?? 0), 0);
-      this.packed = this.device.createBuffer({ size: Math.max(1, total) * 64, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
-      this.owned.push(this.packed);
-      this.packedCpu = new Float32Array(Math.max(1, total) * 16);
-      this.pending = items.map(() => null);
-      this.itemFirst = new Uint32Array(items.length);
-      this.dynamicItems = items.flatMap((it, k) => (it.capacity !== undefined ? [k] : []));
-    }
+    // indirect mode: dynamic items' instances go to each view's packed buffer (buildViews)
+    this.dynamicItems = items.flatMap((it, k) => (it.capacity !== undefined ? [k] : []));
+    // a placeholder for dynamic items' draws: the bundles bind the view's packed buffer instead
+    const packedMark = this.identityInstance;
     this.itemInst = items.map(({ instances, capacity }) => {
       if (capacity !== undefined) {
-        if (this.indirect) return { buf: this.packed!, count: 0, capacity };
+        if (this.indirect) return { buf: packedMark, count: 0, capacity };
         const buf = this.device.createBuffer({ size: Math.max(1, capacity) * 64, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
         this.owned.push(buf);
         return { buf, count: 0, capacity };
@@ -381,7 +507,7 @@ export class ModelRenderer {
         this.device.queue.writeBuffer(ubuf, 0, u);
         this.owned.push(ubuf);
         const bind = this.device.createBindGroup({
-          layout: this.pipeline.getBindGroupLayout(1),
+          layout: this.drawLayout,
           entries: [
             { binding: 0, resource: { buffer: ubuf } },
             { binding: 1, resource: gpuTex.createView() },
@@ -396,13 +522,7 @@ export class ModelRenderer {
     }
     this.stats.draws = this.draws.length;
     if (min[0] <= max[0]) { this.bboxMin = min; this.bboxMax = max; }
-    if (this.indirect) {
-      this.args = new Uint32Array(Math.max(1, this.draws.length) * 5);
-      this.argsBuf = this.device.createBuffer({ size: this.args.byteLength, usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST });
-      this.owned.push(this.argsBuf);
-      this.bundles = items.map(() => null);
-      this.drawsByItem = null;
-    }
+    this.buildViews();
   }
 
   /** Camera framing the whole model, looking from the front-left and slightly above. */
@@ -473,8 +593,12 @@ export class ModelRenderer {
   /** Record this renderer's draws into a pass with the same format, sample count and depth convention. */
   draw(pass: GPURenderPassEncoder): void {
     if (this.indirect) {
-      this.flush();
-      if (this.live.length) pass.executeBundles(this.live);
+      const v = this.views[0];
+      if (!v) return;
+      this.flush(v);
+      this.stats.triangles = v.triangles;
+      this.stats.drawCalls = v.calls;
+      if (v.live.length) pass.executeBundles(v.live);
       return;
     }
     pass.setPipeline(this.pipeline);
@@ -501,52 +625,93 @@ export class ModelRenderer {
     const it = this.itemInst[index];
     if (!it) return;
     it.count = Math.min(count, it.capacity);
-    if (this.indirect) this.pending[index] = matrices;
+    const v = this.views[0];
+    if (v) { v.counts[index] = it.count; v.pending[index] = matrices; }
     else if (it.count) this.device.queue.writeBuffer(it.buf, 0, matrices.subarray(0, it.count * 16));
   }
 
-  /** Indirect mode: pack the dynamic items' instances and write every draw's arguments. */
-  private flush(): void {
+  /** Shadow casters in cascade `c`: like setInstances (items without capacity always cast). */
+  setShadowInstances(c: number, index: number, matrices: Float32Array, count: number): void {
+    const v = this.views[1 + c], it = this.itemInst[index];
+    if (!v || !it) return;
+    v.counts[index] = Math.min(count, it.capacity);
+    v.pending[index] = matrices;
+  }
+
+  /** Light view-projection of cascade `c` for the next drawShadow. */
+  setShadowCamera(c: number, viewProj: Float32Array): void {
+    const v = this.views[1 + c];
+    if (!v) return;
+    const cu = new Float32Array(40);
+    cu.set(viewProj, 0);
+    cu.set([0, 0, 0, 1], 16);
+    this.device.queue.writeBuffer(v.camBuf, 0, cu);
+  }
+
+  /** Record cascade `c`'s casters into a depth-only pass (ShadowMap.beginPass). */
+  drawShadow(pass: GPURenderPassEncoder, c: number): void {
+    const v = this.views[1 + c];
+    if (!v) return;
+    this.flush(v);
+    if (v.live.length) pass.executeBundles(v.live);
+  }
+
+  /**
+   * Hide a fixed item from the camera but keep it in the shadow passes (first person: Henry's head
+   * casts a shadow but isn't drawn). Indirect mode only; returns false when unsupported.
+   */
+  setItemHidden(index: number, hidden: boolean): boolean {
+    const v = this.views[0], it = this.itemInst[index];
+    if (!v || !it || this.dynamicItems.includes(index)) return false;
+    v.counts[index] = hidden ? 0 : it.count;
+    return true;
+  }
+
+  /** Whether this renderer casts shadows (indirect mode with a shadow map set). */
+  get castsShadows(): boolean {
+    return this.views.length > 1;
+  }
+
+  /** Indirect mode: pack a view's dynamic instances, write its draw arguments, list its live bundles. */
+  private flush(v: View): void {
     let off = 0;
     for (const k of this.dynamicItems) {
-      const it = this.itemInst[k], m = this.pending[k];
-      this.itemFirst[k] = off;
-      if (!it.count || !m) { it.count = m ? it.count : 0; continue; }
-      this.packedCpu.set(m.subarray(0, it.count * 16), off * 16);
-      off += it.count;
+      const n = v.counts[k], m = v.pending[k];
+      v.itemFirst[k] = off;
+      if (!n || !m) { if (!m) v.counts[k] = 0; continue; }
+      v.packedCpu.set(m.subarray(0, n * 16), off * 16);
+      off += n;
     }
-    if (off) this.device.queue.writeBuffer(this.packed!, 0, this.packedCpu, 0, off * 16);
+    if (off) this.device.queue.writeBuffer(v.packed!, 0, v.packedCpu, 0, off * 16);
     let tris = 0, calls = 0;
-    const a = this.args;
-    this.draws.forEach((d, i) => {
-      const it = this.itemInst[d.item];
-      const dynamic = it && it.buf === this.packed;
-      const n = d.count ? (it?.count ?? d.instCount) : 0;
+    const a = v.args;
+    for (let i = 0; i < this.draws.length; i++) {
+      const d = this.draws[i];
+      const n = d.count ? v.counts[d.item] : 0;
       a[i * 5] = d.count;
       a[i * 5 + 1] = n;
       a[i * 5 + 2] = d.firstIndex;
       a[i * 5 + 3] = 0;
-      a[i * 5 + 4] = dynamic ? this.itemFirst[d.item] : 0;
+      a[i * 5 + 4] = v.itemFirst[d.item];
       if (n) { tris += (d.count / 3) * n; calls++; }
-    });
-    if (this.draws.length) this.device.queue.writeBuffer(this.argsBuf!, 0, a, 0, this.draws.length * 5);
-    this.stats.triangles = tris;
-    this.stats.drawCalls = calls;
-    // the items with instances this frame (recorded on first use)
-    this.live.length = 0;
-    for (let k = 0; k < this.itemInst.length; k++) {
-      if (!this.itemInst[k].count) continue;
-      let b = this.bundles[k];
-      if (b === null) b = this.bundles[k] = this.record(k);
-      if (b) this.live.push(b);
+    }
+    if (this.draws.length) this.device.queue.writeBuffer(v.argsBuf!, 0, a, 0, this.draws.length * 5);
+    v.triangles = tris;
+    v.calls = calls;
+    v.live.length = 0;
+    for (let k = 0; k < v.counts.length; k++) {
+      if (!v.counts[k]) continue;
+      let b = v.bundles[k];
+      if (b === null) b = v.bundles[k] = this.record(v, k);
+      if (b) v.live.push(b);
     }
   }
 
   /**
-   * Indirect mode: an item's draws, once, into a render bundle (buffers and bind groups are fixed
-   * until setModels). Items without draws get none.
+   * Indirect mode: an item's draws, once, into a render bundle for a view (buffers and bind
+   * groups are fixed until setModels). Items without draws get none.
    */
-  private record(item: number): GPURenderBundle | undefined {
+  private record(v: View, item: number): GPURenderBundle | undefined {
     if (!this.drawIndex) {
       this.drawIndex = new Map();
       this.draws.forEach((d, i) => {
@@ -556,22 +721,22 @@ export class ModelRenderer {
     }
     const list = this.drawIndex.get(item);
     if (!list?.length) return undefined;
-    const enc = this.device.createRenderBundleEncoder({ colorFormats: [this.format], depthStencilFormat: depthFormat(this.pass), sampleCount: this.sampleCount });
-    enc.setPipeline(this.pipeline);
-    enc.setBindGroup(0, this.camBind);
+    const enc = this.device.createRenderBundleEncoder({ colorFormats: v.colorFormats, depthStencilFormat: v.depthFormat, sampleCount: v.sampleCount });
+    enc.setPipeline(v.pipeline);
+    enc.setBindGroup(0, v === this.views[0] ? this.camBind : v.camBind);
+    const dynamic = this.dynamicItems.includes(item);
     let vb: GPUBuffer | null = null, ib: GPUBuffer | null = null, inst: GPUBuffer | null = null;
     for (const i of list) {
       const d = this.draws[i];
+      const ibuf = dynamic ? v.packed! : d.inst;
       if (d.vb !== vb) enc.setVertexBuffer(0, (vb = d.vb));
-      if (d.inst !== inst) enc.setVertexBuffer(1, (inst = d.inst));
+      if (ibuf !== inst) enc.setVertexBuffer(1, (inst = ibuf));
       if (d.ib !== ib) enc.setIndexBuffer((ib = d.ib), "uint32");
       enc.setBindGroup(1, d.bind);
-      enc.drawIndexedIndirect(this.argsBuf!, i * 20);
+      enc.drawIndexedIndirect(v.argsBuf!, i * 20);
     }
     return enc.finish();
   }
-
-  private drawIndex: Map<number, number[]> | null = null;
 
   /** Number of bones in item `index`'s palette (0 = not skinned). */
   paletteSize(index: number): number {
@@ -604,8 +769,8 @@ export class ModelRenderer {
     this.draws = [];
     this.drawsByItem = null;
     this.drawIndex = null;
-    this.bundles = [];
-    this.live = [];
+    for (const v of this.views) { if (v.camBuf !== this.camBuf) v.camBuf.destroy(); v.packed?.destroy(); v.argsBuf?.destroy(); }
+    this.views = [];
     this.palettes = [];
     this.itemInst = [];
     this.stats = { meshes: 0, triangles: 0, vertices: 0, draws: 0, textured: 0, drawCalls: 0 };
