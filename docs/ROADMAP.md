@@ -115,6 +115,10 @@ playable frame rates on the Potato preset.
 - [ ] Water: the volumes are flat tinted polygons with a glint (no
       reflections, waves, depth fade or shoreline blending); the most visible
       issues found walking the whole map.
+  - [x] Models with Water, Waterfall and Glass materials (dam overflows,
+        weirs, mill races, tubs, buckets, windows) are drawn blended after
+        the opaque scene; they had rendered as opaque glitchy surfaces.
+  - [ ] Flowing (scrolling) waterfalls, foam, depth fade at the banks.
 
 ## 2. Installer converter and slim format (current)
 
