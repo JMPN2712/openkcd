@@ -159,7 +159,7 @@ export class ModelRenderer {
   /** model-space bounds of everything drawn */
   bboxMin: Vec3 = [-1, -1, -1];
   bboxMax: Vec3 = [1, 1, 1];
-  stats = { meshes: 0, triangles: 0, vertices: 0, draws: 0, textured: 0 };
+  stats = { meshes: 0, triangles: 0, vertices: 0, draws: 0, textured: 0, drawCalls: 0 };
 
   constructor(device: GPUDevice, format: GPUTextureFormat, sampleCount = 4, opts: { reversedZ?: boolean } = {}) {
     this.device = device;
@@ -436,7 +436,7 @@ export class ModelRenderer {
   draw(pass: GPURenderPassEncoder): void {
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.camBind);
-    let tris = 0;
+    let tris = 0, calls = 0;
     for (const d of this.draws) {
       const n = this.itemInst[d.item]?.count ?? d.instCount;
       if (!n || !d.count) continue;
@@ -446,8 +446,11 @@ export class ModelRenderer {
       pass.setBindGroup(1, d.bind);
       pass.drawIndexed(d.count, n, d.firstIndex);
       tris += (d.count / 3) * n;
+      calls++;
     }
     this.stats.triangles = tris;
+    /** draw calls recorded by the last draw() */
+    this.stats.drawCalls = calls;
   }
 
   /** Upload `count` instance matrices for an item created with `capacity`. */
@@ -490,7 +493,7 @@ export class ModelRenderer {
     this.drawsByItem = null;
     this.palettes = [];
     this.itemInst = [];
-    this.stats = { meshes: 0, triangles: 0, vertices: 0, draws: 0, textured: 0 };
+    this.stats = { meshes: 0, triangles: 0, vertices: 0, draws: 0, textured: 0, drawCalls: 0 };
   }
 
   destroy(): void {
