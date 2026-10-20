@@ -261,6 +261,34 @@ Parametric blending, in plain XML.
   - stairs: `1d_stairs_walk`/`run`;
   - jumps: `1d_jump_*`, `2d_jump_height`.
 
+### How OpenKCD plays them (`web/src/locomotion.ts`)
+
+- **Example parameters.** MoveSpeed is the root travel ÷ duration × PlaybackScale;
+  TravelAngle is atan2(−x, y) of the travel (left positive); TurnSpeed and
+  TurnAngle come from the turn; `SetParaN` overrides dimension N. The
+  MotionParams start/end locations are in the exporter's Y-up frame; the end
+  is taken relative to the start (`readMotion` in `anim.ts`).
+- **Weights.** Inverse bilinear interpolation in the authored quads, with
+  each dimension normalised by its range; outside every quad, the nearest
+  one, clamped.
+- **Phase.** Loop clips hold different numbers of gait cycles:
+  `relaxed_walk_*_player` and `relaxed_run_slow_*` hold two (four steps),
+  `relaxed_run_medium_*` one. Blending them by clip time put opposite feet
+  together (47% foot slide when strafing). Each loop example's cycle count
+  and left-foot-down phase are measured from its pose (the lower toe), and
+  examples are synced on the gait cycle.
+- **Combined spaces.** The strafe and turn spaces of the 3D combs are mixed
+  by how much the body turns while moving straight. This is an
+  approximation of the engine's combination.
+- **Start and stop.** Start and stop combs choose their left- or right-foot
+  space by the TurnAngle range (`ChooseBlendSpace`). For a straight stop,
+  both fit, so OpenKCD picks the foot whose stop pose best matches the
+  current feet. This is a placeholder until a note settles the game's rule.
+- **Code-driven movement.** Transition clips advance by the distance
+  actually travelled along their root motion. A stop is entered where the
+  clip's remaining root travel equals the controller's stopping distance
+  (speed ÷ inertia 11).
+
 ## Mannequin (`Animations/Mannequin/ADB`)
 
 The player's script names its controller and database:

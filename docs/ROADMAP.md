@@ -51,8 +51,12 @@ playable frame rates on the Potato preset.
       +45° sprinting), the full body drawn with the head and hair hidden, a
       1 cm near plane (reversed-Z depth). The eye pivots about the neck with
       the pitch, standing in for the game's look IK.
-- [ ] Locomotion: idle, walk, run and turn blending from the game's
-      locomotion clips.
+- [x] Locomotion: idle, walk, run and turn blending from the game's
+      locomotion clips (`locomotion.ts`): the Mannequin fragments pick the
+      `.bspace`/`.comb` spaces (walk, run, sprint, backward), blended by
+      speed, travel angle and turn rate, with start and stop clips and 0.2 s
+      crossfades. Planted feet slide 4–15% of the speed (`test-player.ts`).
+      Turning on the spot (`1d_relaxed_idle_bigturns_nw`) is not used yet.
 - [ ] Physics proxies for collision (from the models' physics meshes).
 - [ ] Whole-world streaming beyond Rataje, plus LOD.
 - [ ] Time of day and sky (lighting is basic for now).

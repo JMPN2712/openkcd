@@ -4,7 +4,8 @@
 // Controls: WASD move · mouse look · Shift sprint · X / Caps Lock walk ↔ run · Space jump.
 
 import { PlayerController, type MoveInput, type Surroundings, type Vec3 } from "./player.ts";
-import { PlayerAvatar, SimpleLocomotion } from "./playerAvatar.ts";
+import { PlayerAvatar } from "./playerAvatar.ts";
+import { LocomotionPlayer } from "./locomotion.ts";
 import type { FlyCamera } from "./terrainRenderer.ts";
 
 const DEG = Math.PI / 180;
@@ -22,7 +23,11 @@ const NOD_DOWN = 0.8, NOD_UP = 0.4;
 export class PlayerSession {
   readonly controller: PlayerController;
   readonly avatar: PlayerAvatar;
-  private loco: SimpleLocomotion;
+  readonly loco: LocomotionPlayer;
+  /** smoothed body yaw rate (rad/s) for the turn blend spaces */
+  private turnRate = 0;
+  private lastYaw: number;
+  private lastPos: Vec3;
   /** look direction (the body turns with the view's yaw) */
   pitch = 0;
   walk = false;
@@ -31,7 +36,9 @@ export class PlayerSession {
   constructor(world: Surroundings, avatar: PlayerAvatar, spawn: Vec3, yaw: number) {
     this.controller = new PlayerController(world, spawn, yaw);
     this.avatar = avatar;
-    this.loco = new SimpleLocomotion(avatar);
+    this.loco = new LocomotionPlayer(avatar.locomotion, avatar.animator);
+    this.lastYaw = yaw;
+    this.lastPos = [...this.controller.pos];
     this.setView("first");
   }
 
@@ -72,7 +79,16 @@ export class PlayerSession {
     this.controller.update(dt, input);
     const c = this.controller;
     this.avatar.place([c.pos[0], c.pos[1], c.viewZ], c.yaw);
-    this.loco.update(dt, c.speed(), c.gait);
+    // body yaw rate, smoothed over ~0.15 s (mouse input arrives in bursts)
+    const dyaw = Math.atan2(Math.sin(c.yaw - this.lastYaw), Math.cos(c.yaw - this.lastYaw));
+    this.lastYaw = c.yaw;
+    if (dt > 0) this.turnRate += (dyaw / dt - this.turnRate) * Math.min(1, dt / 0.15);
+    const moved = Math.hypot(c.pos[0] - this.lastPos[0], c.pos[1] - this.lastPos[1]);
+    this.lastPos = [...c.pos];
+    const [lx, ly] = c.localVelocity();
+    const travel = Math.hypot(lx, ly) > 0.1 ? Math.atan2(-lx, ly) : Math.atan2(-input.right, input.forward || (input.right ? 0 : 1));
+    this.loco.update(dt, { speed: c.speed(), travelAngle: travel, turnSpeed: this.turnRate, wantSpeed: c.wantSpeed, gait: c.gait, moved });
+    this.avatar.animator.evaluateLayers(this.loco.layers(), true);
     // sprinting narrows the pitch range: ease into it rather than snapping the view
     const want = this.clampPitch(this.pitch);
     this.pitch += (want - this.pitch) * Math.min(1, dt * 8);

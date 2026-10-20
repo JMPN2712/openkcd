@@ -106,6 +106,13 @@ function keyInto(times: Float32Array, t: number, out: Float64Array): void {
   out[0] = lo; out[1] = hi; out[2] = (t - times[lo]) / (times[hi] - times[lo]);
 }
 
+/** One clip's contribution to a blended pose. */
+export interface BlendLayer {
+  clip: Clip | null;
+  frame: number;
+  weight: number;
+}
+
 export class Animator {
   readonly skeleton: Skeleton;
   private localRot: Quat[] = [];
@@ -160,38 +167,72 @@ export class Animator {
 
   /**
    * Evaluate the clip at `frame` (null clip = bind pose). Bones are ordered parents-first in CompiledBones.
-   * `inPlace` drops the root bone's animated translation (locomotion clips carry their forward
-   * motion there: relaxed_walk_medium moves the root 3.03 m over its 65 frames).
+   * `inPlace` drops the root bone's animated motion (locomotion clips carry their forward motion
+   * and their turn there: relaxed_walk_medium moves the root 3.03 m over its 65 frames).
    * Allocation-free: samples into scratch storage and updates `world` in place.
    */
   evaluate(clip: Clip | null, frame: number, inPlace = false): Float32Array[] {
+    this.one[0].clip = clip;
+    this.one[0].frame = frame;
+    return this.evaluateLayers(clip ? this.one : [], inPlace);
+  }
+
+  private one: BlendLayer[] = [{ clip: null, frame: 0, weight: 1 }];
+  private acc = new Float64Array(7);
+
+  /**
+   * Weighted blend of several clips, each at its own frame: per bone, rotations are summed
+   * (sign-aligned to the first) and normalised, translations averaged; a clip without a track
+   * for a bone contributes the bind pose. Weights need not sum to 1. No layers = bind pose.
+   */
+  evaluateLayers(layers: readonly BlendLayer[], inPlace = false): Float32Array[] {
     const n = this.skeleton.bones.length;
-    const tracks = clip ? this.tracksOf(clip) : null;
-    const m = this.local, k = this.key;
+    const m = this.local, k = this.key, acc = this.acc;
+    let total = 0;
+    for (const l of layers) if (l.clip && l.weight > 0) total += l.weight;
     for (let i = 0; i < n; i++) {
-      const track = tracks?.[i];
-      // rotation (x, y, z, w)
-      let x: number, y: number, z: number, w: number;
-      if (track && track.rotations.length) {
-        keyInto(track.rotTimes, frame, k);
-        const a = track.rotations[k[0]], b = track.rotations[k[1]], f = k[2];
-        const sgn = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3] < 0 ? -1 : 1;
-        x = a[0] + (b[0] * sgn - a[0]) * f; y = a[1] + (b[1] * sgn - a[1]) * f;
-        z = a[2] + (b[2] * sgn - a[2]) * f; w = a[3] + (b[3] * sgn - a[3]) * f;
-      } else {
+      const root = this.parents[i] < 0;
+      acc.fill(0);
+      let first = true;
+      if (total > 0 && !(inPlace && root)) {
+        for (const l of layers) {
+          if (!l.clip || l.weight <= 0) continue;
+          const w = l.weight / total;
+          const track = this.tracksOf(l.clip)[i];
+          let x: number, y: number, z: number, qw: number;
+          if (track && track.rotations.length) {
+            keyInto(track.rotTimes, l.frame, k);
+            const a = track.rotations[k[0]], b = track.rotations[k[1]], f = k[2];
+            const sgn = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3] < 0 ? -1 : 1;
+            x = a[0] + (b[0] * sgn - a[0]) * f; y = a[1] + (b[1] * sgn - a[1]) * f;
+            z = a[2] + (b[2] * sgn - a[2]) * f; qw = a[3] + (b[3] * sgn - a[3]) * f;
+          } else {
+            [x, y, z, qw] = this.localRot[i];
+          }
+          // keep every contribution in the first one's hemisphere
+          if (!first && acc[0] * x + acc[1] * y + acc[2] * z + acc[3] * qw < 0) { x = -x; y = -y; z = -z; qw = -qw; }
+          first = false;
+          acc[0] += x * w; acc[1] += y * w; acc[2] += z * w; acc[3] += qw * w;
+          if (track && track.positions.length) {
+            keyInto(track.posTimes, l.frame, k);
+            const a = track.positions[k[0]], b = track.positions[k[1]], f = k[2];
+            acc[4] += (a[0] + (b[0] - a[0]) * f) * w; acc[5] += (a[1] + (b[1] - a[1]) * f) * w; acc[6] += (a[2] + (b[2] - a[2]) * f) * w;
+          } else {
+            const p = this.localPos[i];
+            acc[4] += p[0] * w; acc[5] += p[1] * w; acc[6] += p[2] * w;
+          }
+        }
+      }
+      let x: number, y: number, z: number, w: number, px: number, py: number, pz: number;
+      if (first) {
         [x, y, z, w] = this.localRot[i];
+        [px, py, pz] = this.localPos[i];
+      } else {
+        x = acc[0]; y = acc[1]; z = acc[2]; w = acc[3];
+        px = acc[4]; py = acc[5]; pz = acc[6];
       }
       const l = Math.sqrt(x * x + y * y + z * z + w * w) || 1;
       x /= l; y /= l; z /= l; w /= l;
-      // translation
-      let px: number, py: number, pz: number;
-      if (track && track.positions.length && !(inPlace && this.parents[i] < 0)) {
-        keyInto(track.posTimes, frame, k);
-        const a = track.positions[k[0]], b = track.positions[k[1]], f = k[2];
-        px = a[0] + (b[0] - a[0]) * f; py = a[1] + (b[1] - a[1]) * f; pz = a[2] + (b[2] - a[2]) * f;
-      } else {
-        [px, py, pz] = this.localPos[i];
-      }
       m[0] = 1 - 2 * (y * y + z * z); m[1] = 2 * (x * y + z * w); m[2] = 2 * (x * z - y * w); m[3] = 0;
       m[4] = 2 * (x * y - z * w); m[5] = 1 - 2 * (x * x + z * z); m[6] = 2 * (y * z + x * w); m[7] = 0;
       m[8] = 2 * (x * z + y * w); m[9] = 2 * (y * z - x * w); m[10] = 1 - 2 * (x * x + y * y); m[11] = 0;

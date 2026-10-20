@@ -12,7 +12,8 @@ import { ASSET_RE } from "../src/assets.ts";
 import { readCentralDirectory, readEntry } from "../src/zip.ts";
 import { parseTerrain, heightAt } from "../src/terrain.ts";
 import { PlayerController, terrainSurroundings, targetSpeed, PLAYER, GAIT_SPEED, type MoveInput } from "../src/player.ts";
-import { PlayerAvatar, SimpleLocomotion } from "../src/playerAvatar.ts";
+import { PlayerAvatar } from "../src/playerAvatar.ts";
+import { blendWeights, fragmentAnim, LocomotionPlayer } from "../src/locomotion.ts";
 import { PlayerSession, PITCH } from "../src/playerSession.ts";
 
 const args = process.argv.slice(2);
@@ -162,9 +163,8 @@ check(targetSpeed({ ...run, forward: -1, sprint: true }).gait !== "sprint", "no 
     const c = avatar.clip(n);
     check(!!c?.motion, `${n}: ${c ? `${((c.end - c.start) / c.fps).toFixed(2)} s, ${c.motion!.moveSpeed.toFixed(2)} m/s, travel ${c.motion!.travel.map((v) => v.toFixed(2))}` : "missing"}`);
   }
-  const loco = new SimpleLocomotion(avatar);
   avatar.place([0, 0, 0], Math.PI / 2);
-  loco.update(0.1, 3.57, "run");
+  avatar.animator.evaluate(avatar.clip("relaxed_run_medium_player"), 3, true);
   const cam = avatar.bonePos("camera");
   check(!!cam && Math.abs(cam[2] - PLAYER.eyeHeight) < 0.15, `camera bone while running at ${cam?.map((v) => v.toFixed(2))} (stance eye height ${PLAYER.eyeHeight})`);
 
@@ -186,6 +186,54 @@ check(targetSpeed({ ...run, forward: -1, sprint: true }).gait !== "sprint", "no 
   check(ahead > 0.05, `looking down moves the eye ${ahead.toFixed(2)} m forward (over the collar)`);
   session.setView("third");
   check(avatar.hidden.size === 0, "third person draws all of Henry");
+
+  // --- locomotion: fragments, blend spaces, weights
+  const L = avatar.locomotion;
+  console.log(`     locomotion spaces: ${[...L.spaces.keys()].join(", ")}`);
+  for (const [frag, tags] of [["idle", ["player"]], ["move", ["walk", "player"]], ["move", ["run", "player"]], ["move", ["sprint", "player"]], ["move", ["walk", "backward", "player"]], ["move", ["run", "backward", "player"]], ["start", ["run", "player"]], ["stop", ["walk", "player"]], ["stop", ["run", "player"]]] as const) {
+    const sp = fragmentAnim(L, frag, [...tags]);
+    check(!!sp, `${frag} [${tags.join("+")}] → ${sp ? sp.path.slice(sp.path.lastIndexOf("/") + 1) : "none"} (${sp ? LocomotionPlayer.examples(sp).length : 0} examples)`);
+  }
+  const walkSpace = fragmentAnim(L, "move", ["walk", "player"])!;
+  const strafe = "spaces" in walkSpace ? walkSpace.spaces.find((x) => x.dims.some((d) => d.name === "TravelAngle"))! : null;
+  if (strafe) {
+    const top = (q: Record<string, number>) => { const w = blendWeights(strafe, q); const i = w.indexOf(Math.max(...w)); return `${strafe.examples[i].name} ${w[i].toFixed(2)} (sum ${w.reduce((a, b) => a + b, 0).toFixed(2)})`; };
+    const a = top({ MoveSpeed: 1.4, TravelAngle: 0 });
+    check(a.startsWith("relaxed_walk_medium_player 1.00"), `walk 1.4 m/s straight → ${a}`);
+    const b = top({ MoveSpeed: 1.05, TravelAngle: Math.PI / 2 });
+    check(b.includes("_left_player") && b.includes("sum 1.00"), `walk 1.05 m/s to the left → ${b}`);
+  }
+
+  // --- feet stay planted: walk, run, sprint, strafe, back; the lowest foot's world speed
+  const toes = ["LeftToeBase", "RightToeBase"];
+  for (const [label, inp] of [["walk", { ...run, gait: "walk" }], ["run", run], ["sprint", { ...run, sprint: true }], ["strafe left (run)", { ...run, forward: 0, right: -1 }], ["back (walk)", { ...run, forward: -1, gait: "walk" }]] as [string, MoveInput][]) {
+    const se = new PlayerSession(world, avatar, [2192, 1000, 0], Math.PI / 2);
+    let slide = 0, n = 0, floorToe = Infinity, prev: [number, number, number][] | null = null;
+    for (let t = 0; t < 4; t += 1 / 60) {
+      se.update(1 / 60, inp);
+      const ps = toes.map((f) => avatar.bonePos(f)!);
+      const low = ps[0][2] < ps[1][2] ? 0 : 1;
+      // only a foot in contact (toe within 4 cm of its lowest height over the cycle): running has a flight phase
+      if (t > 1.5 && prev && ps[low][2] - se.controller.pos[2] < floorToe + 0.04) {
+        slide += Math.hypot(ps[low][0] - prev[low][0], ps[low][1] - prev[low][1]) * 60;
+        n++;
+      }
+      if (t > 0.5) floorToe = Math.min(floorToe, ps[low][2] - se.controller.pos[2]);
+      prev = ps;
+    }
+    const speed = se.controller.speed();
+    const rel = slide / n / speed;
+    check(rel < 0.2, `${label}: planted foot slides ${(slide / n).toFixed(2)} m/s at ${speed.toFixed(2)} m/s (${(rel * 100).toFixed(0)}%; playing ${se.loco.playing().slice(0, 2).map((x) => `${x.name} ${x.weight.toFixed(2)}`).join(", ")})`);
+  }
+
+  // --- start and stop transitions
+  const se = new PlayerSession(world, avatar, [2192, 1000, 0], Math.PI / 2);
+  const states: string[] = [];
+  const note = () => { if (states[states.length - 1] !== se.loco.state) states.push(se.loco.state); };
+  for (let t = 0; t < 0.5; t += 1 / 60) { se.update(1 / 60, { ...run, forward: 0 }); note(); }
+  for (let t = 0; t < 2.5; t += 1 / 60) { se.update(1 / 60, run); note(); }
+  for (let t = 0; t < 3; t += 1 / 60) { se.update(1 / 60, { ...run, forward: 0 }); note(); }
+  check(states.join(">") === "idle>start>move>stop>idle", `idle → run → release: ${states.join(" → ")}`);
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nall checks passed");
