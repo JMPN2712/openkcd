@@ -266,23 +266,29 @@ export function selectLods(
   ].map((p) => { const l = Math.hypot(p[0], p[1], p[2]) || 1; return p.map((v) => v / l); });
   const lodScale = opts.lodScale ?? 1, distScale = opts.distanceScale ?? 1;
   const stats: LodStats = { drawn: 0, culledDistance: 0, culledFrustum: 0, perLod: [] };
+  const P = new Float64Array(24);
+  planes.forEach((p, k) => P.set(p, k * 4));
+  const ex = eye[0], ey = eye[1], ez = eye[2];
   let item = 0;
   for (const wm of scene.models) {
     const base = item;
     for (let l = 0; l < wm.lods.length; l++) counts[base + l] = 0;
+    const S = wm.spheres, M = wm.matrices, nl = wm.lods.length - 1;
     for (let i = 0; i < wm.count; i++) {
-      const x = wm.spheres[i * 4], y = wm.spheres[i * 4 + 1], z = wm.spheres[i * 4 + 2], r = wm.spheres[i * 4 + 3];
-      const d = Math.hypot(x - eye[0], y - eye[1], z - eye[2]);
+      const x = S[i * 4], y = S[i * 4 + 1], z = S[i * 4 + 2], r = S[i * 4 + 3];
+      const d = Math.sqrt((x - ex) * (x - ex) + (y - ey) * (y - ey) + (z - ez) * (z - ez));
       if (d - r > (80 + 70 * r) * distScale) { stats.culledDistance++; continue; }
       // uber-LODs are simplified stand-ins for whole town blocks: far views only, else they
       // overlap the detailed buildings they replace
       if (wm.uber && d - r < UBER_NEAR * distScale) { stats.culledDistance++; continue; }
       let inside = true;
-      for (const p of planes) if (p[0] * x + p[1] * y + p[2] * z + p[3] < -r) { inside = false; break; }
+      for (let k = 0; k < 24; k += 4) if (P[k] * x + P[k + 1] * y + P[k + 2] * z + P[k + 3] < -r) { inside = false; break; }
       if (!inside) { stats.culledFrustum++; continue; }
-      const lod = Math.min(wm.lods.length - 1, Math.floor(Math.max(0, d - r) / ((8 * r + 10) * lodScale)));
+      const lod = Math.min(nl, Math.floor(Math.max(0, d - r) / ((8 * r + 10) * lodScale)));
       const dst = base + lod;
-      out[dst].set(wm.matrices.subarray(i * 16, i * 16 + 16), counts[dst] * 16);
+      // copy the 16 floats by hand (a subarray per instance kept the garbage collector busy)
+      const o = out[dst], to = counts[dst] * 16, from = i * 16;
+      for (let c = 0; c < 16; c++) o[to + c] = M[from + c];
       counts[dst]++;
       stats.perLod[lod] = (stats.perLod[lod] ?? 0) + 1;
       stats.drawn++;

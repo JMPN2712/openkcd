@@ -60,7 +60,7 @@ for (const pp of gpus) {
   const adapter = await gpu.requestAdapter({ powerPreference: pp as GPUPowerPreference });
   if (!adapter) { console.log(`no ${pp} adapter`); continue; }
   const gpuName = `${adapter.info.vendor} ${adapter.info.device}`.replace(/-/g, " ");
-  const device = await adapter.requestDevice({ requiredFeatures: adapter.features.has("texture-compression-bc") ? ["texture-compression-bc"] : [] });
+  const device = await adapter.requestDevice({ requiredFeatures: (["texture-compression-bc", "indirect-first-instance"] as GPUFeatureName[]).filter((f) => adapter.features.has(f)) });
   setGpuBlockCompression(device.features.has("texture-compression-bc"));
   device.addEventListener("uncapturederror", (e) => console.log("GPU ERROR:", (e as GPUUncapturedErrorEvent).error.message));
   const format: GPUTextureFormat = "rgba8unorm";
@@ -95,9 +95,13 @@ for (const pp of gpus) {
       npcR.setModels(npcItems(npcs));
       const input: MoveInput = { forward: 1, right: 0, gait: "run", sprint: false };
       const times: number[] = [];
+      const phase: Record<string, number> = { player: 0, lods: 0, npcs: 0, encode: 0, gpu: 0 };
+      let tp = 0;
+      const mark = (k: string) => { const n = performance.now(); phase[k] += n - tp; tp = n; };
       let tris = 0, drawn = 0, calls = 0;
       for (let f = 0; f < FRAMES + 30; f++) {
         const t0 = performance.now();
+        tp = t0;
         const dt = 1 / 60;
         session.look(Math.sin(f / 40) * sc.turn * dt, 0);
         session.update(dt, input);
@@ -107,10 +111,13 @@ for (const pp of gpus) {
         const state = skyAt(profile, 12);
         models.lighting = npcR.lighting = playerR.lighting = state.lighting;
         sky.update(invert(vp), cam.pos, state);
+        mark("player");
         const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts, { lodScale: q.lodScale, distanceScale: q.distanceScale });
         lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
+        mark("lods");
         npcWorld.stepCrowd(npcs, 720, dt);
-        animateNpcs(npcs, npcWorld, 720, f * dt, npcR);
+        animateNpcs(npcs, npcWorld, 720, f * dt, npcR, session.controller.pos);
+        mark("npcs");
         terrainR.prepare(cam, vp, { lighting: state.lighting, lodDistance: q.terrainLod });
         models.setCamera(vp, cam.pos);
         npcR.setCamera(vp, cam.pos);
@@ -131,7 +138,9 @@ for (const pp of gpus) {
         water.draw(p);
         p.end();
         device.queue.submit([enc.finish()]);
+        mark("encode");
         await device.queue.onSubmittedWorkDone();
+        mark("gpu");
         if (f >= 30) {
           times.push(performance.now() - t0);
           tris += terrainR.stats.triangles + models.stats.triangles + npcR.stats.triangles;
@@ -145,6 +154,7 @@ for (const pp of gpus) {
       const line = `${gpuName} | ${q.label} | ${sc.name} | ${w}×${hgt}${q.msaa > 1 ? ` ${q.msaa}× MSAA` : ""} | ${(1000 / mean).toFixed(0)} fps | ${mean.toFixed(1)} ms | ${p95.toFixed(1)} ms | ${(tris / times.length / 1e6).toFixed(2)}M | ${Math.round(drawn / times.length)} | ${Math.round(calls / times.length)} | ${npcs.length} | ${scene.models.length}`;
       console.log(line);
       results.push(line);
+      console.log(`     per frame: ${Object.entries(phase).map(([k, v]) => `${k} ${(v / (FRAMES + 30)).toFixed(2)} ms`).join(", ")}`);
     }
     for (const r of [terrainR, models, water, playerR, npcR, sky]) r.destroy();
     for (const t of [target, msaa, depth]) t?.destroy();

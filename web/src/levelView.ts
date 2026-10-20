@@ -139,7 +139,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (!navigator.gpu) throw new Error("WebGPU is not available in this browser (chrome://flags/#enable-unsafe-webgpu).");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter) throw new Error("No WebGPU adapter.");
-    device = await adapter.requestDevice({ requiredFeatures: adapter.features.has("texture-compression-bc") ? ["texture-compression-bc"] : [] });
+    device = await adapter.requestDevice({ requiredFeatures: (["texture-compression-bc", "indirect-first-instance"] as GPUFeatureName[]).filter((f) => adapter.features.has(f)) });
     setGpuBlockCompression(device.features.has("texture-compression-bc"));
   } catch (err) {
     host.replaceChildren(el("p", "error", (err as Error).message));
@@ -441,7 +441,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     npcR.setCamera(vp, cam.pos);
     playerR.setCamera(vp, cam.pos);
     npcWorld.stepCrowd(npcs, minute, simDt);
-    animateNpcs(npcs, npcWorld, minute, simSeconds, npcR);
+    animateNpcs(npcs, npcWorld, minute, simSeconds, npcR, cam.pos);
     if (scene) {
       const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts, { lodScale: q.lodScale, distanceScale: q.distanceScale });
       lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
