@@ -76,10 +76,13 @@ playable frame rates on the Potato preset.
 - [ ] Performance presets: Potato / Low / Medium / High.
   - [x] Presets defined and selectable in the world view; headless benchmark
         (`scripts/bench-presets.ts`, results in `docs/PERFORMANCE.md`).
-  - [ ] Rataje's market is CPU-bound (draw recording, LOD selection, NPC
-        animation): 29 fps on Medium even on an RTX 5070 Ti, 62 fps on
-        Potato on a 2-CU integrated Radeon. Needs render bundles or merged
-        instancing, and a test on the real Vega 7 laptop.
+  - [x] Market CPU cost cut: indirect draws in per-item render bundles, a
+        garbage-free LOD pass, distant NPCs re-posed less often (Medium 29 →
+        111 fps on an RTX 5070 Ti; Potato 62 → 84 fps on a 2-CU integrated
+        Radeon).
+  - [ ] On weak GPUs the market is now GPU-bound (3M triangles on Potato):
+        shorter LOD distances, small-object culling, vegetation impostors;
+        test on the real Vega 7 laptop.
 
 ## 2. Installer converter and slim format
 

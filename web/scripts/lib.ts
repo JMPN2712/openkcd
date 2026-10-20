@@ -78,7 +78,7 @@ export async function gpuDevice(): Promise<GPUDevice> {
   gpu ??= create([]);
   const adapter = await gpu.requestAdapter();
   if (!adapter) throw new Error("no WebGPU adapter");
-  const device = await adapter.requestDevice({ requiredFeatures: adapter.features.has("texture-compression-bc") ? ["texture-compression-bc"] : [] });
+  const device = await adapter.requestDevice({ requiredFeatures: (["texture-compression-bc", "indirect-first-instance"] as GPUFeatureName[]).filter((f) => adapter.features.has(f) && !(f === "indirect-first-instance" && process.env.NO_INDIRECT)) });
   setGpuBlockCompression(device.features.has("texture-compression-bc"));
   device.addEventListener("uncapturederror", (e) => console.log("GPU ERROR:", (e as GPUUncapturedErrorEvent).error.message));
   return device;

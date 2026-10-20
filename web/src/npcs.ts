@@ -426,19 +426,31 @@ export interface NpcRendererOps {
   setItemTransform(item: number, m: Float32Array): void;
 }
 
+/** Pose updates by distance from the viewer: every frame within 25 m, every 2nd to 50 m, every 4th beyond. */
+const POSE_RATE: [number, number][] = [[25, 1], [50, 2], [Infinity, 4]];
+let animFrame = 0;
+
 /**
  * Per frame: place each NPC at game time `minute` (they move while walking between
  * places), pick the clip for the pose, advance it by real `seconds`, upload transforms
- * and skinning palettes.
+ * and skinning palettes. With `eye`, distant NPCs re-pose less often (they still move every
+ * frame; the pose is held in between).
  */
-export function animateNpcs(npcs: WorldNpc[], world: NpcWorld, minute: number, seconds: number, r: NpcRendererOps): void {
-  for (const n of npcs) {
+export function animateNpcs(npcs: WorldNpc[], world: NpcWorld, minute: number, seconds: number, r: NpcRendererOps, eye?: [number, number, number]): void {
+  animFrame++;
+  for (const [k, n] of npcs.entries()) {
     const p = world.drawn(n.entity.id) ?? world.placeAt(n.entity, n.schedule, minute);
     const moved = p.pos.some((v, i) => v !== n.placement.pos[i]) || p.rot.some((v, i) => v !== n.placement.rot[i]);
     n.placement = p;
     if (moved) {
       n.world = poseMatrix(p.pos, p.rot);
       n.character.parts.forEach(({ transform }, k) => r.setItemTransform(n.items[k], transform ? multiply(n.world, transform) : n.world));
+    }
+    if (eye) {
+      const d = Math.hypot(p.pos[0] - eye[0], p.pos[1] - eye[1], p.pos[2] - eye[2]);
+      const every = POSE_RATE.find(([max]) => d < max)![1];
+      // spread the skipped NPCs over the frames
+      if ((animFrame + k) % every !== 0) continue;
     }
     const st = p.pose === "act" ? world.ai?.state(n.entity.id) : undefined;
     let c = n.clips[p.pose] ?? n.clips.stand;

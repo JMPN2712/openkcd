@@ -12,7 +12,7 @@
 The world view has a preset menu (saved per browser) and an fps counter in
 its HUD.
 
-## Measured frame rates (2026-10-19)
+## Measured frame rates (2026-10-20, after the draw and CPU work below)
 
 From `scripts/bench-presets.ts`.
 
@@ -25,28 +25,59 @@ From `scripts/bench-presets.ts`.
   finished, so CPU and GPU time add up. A browser overlaps them, so these are
   pessimistic. Nothing is presented to a screen.
 
-| GPU | Preset | Market fps (p95 frame) | Fields fps (p95 frame) | Market draw calls |
+| GPU | Preset | Market fps (p95 frame) | Fields fps (p95 frame) | Market before |
 |---|---|---|---|---|
-| RTX 5070 Ti | Potato | 136 (8.8 ms) | 669 (1.8 ms) | 1,366 |
-| RTX 5070 Ti | Low | 81 (14.4 ms) | 412 (2.7 ms) | 1,874 |
-| RTX 5070 Ti | Medium | 29 (38.5 ms) | 185 (5.8 ms) | 2,524 |
-| RTX 5070 Ti | High | 32 (33.5 ms) | 107 (10.1 ms) | 3,084 |
-| Radeon iGPU (Ryzen 9 9900X, 2 CU RDNA2) | Potato | 62 (19.8 ms) | 267 (4.5 ms) | |
-| Radeon iGPU | Low | 39 (29.8 ms) | 157 (7.0 ms) | |
-| Radeon iGPU | Medium | 19 (52.3 ms) | 53 (21.0 ms) | |
-| Radeon iGPU | High | 15 (67.7 ms) | 25 (38.1 ms) | |
+| RTX 5070 Ti | Potato | 325 (4.1 ms) | 1,104 (1.0 ms) | 136 |
+| RTX 5070 Ti | Low | 198 (7.0 ms) | 840 (1.4 ms) | 81 |
+| RTX 5070 Ti | Medium | 111 (12.1 ms) | 404 (4.1 ms) | 29 |
+| RTX 5070 Ti | High | 75 (16.2 ms) | 242 (6.8 ms) | 32 |
+| Radeon iGPU (Ryzen 9 9900X, 2 CU RDNA2) | Potato | 84 (14.8 ms) | 338 (4.6 ms) | 62 |
+| Radeon iGPU | Low | 52 (22.5 ms) | 195 (7.3 ms) | 39 |
+| Radeon iGPU | Medium | 24 (40.8 ms) | 64 (18.6 ms) | 19 |
+| Radeon iGPU | High | 21 (48.7 ms) | 28 (33.5 ms) | 15 |
 
-**Reading the results:**
-- **The integrated Radeon is not the Vega 7 target.** It has 2 compute units
-  against the Vega 7's 7. It is a pessimistic stand-in for the low-end
-  laptop, not a measurement of it.
-- **The town is CPU-bound.** On the RTX 5070 Ti, Medium and High run at the
-  same rate in the market and High is not slower; the fields run 6× faster.
-  The CPU profile's top per-frame cost is recording draws
-  (`ModelRenderer.draw`), followed by LOD selection, instance uploads and NPC
-  animation.
-- **Next steps for the town:**
-  - render bundles or instancing across subsets;
-  - culling before upload;
-  - NPC animation at a lower rate when far away.
-- **Measure in Chromium** as well: real presentation, and CPU and GPU overlap.
+**The integrated Radeon is not the Vega 7 target.** It has 2 compute units
+against the Vega 7's 7. It is a pessimistic stand-in for the low-end laptop,
+not a measurement of it.
+
+In Chromium on the dev machine, High in the market ran at about 40 fps before
+these changes; the headless figure then was 32.
+
+## Where a market frame goes
+
+Medium, RTX 5070 Ti. The benchmark prints this split per run.
+
+| Phase | Before | After |
+|---|---|---|
+| Recording draws (2,500 non-empty, 10,000 registered) | 12.3 ms | 3.4 ms |
+| LOD selection and instance upload | 6.1 ms | 1.2 ms |
+| NPC crowd and animation (40 NPCs) | 5.9 ms | 2.6–3.4 ms |
+| GPU | 4.2 ms | 1.4–2.1 ms |
+
+What changed:
+
+1. **Indirect draws in render bundles** (`ModelRenderer`, when the device has
+   `indirect-first-instance`).
+   - Each item (a model at one LOD) is recorded once into a bundle of
+     `drawIndexedIndirect` calls.
+   - Per frame:
+     - every visible instance is packed into one buffer;
+     - every draw's instance count and first instance go into one argument
+       buffer;
+     - only the bundles of items with instances run.
+   - Renders are pixel-identical to the per-call path, which stays as the
+     fallback.
+2. **LOD selection** copies instance matrices by hand. A `subarray` per
+   instance kept the garbage collector busy.
+3. **NPC poses** update every frame within 25 m, every 2nd frame to 50 m, and
+   every 4th beyond. NPCs still move every frame.
+
+## Next
+
+- **The iGPU in the market is now GPU-bound:** 3M triangles even on Potato.
+  - Shorter LOD distances on Potato and Low.
+  - Small-object culling by screen size.
+  - Proper impostors for far vegetation.
+- **NPC animation is the largest CPU cost left:** bone evaluation and
+  palette upload per NPC.
+- **Measure on the real Vega 7 laptop,** in Chromium.

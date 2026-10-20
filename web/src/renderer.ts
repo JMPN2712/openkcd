@@ -156,6 +156,24 @@ export class ModelRenderer {
   private owned: (GPUBuffer | GPUTexture)[] = [];
   private depth: GPUTexture | null = null;
   private msaa: GPUTexture | null = null;
+  private pass: PassSetup;
+  /**
+   * Indirect mode (needs "indirect-first-instance"): every draw is recorded once into a render
+   * bundle as drawIndexedIndirect; per frame the instances of all dynamic items are packed into
+   * one buffer and each draw's instance count and first instance are written to one argument
+   * buffer. Recording thousands of draws a frame was the town's biggest CPU cost.
+   */
+  readonly indirect: boolean;
+  private packed: GPUBuffer | null = null;
+  private packedCpu = new Float32Array(0);
+  private pending: (Float32Array | null)[] = [];
+  private args = new Uint32Array(0);
+  private argsBuf: GPUBuffer | null = null;
+  /** one bundle per item: only items with something to draw are executed */
+  private bundles: (GPURenderBundle | null | undefined)[] = []; // null: not recorded yet; undefined: no draws
+  private live: GPURenderBundle[] = [];
+  private dynamicItems: number[] = [];
+  private itemFirst = new Uint32Array(0);
   /** model-space bounds of everything drawn */
   bboxMin: Vec3 = [-1, -1, -1];
   bboxMax: Vec3 = [1, 1, 1];
@@ -167,6 +185,8 @@ export class ModelRenderer {
     this.sampleCount = sampleCount;
     this.reversedZ = opts.reversedZ ?? false;
     const pass: PassSetup = { sampleCount, reversedZ: this.reversedZ };
+    this.pass = pass;
+    this.indirect = device.features.has("indirect-first-instance");
     const module = device.createShaderModule({ code: SHADER });
     this.pipeline = device.createRenderPipeline({
       layout: "auto",
@@ -268,8 +288,19 @@ export class ModelRenderer {
     const textures = new Map<MipChain, GPUTexture>();
     const min: Vec3 = [Infinity, Infinity, Infinity];
     const max: Vec3 = [-Infinity, -Infinity, -Infinity];
+    // indirect mode: one packed buffer for every dynamic item's instances
+    if (this.indirect) {
+      const total = items.reduce((s, it) => s + (it.capacity ?? 0), 0);
+      this.packed = this.device.createBuffer({ size: Math.max(1, total) * 64, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+      this.owned.push(this.packed);
+      this.packedCpu = new Float32Array(Math.max(1, total) * 16);
+      this.pending = items.map(() => null);
+      this.itemFirst = new Uint32Array(items.length);
+      this.dynamicItems = items.flatMap((it, k) => (it.capacity !== undefined ? [k] : []));
+    }
     this.itemInst = items.map(({ instances, capacity }) => {
       if (capacity !== undefined) {
+        if (this.indirect) return { buf: this.packed!, count: 0, capacity };
         const buf = this.device.createBuffer({ size: Math.max(1, capacity) * 64, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
         this.owned.push(buf);
         return { buf, count: 0, capacity };
@@ -365,6 +396,13 @@ export class ModelRenderer {
     }
     this.stats.draws = this.draws.length;
     if (min[0] <= max[0]) { this.bboxMin = min; this.bboxMax = max; }
+    if (this.indirect) {
+      this.args = new Uint32Array(Math.max(1, this.draws.length) * 5);
+      this.argsBuf = this.device.createBuffer({ size: this.args.byteLength, usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST });
+      this.owned.push(this.argsBuf);
+      this.bundles = items.map(() => null);
+      this.drawsByItem = null;
+    }
   }
 
   /** Camera framing the whole model, looking from the front-left and slightly above. */
@@ -434,6 +472,11 @@ export class ModelRenderer {
 
   /** Record this renderer's draws into a pass with the same format, sample count and depth convention. */
   draw(pass: GPURenderPassEncoder): void {
+    if (this.indirect) {
+      this.flush();
+      if (this.live.length) pass.executeBundles(this.live);
+      return;
+    }
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.camBind);
     let tris = 0, calls = 0;
@@ -453,13 +496,82 @@ export class ModelRenderer {
     this.stats.drawCalls = calls;
   }
 
-  /** Upload `count` instance matrices for an item created with `capacity`. */
+  /** Upload `count` instance matrices for an item created with `capacity` (indirect mode: at the next draw). */
   setInstances(index: number, matrices: Float32Array, count: number): void {
     const it = this.itemInst[index];
     if (!it) return;
     it.count = Math.min(count, it.capacity);
-    if (it.count) this.device.queue.writeBuffer(it.buf, 0, matrices.subarray(0, it.count * 16));
+    if (this.indirect) this.pending[index] = matrices;
+    else if (it.count) this.device.queue.writeBuffer(it.buf, 0, matrices.subarray(0, it.count * 16));
   }
+
+  /** Indirect mode: pack the dynamic items' instances and write every draw's arguments. */
+  private flush(): void {
+    let off = 0;
+    for (const k of this.dynamicItems) {
+      const it = this.itemInst[k], m = this.pending[k];
+      this.itemFirst[k] = off;
+      if (!it.count || !m) { it.count = m ? it.count : 0; continue; }
+      this.packedCpu.set(m.subarray(0, it.count * 16), off * 16);
+      off += it.count;
+    }
+    if (off) this.device.queue.writeBuffer(this.packed!, 0, this.packedCpu, 0, off * 16);
+    let tris = 0, calls = 0;
+    const a = this.args;
+    this.draws.forEach((d, i) => {
+      const it = this.itemInst[d.item];
+      const dynamic = it && it.buf === this.packed;
+      const n = d.count ? (it?.count ?? d.instCount) : 0;
+      a[i * 5] = d.count;
+      a[i * 5 + 1] = n;
+      a[i * 5 + 2] = d.firstIndex;
+      a[i * 5 + 3] = 0;
+      a[i * 5 + 4] = dynamic ? this.itemFirst[d.item] : 0;
+      if (n) { tris += (d.count / 3) * n; calls++; }
+    });
+    if (this.draws.length) this.device.queue.writeBuffer(this.argsBuf!, 0, a, 0, this.draws.length * 5);
+    this.stats.triangles = tris;
+    this.stats.drawCalls = calls;
+    // the items with instances this frame (recorded on first use)
+    this.live.length = 0;
+    for (let k = 0; k < this.itemInst.length; k++) {
+      if (!this.itemInst[k].count) continue;
+      let b = this.bundles[k];
+      if (b === null) b = this.bundles[k] = this.record(k);
+      if (b) this.live.push(b);
+    }
+  }
+
+  /**
+   * Indirect mode: an item's draws, once, into a render bundle (buffers and bind groups are fixed
+   * until setModels). Items without draws get none.
+   */
+  private record(item: number): GPURenderBundle | undefined {
+    if (!this.drawIndex) {
+      this.drawIndex = new Map();
+      this.draws.forEach((d, i) => {
+        const l = this.drawIndex!.get(d.item);
+        if (l) l.push(i); else this.drawIndex!.set(d.item, [i]);
+      });
+    }
+    const list = this.drawIndex.get(item);
+    if (!list?.length) return undefined;
+    const enc = this.device.createRenderBundleEncoder({ colorFormats: [this.format], depthStencilFormat: depthFormat(this.pass), sampleCount: this.sampleCount });
+    enc.setPipeline(this.pipeline);
+    enc.setBindGroup(0, this.camBind);
+    let vb: GPUBuffer | null = null, ib: GPUBuffer | null = null, inst: GPUBuffer | null = null;
+    for (const i of list) {
+      const d = this.draws[i];
+      if (d.vb !== vb) enc.setVertexBuffer(0, (vb = d.vb));
+      if (d.inst !== inst) enc.setVertexBuffer(1, (inst = d.inst));
+      if (d.ib !== ib) enc.setIndexBuffer((ib = d.ib), "uint32");
+      enc.setBindGroup(1, d.bind);
+      enc.drawIndexedIndirect(this.argsBuf!, i * 20);
+    }
+    return enc.finish();
+  }
+
+  private drawIndex: Map<number, number[]> | null = null;
 
   /** Number of bones in item `index`'s palette (0 = not skinned). */
   paletteSize(index: number): number {
@@ -491,6 +603,9 @@ export class ModelRenderer {
     this.owned = [];
     this.draws = [];
     this.drawsByItem = null;
+    this.drawIndex = null;
+    this.bundles = [];
+    this.live = [];
     this.palettes = [];
     this.itemInst = [];
     this.stats = { meshes: 0, triangles: 0, vertices: 0, draws: 0, textured: 0, drawCalls: 0 };
