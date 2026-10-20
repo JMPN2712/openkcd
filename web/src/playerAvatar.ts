@@ -81,11 +81,14 @@ export class PlayerAvatar {
 
   /** Upload placement and skinning (after animator.evaluate…) to the renderer. */
   upload(r: NpcRendererOps): void {
-    // hidden parts are collapsed to a point rather than removed (no renderer rebuild)
+    // hidden parts stay in the shadow passes when the renderer can do that; otherwise they are
+    // collapsed to a point (no renderer rebuild)
     const zero = new Float32Array(16);
     this.character.parts.forEach(({ model, transform }, k) => {
       const item = this.items[k];
-      r.setItemTransform(item, this.hidden.has(k) ? zero : transform ? multiply(this.world, transform) : this.world);
+      const hide = this.hidden.has(k);
+      const viaRenderer = r.setItemHidden?.(item, hide) ?? false;
+      r.setItemTransform(item, hide && !viaRenderer ? zero : transform ? multiply(this.world, transform) : this.world);
       if (model.skeleton && r.paletteSize(item)) r.setPalette(item, this.animator.palette(model.skeleton));
     });
   }

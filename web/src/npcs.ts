@@ -422,6 +422,8 @@ export function npcItems(npcs: WorldNpc[], base = 0): NpcRenderItem[] {
 /** Renderer operations animateNpcs needs (ModelRenderer's). */
 export interface NpcRendererOps {
   setPalette(item: number, m: Float32Array): void;
+  /** hide an item from the camera only (it still casts a shadow); false when unsupported */
+  setItemHidden?(item: number, hidden: boolean): boolean;
   paletteSize(item: number): number;
   setItemTransform(item: number, m: Float32Array): void;
 }

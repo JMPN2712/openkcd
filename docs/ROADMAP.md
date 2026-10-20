@@ -69,6 +69,10 @@ playable frame rates on the Potato preset.
       stays as a debug toggle (F; T puts Henry under the fly camera).
 - [x] Terrain detail: the 26 surface types' detail textures blended per
       heightmap sample over the colour map (normal maps still to do).
+- [x] Sun shadows: cascaded shadow maps for objects, NPCs and Henry
+      (`shadow.ts`, `shadowPass.ts`); off on Potato. The terrain receives but
+      doesn't cast yet.
+- [ ] Normal maps (objects and terrain).
 - [ ] Whole-world streaming beyond Rataje, plus LOD.
 - [x] Time of day and sky: the level's time-of-day profile (sun colour and
       intensity, fog/sky colours, stars, moonlight) drives the light, the

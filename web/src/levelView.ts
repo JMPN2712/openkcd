@@ -35,6 +35,8 @@ import { parseTimeOfDay, type TimeOfDay } from "./tod.ts";
 import { SkyRenderer, skyAt, pickProfile, invert } from "./sky.ts";
 import { PRESETS, savedPreset, savePreset, type PresetName } from "./quality.ts";
 import { loadDetailLayers, parseSurfaceTypes } from "./terrainDetail.ts";
+import { ShadowMap } from "./shadow.ts";
+import { ShadowCasters } from "./shadowPass.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -212,6 +214,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   // reversed-Z: the first-person view needs a 1 cm near plane (Henry's own body) and the horizon
   const passSetup: PassSetup = { sampleCount: q.msaa, reversedZ: true };
   const renderer = new TerrainRenderer(device, format, terrain, cover, passSetup, undefined, { detailFade: q.detailFade });
+  // sun shadows (none on Potato)
+  const shadowMap = q.shadows.cascades ? new ShadowMap(device, q.shadows.size, q.shadows.cascades, q.shadows.splits) : null;
+  const casters = new ShadowCasters();
+  renderer.setShadow(shadowMap);
   // the ground's detail layers (grass, soil, cobbles…) decode in the background
   void loadDetailLayers(vfs, surfaceTypes, q.terrainDetail).then((d) => { if (!stopped) renderer.setDetail(d); }).catch((err) => console.warn("terrain detail:", err));
   const models = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
@@ -230,6 +236,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (stopped) return;
     player = new PlayerSession(surroundings, avatar, SPAWN, SPAWN_YAW);
     playerR.setModels(avatar.renderItems());
+    playerR.setShadow(shadowMap);
     mode = "player";
     playerInfo = "";
   }).catch((err) => { playerInfo = `Henry: ${(err as Error).message}`; });
@@ -275,6 +282,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       const next = await npcWorld.near(at, NPC_RADIUS, NPC_MAX, m, (s) => { npcInfo = s; });
       if (stopped) return;
       npcR.setModels(npcItems(next));
+      npcR.setShadow(shadowMap);
       npcs = next;
       npcKey = key;
       npcInfo = `${next.length} NPCs within ${NPC_RADIUS} m`;
@@ -309,6 +317,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         if (stopped) return;
         const items = lodItems(next);
         models.setModels(items);
+        models.setShadow(shadowMap);
+        if (shadowMap) casters.setScene(next, items.map((it) => it.capacity), shadowMap.cascades);
         surroundings.setScene(next);
         lodOut = items.map((it) => new Float32Array(it.capacity * 16));
         lodCounts = items.map(() => 0);
@@ -454,6 +464,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       lodInfo = ` · drawing ${st.drawn.toLocaleString()} (LOD ${st.perLod.map((n) => n ?? 0).join("/")}), culled ${st.culledDistance.toLocaleString()} by distance, ${st.culledFrustum.toLocaleString()} off-screen`;
     }
     const enc = device.createCommandEncoder();
+    if (shadowMap && skyState) {
+      const f: [number, number, number] = [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)];
+      casters.render(enc, shadowMap, cam.pos, f, skyState.lighting.sunDir, models, player && mode === "player" ? [npcR, playerR] : [npcR], { lodScale: q.lodScale });
+    }
     const pass = enc.beginRenderPass({
       colorAttachments: [msaa
         ? { view: msaa.createView(), resolveTarget: target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.70, a: 1 }, loadOp: "clear", storeOp: "discard" }
@@ -482,6 +496,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     npcR.destroy();
     playerR.destroy();
     sky.destroy();
+    shadowMap?.destroy();
     water.destroy();
     depth?.destroy();
     msaa?.destroy();

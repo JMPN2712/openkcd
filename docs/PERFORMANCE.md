@@ -9,6 +9,15 @@
 | Medium | 1 | 4× | 500 m | 1 | 1 | 250 m | 40 | 256 |
 | High | 1 | 4× | 700 m | 1.4 | 1.3 | 350 m | 60 | 512 |
 
+**Shadows and terrain detail by preset:**
+
+| Preset | Sun shadows | Terrain detail |
+|---|---|---|
+| Potato | off | 256 px, fades at 25–80 m |
+| Low | 1 cascade, 1024², to 40 m | 256 px, fades at 35–120 m |
+| Medium | 2 cascades, 2048², to 20 / 120 m | 512 px, fades at 40–160 m |
+| High | 2 cascades, 3072², to 25 / 160 m | 512 px, fades at 60–220 m |
+
 The world view has a preset menu (saved per browser) and an fps counter in
 its HUD.
 
@@ -71,6 +80,32 @@ What changed:
    instance kept the garbage collector busy.
 3. **NPC poses** update every frame within 25 m, every 2nd frame to 50 m, and
    every 4th beyond. NPCs still move every frame.
+
+## Shadows (2026-10-20)
+
+Sun shadows (`shadow.ts`, `shadowPass.ts`):
+
+- **Cascades:** cascaded maps, snapped to texels.
+- **Casters:** they get their own LOD pass against each cascade's light
+  frustum:
+  - half the LOD distance;
+  - limited to the shadow distance;
+  - none smaller than 0.25 m in the near cascade, or 1 m in the far one.
+- **Drawing:** each ModelRenderer gains a depth-only view per cascade
+  (alpha-tested leaves), with its own render bundles.
+- **Far cascade:** redrawn every second frame.
+- **First person:** Henry's head is left out of the camera view but kept in
+  the shadow passes.
+- **Receivers:** models and terrain use 3×3 PCF.
+
+Cost in the market, fps without → with shadows:
+
+| GPU | Low | Medium | High |
+|---|---|---|---|
+| RTX 5070 Ti | 198 → 129 | 111 → 61 | 75 → 49 |
+| Radeon iGPU | 52 → 31 | 24 → 12 | 21 → 8 |
+
+On weak GPUs shadows are the most expensive feature; Potato keeps them off.
 
 ## Next
 

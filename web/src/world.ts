@@ -253,7 +253,7 @@ export function selectLods(
   viewProj: Float32Array,
   out: Float32Array[],
   counts: number[],
-  opts: { lodScale?: number; distanceScale?: number } = {},
+  opts: { lodScale?: number; distanceScale?: number; maxDistance?: number; minRadius?: number } = {},
 ): LodStats {
   const m = viewProj;
   // frustum planes (a, b, c, d) from the column-major view-projection; WebGPU depth is 0..1
@@ -264,7 +264,7 @@ export function selectLods(
     r3.map((v, k) => v + r1[k]), r3.map((v, k) => v - r1[k]),
     r2, r3.map((v, k) => v - r2[k]),
   ].map((p) => { const l = Math.hypot(p[0], p[1], p[2]) || 1; return p.map((v) => v / l); });
-  const lodScale = opts.lodScale ?? 1, distScale = opts.distanceScale ?? 1;
+  const lodScale = opts.lodScale ?? 1, distScale = opts.distanceScale ?? 1, maxD = opts.maxDistance ?? Infinity, minR = opts.minRadius ?? 0;
   const stats: LodStats = { drawn: 0, culledDistance: 0, culledFrustum: 0, perLod: [] };
   const P = new Float64Array(24);
   planes.forEach((p, k) => P.set(p, k * 4));
@@ -277,7 +277,7 @@ export function selectLods(
     for (let i = 0; i < wm.count; i++) {
       const x = S[i * 4], y = S[i * 4 + 1], z = S[i * 4 + 2], r = S[i * 4 + 3];
       const d = Math.sqrt((x - ex) * (x - ex) + (y - ey) * (y - ey) + (z - ez) * (z - ez));
-      if (d - r > (80 + 70 * r) * distScale) { stats.culledDistance++; continue; }
+      if (r < minR || d - r > (80 + 70 * r) * distScale || d - r > maxD) { stats.culledDistance++; continue; }
       // uber-LODs are simplified stand-ins for whole town blocks: far views only, else they
       // overlap the detailed buildings they replace
       if (wm.uber && d - r < UBER_NEAR * distScale) { stats.culledDistance++; continue; }
