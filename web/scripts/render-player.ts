@@ -55,7 +55,7 @@ const msaa = device.createTexture({ size: [W, H], format, sampleCount: 4, usage:
 const depth = device.createTexture({ size: [W, H], format: depthFormat(passSetup), sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
 
 const t0 = performance.now();
-const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, [ax, ay], radius, { maxModels: 20000, caches: newWorldCaches(), props: lvl.props, hiddenLayers: lvl.hiddenLayers });
+const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, [ax, ay], radius, { maxModels: 20000, caches: newWorldCaches(), props: lvl.props, hiddenLayers: lvl.hiddenLayers, normalMaps: !args.includes("--no-normal") });
 const items = lodItems(scene);
 models.setModels(items);
 models.setShadow(shadowMap);

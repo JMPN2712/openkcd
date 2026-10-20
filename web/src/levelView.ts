@@ -311,7 +311,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       // dense towns like Rattay missing floors and walls, with their props floating)
       for (const maxModels of [800, 20000]) {
         const next = await buildWorldScene(vfs, terrain, objects, at, STREAM_RADIUS, {
-          maxModels, maxTextureDim: q.maxTextureDim, caches, props, hiddenLayers,
+          maxModels, maxTextureDim: q.maxTextureDim, caches, props, hiddenLayers, normalMaps: q.normalMaps,
           onStatus: (s) => { sceneInfo = s; },
         });
         if (stopped) return;

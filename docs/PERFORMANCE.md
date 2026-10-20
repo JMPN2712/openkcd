@@ -107,6 +107,12 @@ Cost in the market, fps without → with shadows:
 
 On weak GPUs shadows are the most expensive feature; Potato keeps them off.
 
+**Comparing runs.** Absolute figures vary between sessions by up to 25%
+(machine load, clocks; a browser running the game at the same time). The
+same code measured 61 fps in one session and 47 in a later one. Compare
+changes only by A/B in the same session. Normal maps measured this way cost
+nothing visible: 47 fps with them and without, Medium, market.
+
 ## Next
 
 - **The iGPU in the market is now GPU-bound:** 3M triangles even on Potato.

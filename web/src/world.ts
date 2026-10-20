@@ -62,12 +62,12 @@ export function newWorldCaches(): WorldCaches {
 /** Group key for a character skin with its material override (.cdf parts): "skin|mtl". */
 const skinKey = (skin: string, mtl: string | null) => `${skin}|${mtl ?? ""}`;
 
-async function loadLods(vfs: Vfs, path: string, caches: WorldCaches, maxTextureDim: number): Promise<LoadedModel[] | null> {
+async function loadLods(vfs: Vfs, path: string, caches: WorldCaches, maxTextureDim: number, normalMaps = true): Promise<LoadedModel[] | null> {
   const load = (p: string) => {
     let m = caches.models.get(p);
     if (!m) {
       const [file, material] = p.split("|");
-      m = loadModel(vfs, file, { maxTextureDim, textureCache: caches.textures, material: material || undefined }).catch(() => null);
+      m = loadModel(vfs, file, { maxTextureDim, textureCache: caches.textures, material: material || undefined, normalMaps }).catch(() => null);
       caches.models.set(p, m);
     }
     return m;
@@ -138,6 +138,8 @@ export async function buildWorldScene(
     props?: EntityInfo[];
     /** brush layers not drawn (levelLayers.ts defaultHiddenLayers) */
     hiddenLayers?: Set<number>;
+    /** load normal maps (default true; caches must not mix the two) */
+    normalMaps?: boolean;
   } = {},
 ): Promise<WorldScene> {
   const groups = new Map<string, Group>();
@@ -196,7 +198,7 @@ export async function buildWorldScene(
   const worker = async () => {
     while (next < chosen.length) {
       const k = next++;
-      lodsOf[k] = loadLods(vfs, chosen[k].path, caches, opts.maxTextureDim ?? 256);
+      lodsOf[k] = loadLods(vfs, chosen[k].path, caches, opts.maxTextureDim ?? 256, opts.normalMaps ?? true);
       await lodsOf[k];
       opts.onStatus?.(`Loading models ${++loaded}/${chosen.length}`);
     }
