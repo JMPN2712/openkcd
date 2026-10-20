@@ -348,19 +348,19 @@ function decodeNormals(normals: Stream | null, tangents: Stream | null, qtangent
 function decodeTangents(tangents: Stream | null, normals: Float32Array | null, n: number): Float32Array | null {
   if (!tangents || tangents.count < n || tangents.elemSize !== 16) return null;
   const out = new Float32Array(n * 4);
+  const d = tangents.data, k = 1 / 32767;
   for (let i = 0; i < n; i++) {
     const o = i * 16;
-    const t = [0, 1, 2].map((c) => tangents.data.getInt16(o + c * 2, true) / 32767);
-    const b = [0, 1, 2].map((c) => tangents.data.getInt16(o + 8 + c * 2, true) / 32767);
-    const l = Math.hypot(t[0], t[1], t[2]) || 1;
-    let w = tangents.data.getInt16(o + 6, true) < 0 ? -1 : 1;
+    const tx = d.getInt16(o, true) * k, ty = d.getInt16(o + 2, true) * k, tz = d.getInt16(o + 4, true) * k;
+    const bx = d.getInt16(o + 8, true) * k, by = d.getInt16(o + 10, true) * k, bz = d.getInt16(o + 12, true) * k;
+    const l = Math.sqrt(tx * tx + ty * ty + tz * tz) || 1;
+    let w = d.getInt16(o + 6, true) < 0 ? -1 : 1;
     if (normals) {
       const nx = normals[i * 3], ny = normals[i * 3 + 1], nz = normals[i * 3 + 2];
       // cross(n, t) · b decides the side
-      const cx = ny * t[2] - nz * t[1], cy = nz * t[0] - nx * t[2], cz = nx * t[1] - ny * t[0];
-      w = cx * b[0] + cy * b[1] + cz * b[2] < 0 ? -1 : 1;
+      w = (ny * tz - nz * ty) * bx + (nz * tx - nx * tz) * by + (nx * ty - ny * tx) * bz < 0 ? -1 : 1;
     }
-    out[i * 4] = t[0] / l; out[i * 4 + 1] = t[1] / l; out[i * 4 + 2] = t[2] / l; out[i * 4 + 3] = w;
+    out[i * 4] = tx / l; out[i * 4 + 1] = ty / l; out[i * 4 + 2] = tz / l; out[i * 4 + 3] = w;
   }
   return out;
 }
