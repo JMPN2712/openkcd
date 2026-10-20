@@ -32,14 +32,14 @@ These came before the milestones were set. They are the base for all of them.
   - Lua 5.1 (WebAssembly) boots the game's `main.lua`.
   - Daily schedules place NPCs at work, at home, at meals and in bed.
 
-## 1. Walking simulator (current)
+## 1. Walking simulator (done, 2026-10-20)
 
 Walk through Rataje (then the whole map) as Henry, in first person, at
 playable frame rates on the Potato preset.
 
 - [x] Research how KCD stores animations, skeletons and character
       controllers (`docs/ANIMATION.md`).
-- [ ] Player character controller: capsule, ground following, slopes,
+- [x] Player character controller: capsule, ground following, slopes,
       steps, collision with buildings and terrain.
   - [x] Capsule on the terrain with the script values (0.3 m radius, 50°
         climb, 49° slide, gravity 13 m/s², inertia 11, 1 m jump), code-driven
@@ -75,24 +75,45 @@ playable frame rates on the Potato preset.
 - [x] Normal maps for objects and characters: the meshes' tangent frames
       and the materials' `_ddn`/`_ddna` maps (BC5 with signed contents, see
       `docs/RECON.md`). Off on Potato. Terrain normal maps not done yet.
-- [ ] Whole-world streaming beyond Rataje, plus LOD.
+- [x] Whole-world streaming, plus LOD. The open world is one level
+      (`rataje`, 4 × 4 km; `rataje_dlc4` is A Woman's Lot's variant).
+  - Streaming:
+    - objects stream around the player;
+    - unused models and textures are dropped after a few rebuilds;
+    - every town's uber-LOD (94 instances) draws beyond the streamed radius;
+    - the map's edge stops the player.
+  - `scripts/test-streaming.ts`, two laps through six towns: memory levels
+    off at about 1 GiB on Potato and 1.7 GiB on Medium (3.4 GiB without
+    trimming).
 - [x] Time of day and sky: the level's time-of-day profile (sun colour and
       intensity, fog/sky colours, stars, moonlight) drives the light, the
       fog and a sky dome with sun, moon and stars (`tod.ts`, `sky.ts`). The
       sun follows an astronomical path fitted to the profile's sunrise and
       sunset. Clouds, shadows and weather changes are not done yet.
-- [ ] Performance presets: Potato / Low / Medium / High.
+- [x] Performance presets: Potato / Low / Medium / High.
   - [x] Presets defined and selectable in the world view; headless benchmark
         (`scripts/bench-presets.ts`, results in `docs/PERFORMANCE.md`).
   - [x] Market CPU cost cut: indirect draws in per-item render bundles, a
         garbage-free LOD pass, distant NPCs re-posed less often (Medium 29 →
         111 fps on an RTX 5070 Ti; Potato 62 → 84 fps on a 2-CU integrated
         Radeon).
-  - [ ] On weak GPUs the market is now GPU-bound (3M triangles on Potato):
-        shorter LOD distances, small-object culling, vegetation impostors;
-        test on the real Vega 7 laptop.
+  - Potato in the market runs at 70–84 fps on a 2-CU integrated Radeon
+        (headless), weaker than the Vega 7 target. **Not yet measured on the
+        Vega 7 laptop itself.**
 
-## 2. Installer converter and slim format
+### Follow-ups from milestone 1
+
+- [ ] Measure Potato on the Vega 7 laptop in Chromium.
+- [ ] Terrain normal maps; terrain casting shadows (hills at dusk).
+- [ ] Turning on the spot (`1d_relaxed_idle_bigturns_nw`), look IK.
+- [ ] Doors that open (they don't block the player yet).
+- [ ] Research notes needed: the player's base speeds; the stop clips' foot
+      choice; NPC messaging (merchants and guards wait for customers) and
+      home item slots (eaters find no bowl).
+- [ ] Far vegetation (forests beyond the streamed radius are terrain colour
+      only); clouds; weather profiles.
+
+## 2. Installer converter and slim format (current)
 
 - [ ] Read the GOG offline installer (setup `.exe` + `.bin` files) in the
       browser.

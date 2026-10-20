@@ -53,10 +53,41 @@ export interface WorldCaches {
   textures: Map<string, Promise<MipChain | null>>;
   /** parsed .cdf of door / AnimObject props */
   cdfs: Map<string, Promise<CharacterSpec | null>>;
+  /** scene builds so far, and the build that last used each model (trimWorldCaches) */
+  generation: number;
+  usedAt: Map<string, number>;
+  /** models once loaded (to find the textures still referenced) */
+  loaded: Map<string, LoadedModel | null>;
 }
 
 export function newWorldCaches(): WorldCaches {
-  return { models: new Map(), textures: new Map(), cdfs: new Map() };
+  return { models: new Map(), textures: new Map(), cdfs: new Map(), generation: 0, usedAt: new Map(), loaded: new Map() };
+}
+
+/**
+ * Forget models no scene used in the last `keep` builds, and textures no remaining model uses.
+ * Without this a long walk keeps every model and texture it ever loaded (CPU memory grows with
+ * the distance travelled; GPU copies are freed by ModelRenderer.setModels anyway).
+ */
+export function trimWorldCaches(caches: WorldCaches, keep = 3): { models: number } {
+  const oldest = caches.generation - keep + 1;
+  let models = 0;
+  for (const key of [...caches.models.keys()]) {
+    if ((caches.usedAt.get(key) ?? -Infinity) >= oldest) continue;
+    caches.models.delete(key);
+    caches.usedAt.delete(key);
+    caches.loaded.delete(key);
+    models++;
+  }
+  const live = new Set<MipChain>();
+  for (const m of caches.loaded.values()) if (m) for (const list of [m.diffuse, m.specular, m.normal]) for (const c of list ?? []) if (c) live.add(c);
+  for (const [key, p] of [...caches.textures]) {
+    // (a model still loading may share it: it keeps its own copy, only the de-duplication is lost)
+    void p.then((c) => {
+      if (c && !live.has(c) && caches.textures.get(key) === p) caches.textures.delete(key);
+    });
+  }
+  return { models };
 }
 
 /** Group key for a character skin with its material override (.cdf parts): "skin|mtl". */
@@ -64,11 +95,13 @@ const skinKey = (skin: string, mtl: string | null) => `${skin}|${mtl ?? ""}`;
 
 async function loadLods(vfs: Vfs, path: string, caches: WorldCaches, maxTextureDim: number, normalMaps = true): Promise<LoadedModel[] | null> {
   const load = (p: string) => {
+    caches.usedAt.set(p, caches.generation);
     let m = caches.models.get(p);
     if (!m) {
       const [file, material] = p.split("|");
       m = loadModel(vfs, file, { maxTextureDim, textureCache: caches.textures, material: material || undefined, normalMaps }).catch(() => null);
       caches.models.set(p, m);
+      void m.then((x) => { if (caches.models.get(p) === m) caches.loaded.set(p, x); });
     }
     return m;
   };
@@ -140,6 +173,8 @@ export async function buildWorldScene(
     hiddenLayers?: Set<number>;
     /** load normal maps (default true; caches must not mix the two) */
     normalMaps?: boolean;
+    /** only brushes whose path passes (no vegetation or props): e.g. the uber-LOD far field */
+    onlyBrushes?: (path: string) => boolean;
   } = {},
 ): Promise<WorldScene> {
   const groups = new Map<string, Group>();
@@ -153,7 +188,7 @@ export async function buildWorldScene(
     g.nearest = Math.min(g.nearest, Math.sqrt(d2));
   };
   const tmp = new Float32Array(16);
-  for (let i = 0; i < objects.vegGroup.length; i++) {
+  for (let i = 0; i < (opts.onlyBrushes ? 0 : objects.vegGroup.length); i++) {
     const x = objects.vegPos[i * 3], y = objects.vegPos[i * 3 + 1];
     if (Math.abs(x - center[0]) > radius || Math.abs(y - center[1]) > radius) continue;
     const model = terrain.vegetation[objects.vegGroup[i]]?.model;
@@ -164,10 +199,11 @@ export async function buildWorldScene(
     if (Math.abs(m[12] - center[0]) > radius || Math.abs(m[13] - center[1]) > radius) continue;
     if (opts.hiddenLayers?.has(objects.brushLayer[i])) continue;
     const name = terrain.brushNames[objects.brushName[i]];
-    if (name && !HIDDEN_BRUSH.test(name)) add(resolveLevelPath(name), "brush", m, m[12], m[13]);
+    if (name && !HIDDEN_BRUSH.test(name) && (!opts.onlyBrushes || opts.onlyBrushes(name))) add(resolveLevelPath(name), "brush", m, m[12], m[13]);
   }
   const caches = opts.caches ?? newWorldCaches();
-  for (const e of opts.props ?? []) {
+  caches.generation++;
+  for (const e of opts.onlyBrushes ? [] : opts.props ?? []) {
     if (Math.abs(e.pos[0] - center[0]) > radius || Math.abs(e.pos[1] - center[1]) > radius) continue;
     const m = poseMatrix(e.pos, e.rot);
     if (e.scale) for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) m[c * 4 + r] *= e.scale[c];
@@ -227,6 +263,9 @@ export async function buildWorldScene(
   return { models, instances, modelsSkipped: Math.max(0, ordered.length - max), failed };
 }
 
+/** Uber-LODs: simplified stand-ins for whole town blocks (objects/uberlods/<town>/…). */
+export const isUberLod = (path: string) => path.startsWith("objects/uberlods/");
+
 /** Renderer items for a scene: one per (model, LOD), sized for all of the model's instances. */
 export function lodItems(scene: WorldScene): { model: LoadedModel; capacity: number }[] {
   return scene.models.flatMap((m) => m.lods.map((model) => ({ model, capacity: m.count })));
@@ -255,7 +294,7 @@ export function selectLods(
   viewProj: Float32Array,
   out: Float32Array[],
   counts: number[],
-  opts: { lodScale?: number; distanceScale?: number; maxDistance?: number; minRadius?: number } = {},
+  opts: { lodScale?: number; distanceScale?: number; maxDistance?: number; minRadius?: number; uberNear?: number } = {},
 ): LodStats {
   const m = viewProj;
   // frustum planes (a, b, c, d) from the column-major view-projection; WebGPU depth is 0..1
@@ -279,10 +318,10 @@ export function selectLods(
     for (let i = 0; i < wm.count; i++) {
       const x = S[i * 4], y = S[i * 4 + 1], z = S[i * 4 + 2], r = S[i * 4 + 3];
       const d = Math.sqrt((x - ex) * (x - ex) + (y - ey) * (y - ey) + (z - ez) * (z - ez));
-      if (r < minR || d - r > (80 + 70 * r) * distScale || d - r > maxD) { stats.culledDistance++; continue; }
+      if (r < minR || (!wm.uber && d - r > (80 + 70 * r) * distScale) || d - r > maxD) { stats.culledDistance++; continue; }
       // uber-LODs are simplified stand-ins for whole town blocks: far views only, else they
       // overlap the detailed buildings they replace
-      if (wm.uber && d - r < UBER_NEAR * distScale) { stats.culledDistance++; continue; }
+      if (wm.uber && d - r < (opts.uberNear ?? UBER_NEAR * distScale)) { stats.culledDistance++; continue; }
       let inside = true;
       for (let k = 0; k < 24; k += 4) if (P[k] * x + P[k + 1] * y + P[k + 2] * z + P[k + 3] < -r) { inside = false; break; }
       if (!inside) { stats.culledFrustum++; continue; }

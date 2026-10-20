@@ -152,6 +152,14 @@ check(targetSpeed({ ...run, forward: -1, sprint: true }).gait !== "sprint", "no 
   check(p.grounded && Math.abs(t - expect) < 0.05, `falls 20 m in ${t.toFixed(2)} s (expected ${expect.toFixed(2)} s at 13 m/s²)`);
 }
 
+// --- the map's edge: running west from x = 20 stops at 2 m
+{
+  const edged = terrainSurroundings(h, { bounds: [2, terrain.size - 2] });
+  const p = new PlayerController(edged, [20, 2000, 0], Math.PI);
+  for (let t = 0; t < 10; t += 1 / 60) p.update(1 / 60, run);
+  check(Math.abs(p.pos[0] - 2) < 1e-6 && p.grounded, `stops at the map's edge (x ${p.pos[0].toFixed(2)})`);
+}
+
 // --- Henry: soul, skeleton, clips, camera bone
 {
   const vfs = await Vfs.build(sources.filter((s) => !s.path.toLowerCase().startsWith("data/levels/")), { filter: (n) => ASSET_RE.test(n), includeHd: false });

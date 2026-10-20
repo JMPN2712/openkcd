@@ -23,6 +23,8 @@ export interface Surroundings {
   raycast?(from: Vec3, to: Vec3): number | null;
   /** The terrain height: nothing walks below it (holes aside, which Rataje's heightmap has none of). */
   floor?(x: number, y: number): number;
+  /** The walkable square [min, max] in x and y (the heightmap's extent): the player stays inside. */
+  bounds?: [number, number];
 }
 
 export const PLAYER = {
@@ -204,6 +206,11 @@ export class PlayerController {
     }
     // a step up or a snap can lift the capsule into an overhang (eaves, beams): push out again
     if (Math.abs(p[2] - prevZ) > 1e-4) this.resolve();
+    // the map's edge
+    const b = this.world.bounds;
+    if (b) for (let k = 0; k < 2; k++) {
+      if (p[k] < b[0] || p[k] > b[1]) { p[k] = Math.max(b[0], Math.min(b[1], p[k])); this.vel[k] = 0; }
+    }
   }
 
   /** Capsule end points (sphere centres) for feet position `p`. */
@@ -235,9 +242,10 @@ export class PlayerController {
 }
 
 /** Terrain-only surroundings: the heightmap (and its normal) under a point. */
-export function terrainSurroundings(heightAt: (x: number, y: number) => number): Surroundings {
+export function terrainSurroundings(heightAt: (x: number, y: number) => number, opts?: { bounds?: [number, number] }): Surroundings {
   return {
     floor: heightAt,
+    bounds: opts?.bounds,
     ground(x, y, zTop, zBottom) {
       const z = heightAt(x, y);
       if (z > zTop || z < zBottom) return null;
