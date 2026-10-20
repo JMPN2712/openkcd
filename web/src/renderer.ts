@@ -24,7 +24,7 @@ struct Camera { viewProj: mat4x4f, eye: vec4f, light: vec4f, sunColor: vec4f, sk
 // params: x alpha test, y diffuse map, z specular map, w layer
 // colorize: KCD %COLORIZING shader, x/y/z = hue (deg) / saturation / brightness, w = 0 off, 1 global, 2 with mask
 //   (the "Specular" slot then holds the region mask: R/G/B select mask1/2/3)
-// flags: x = 1 with a normal map
+// flags: x = 1 with a normal map; y = 1 water (Water, Waterfall shaders), 2 glass: blended
 struct Draw { model: mat4x4f, color: vec4f, spec: vec4f, params: vec4f, colorize: vec4f, mask1: vec4f, mask2: vec4f, mask3: vec4f, flags: vec4f };
 @group(0) @binding(0) var<uniform> cam: Camera;
 @group(0) @binding(1) var shadowTex: texture_depth_2d_array;
@@ -98,6 +98,15 @@ fn adjust(lin: vec3f, hsb: vec3f) -> vec3f {
 }
 
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
+  return vec4f(shade(i).rgb, 1.0);
+}
+
+// water and glass materials (flags.y 1 / 2): blended over the opaque scene
+@fragment fn fsBlend(i: VOut) -> @location(0) vec4f {
+  return shade(i);
+}
+
+fn shade(i: VOut) -> vec4f {
   let t = textureSample(tex, samp, i.uv);
   let st = textureSample(specTex, samp, i.uv);
   var base = drw.color * select(vec4f(1.0), t, drw.params.y > 0.5);
@@ -134,9 +143,20 @@ fn adjust(lin: vec3f, hsb: vec3f) -> vec3f {
   let fd = distance(i.wpos, cam.eye.xyz);
   let sh = shadowFactor(i.wpos, n, fd);
   var lin = base.rgb * (hemi + cam.sunColor.rgb * ndl * sh) + spec * mix(0.3, 1.0, sh);
+  var alpha = 1.0;
+  if (drw.flags.y > 0.5) {
+    // water / glass: the sky reflected at grazing angles (Schlick), the sun's glint, the material's
+    // own texture as the body seen through; more opaque towards the horizon
+    let fres = 0.02 + 0.98 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
+    let glint = pow(max(dot(n, normalize(l + v)), 0.0), 220.0) * 2.5 * sh;
+    let water = drw.flags.y < 1.5;
+    let bodyC = select(lin * 0.6 + cam.skyColor.rgb * 0.1, lin, water);
+    lin = mix(bodyC, cam.skyColor.rgb * 1.5, fres) + cam.sunColor.rgb * glint;
+    alpha = select(mix(0.25, 0.85, fres), mix(0.55, 0.95, fres), water);
+  }
   lin = mix(lin, cam.fog.rgb, clamp(1.0 - exp(-fd * cam.fog.w), 0.0, 1.0));
   // target is a non-sRGB format: encode manually
-  return vec4f(pow(clamp(lin, vec3f(0.0), vec3f(1.0)), vec3f(1.0 / 2.2)), 1.0);
+  return vec4f(pow(clamp(lin, vec3f(0.0), vec3f(1.0)), vec3f(1.0 / 2.2)), alpha);
 }
 `;
 
@@ -161,7 +181,12 @@ interface DrawItem {
   instCount: number;
   /** the mesh's own node transform, composed with the item transform */
   meshTm: Float32Array;
+  /** water or glass: drawn blended, after every opaque draw (drawBlended), never in shadows */
+  blend: boolean;
 }
+
+/** Shaders whose surfaces are see-through: drawn in the blended pass. */
+const BLENDED_SHADER = /^(water|waterfall|glass)$/i;
 
 /**
  * One way of drawing the items (indirect mode): the camera, or a shadow cascade. Each view has
@@ -185,6 +210,9 @@ interface View {
   /** one bundle per item: null not recorded yet, undefined no draws */
   bundles: (GPURenderBundle | null | undefined)[];
   live: GPURenderBundle[];
+  /** camera view only: the blended draws' bundles */
+  blendBundles: (GPURenderBundle | null | undefined)[];
+  liveBlend: GPURenderBundle[];
   triangles: number;
   calls: number;
 }
@@ -215,6 +243,7 @@ export class ModelRenderer {
   private reversedZ: boolean;
   private pipeline: GPURenderPipeline;
   private shadowPipeline: GPURenderPipeline | null = null;
+  private blendPipeline: GPURenderPipeline;
   private module: GPUShaderModule;
   private camLayout: GPUBindGroupLayout;
   private drawLayout: GPUBindGroupLayout;
@@ -290,6 +319,17 @@ export class ModelRenderer {
       depthStencil: { format: depthFormat(pass), depthWriteEnabled: true, depthCompare: depthCompare(pass) },
       multisample: { count: sampleCount },
     });
+    this.blendPipeline = device.createRenderPipeline({
+      layout: this.pipelineLayout,
+      vertex: { module: this.module, entryPoint: "vs", buffers: VERTEX_LAYOUT },
+      fragment: {
+        module: this.module, entryPoint: "fsBlend",
+        targets: [{ format, blend: { color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" }, alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha" } } }],
+      },
+      primitive: { topology: "triangle-list", cullMode: "none", frontFace: "ccw" },
+      depthStencil: { format: depthFormat(pass), depthWriteEnabled: false, depthCompare: depthCompare(pass) },
+      multisample: { count: sampleCount },
+    });
     this.camBuf = device.createBuffer({ size: 160, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.camBind = this.cameraBind(this.camBuf, this.shadowOrStandIn());
     this.sampler = device.createSampler({ magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", addressModeU: "repeat", addressModeV: "repeat", maxAnisotropy: 8 });
@@ -358,7 +398,7 @@ export class ModelRenderer {
       return {
         pipeline, camBuf, camBind, colorFormats, depthFormat: depth, sampleCount: samples, counts,
         pending: new Array(items).fill(null), itemFirst: new Uint32Array(items), packed, packedCpu: new Float32Array(Math.max(1, total) * 16),
-        args, argsBuf, bundles: new Array(items).fill(null), live: [], triangles: 0, calls: 0,
+        args, argsBuf, bundles: new Array(items).fill(null), live: [], blendBundles: new Array(items).fill(null), liveBlend: [], triangles: 0, calls: 0,
       };
     };
     this.views.push(make(this.pipeline, this.camBuf, this.camBind, [this.format], depthFormat(this.pass), this.sampleCount));
@@ -515,7 +555,8 @@ export class ModelRenderer {
         if (chain) this.stats.textured++;
         const ubuf = this.device.createBuffer({ size: 192, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         const u = new Float32Array(48);
-        u.set([normChain ? 1 : 0, 0, 0, 0], 44);
+        const blend = BLENDED_SHADER.test(mat?.shader ?? "");
+        u.set([normChain ? 1 : 0, blend ? (/glass/i.test(mat!.shader) ? 2 : 1) : 0, 0, 0], 44);
         u.set(meshTm, 0);
         const col = mat?.diffuse ?? [0.8, 0.8, 0.8];
         u.set([col[0], col[1], col[2], 1], 16);
@@ -543,7 +584,7 @@ export class ModelRenderer {
           ],
         });
         const ib2 = instBufs[itemIndex];
-        this.draws.push({ vb, ib, firstIndex: s.firstIndex, count: s.numIndices, bind, item: itemIndex, ubuf, meshTm: mesh.transform, inst: ib2.buf, instCount: ib2.count });
+        this.draws.push({ vb, ib, firstIndex: s.firstIndex, count: s.numIndices, bind, item: itemIndex, ubuf, meshTm: mesh.transform, inst: ib2.buf, instCount: ib2.count, blend });
       }
     }
     this.stats.draws = this.draws.length;
@@ -632,7 +673,7 @@ export class ModelRenderer {
     let tris = 0, calls = 0;
     for (const d of this.draws) {
       const n = this.itemInst[d.item]?.count ?? d.instCount;
-      if (!n || !d.count) continue;
+      if (!n || !d.count || d.blend) continue;
       pass.setVertexBuffer(0, d.vb);
       pass.setVertexBuffer(1, d.inst);
       pass.setIndexBuffer(d.ib, "uint32");
@@ -644,6 +685,26 @@ export class ModelRenderer {
     this.stats.triangles = tris;
     /** draw calls recorded by the last draw() */
     this.stats.drawCalls = calls;
+  }
+
+  /** Record the water and glass draws: call after every renderer's opaque draw() in the pass. */
+  drawBlended(pass: GPURenderPassEncoder): void {
+    if (this.indirect) {
+      const v = this.views[0];
+      if (v?.liveBlend.length) pass.executeBundles(v.liveBlend);
+      return;
+    }
+    pass.setPipeline(this.blendPipeline);
+    pass.setBindGroup(0, this.camBind);
+    for (const d of this.draws) {
+      const n = this.itemInst[d.item]?.count ?? d.instCount;
+      if (!n || !d.count || !d.blend) continue;
+      pass.setVertexBuffer(0, d.vb);
+      pass.setVertexBuffer(1, d.inst);
+      pass.setIndexBuffer(d.ib, "uint32");
+      pass.setBindGroup(1, d.bind);
+      pass.drawIndexed(d.count, n, d.firstIndex);
+    }
   }
 
   /** Upload `count` instance matrices for an item created with `capacity` (indirect mode: at the next draw). */
@@ -725,11 +786,17 @@ export class ModelRenderer {
     v.triangles = tris;
     v.calls = calls;
     v.live.length = 0;
+    v.liveBlend.length = 0;
+    const camera = v === this.views[0];
     for (let k = 0; k < v.counts.length; k++) {
       if (!v.counts[k]) continue;
       let b = v.bundles[k];
-      if (b === null) b = v.bundles[k] = this.record(v, k);
+      if (b === null) b = v.bundles[k] = this.record(v, k, false);
       if (b) v.live.push(b);
+      if (!camera) continue;
+      let bb = v.blendBundles[k];
+      if (bb === null) bb = v.blendBundles[k] = this.record(v, k, true);
+      if (bb) v.liveBlend.push(bb);
     }
   }
 
@@ -737,7 +804,7 @@ export class ModelRenderer {
    * Indirect mode: an item's draws, once, into a render bundle for a view (buffers and bind
    * groups are fixed until setModels). Items without draws get none.
    */
-  private record(v: View, item: number): GPURenderBundle | undefined {
+  private record(v: View, item: number, blend: boolean): GPURenderBundle | undefined {
     if (!this.drawIndex) {
       this.drawIndex = new Map();
       this.draws.forEach((d, i) => {
@@ -745,10 +812,10 @@ export class ModelRenderer {
         if (l) l.push(i); else this.drawIndex!.set(d.item, [i]);
       });
     }
-    const list = this.drawIndex.get(item);
+    const list = this.drawIndex.get(item)?.filter((i) => this.draws[i].blend === blend);
     if (!list?.length) return undefined;
     const enc = this.device.createRenderBundleEncoder({ colorFormats: v.colorFormats, depthStencilFormat: v.depthFormat, sampleCount: v.sampleCount });
-    enc.setPipeline(v.pipeline);
+    enc.setPipeline(blend ? this.blendPipeline : v.pipeline);
     enc.setBindGroup(0, v === this.views[0] ? this.camBind : v.camBind);
     const dynamic = this.dynamicItems.includes(item);
     let vb: GPUBuffer | null = null, ib: GPUBuffer | null = null, inst: GPUBuffer | null = null;

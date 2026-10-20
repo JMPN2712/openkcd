@@ -124,6 +124,7 @@ async function render(name: string): Promise<void> {
   farR.draw(pass);
   models.draw(pass);
   playerR.draw(pass);
+  models.drawBlended(pass);
   water.draw(pass);
   pass.end();
   device.queue.submit([enc.finish()]);

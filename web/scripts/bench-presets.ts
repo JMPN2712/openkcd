@@ -146,6 +146,7 @@ for (const pp of gpus) {
         models.draw(p);
         npcR.draw(p);
         playerR.draw(p);
+        models.drawBlended(p);
         water.draw(p);
         p.end();
         device.queue.submit([enc.finish()]);
