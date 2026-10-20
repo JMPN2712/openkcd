@@ -64,6 +64,9 @@ playable frame rates on the Potato preset.
 - [x] Physics proxies for collision (from the models' physics meshes):
       MeshPhysicsData boxes, spheres, cylinders, capsules and meshes decoded
       (`physics.ts`, `docs/PHYSICS.md`).
+- [x] Third-person camera as a toggle (V; wheel zooms 1–8 m); its arm is
+      cast against the world so walls and the ground pull it in. Free-fly
+      stays as a debug toggle (F; T puts Henry under the fly camera).
 - [ ] Whole-world streaming beyond Rataje, plus LOD.
 - [ ] Time of day and sky (lighting is basic for now).
 - [ ] Performance presets: Potato / Low / Medium / High.

@@ -32,8 +32,13 @@ export class PlayerSession {
   pitch = 0;
   walk = false;
   private view: ViewMode = "third";
+  /** third-person camera distance (mouse wheel), and the arm length after collision (eased) */
+  thirdDistance = 3.2;
+  private arm = 3.2;
+  private world: Surroundings;
 
   constructor(world: Surroundings, avatar: PlayerAvatar, spawn: Vec3, yaw: number) {
+    this.world = world;
     this.controller = new PlayerController(world, spawn, yaw);
     this.avatar = avatar;
     this.loco = new LocomotionPlayer(avatar.locomotion, avatar.animator);
@@ -95,8 +100,8 @@ export class PlayerSession {
   }
 
   /** The view for the current mode. */
-  camera(): FlyCamera {
-    return this.view === "first" ? this.firstPerson() : this.thirdPerson();
+  camera(dt = 0): FlyCamera {
+    return this.view === "first" ? this.firstPerson() : this.thirdPerson(dt);
   }
 
   /**
@@ -119,16 +124,28 @@ export class PlayerSession {
     return { pos: [neck[0] + f2 * fx - side * fy, neck[1] + f2 * fy + side * fx, neck[2] + u2], yaw: c.yaw, pitch: this.pitch };
   }
 
-  /** Chase camera behind and above Henry, looking where he looks. */
-  thirdPerson(distance = 3.2): FlyCamera {
+  /** Mouse wheel in third person: closer or further (1–8 m). */
+  zoom(steps: number): void {
+    this.thirdDistance = Math.max(1, Math.min(8, this.thirdDistance * Math.pow(1.15, steps)));
+  }
+
+  /**
+   * Chase camera behind and above Henry, looking where he looks. The arm from his head is cast
+   * against the world: walls and the ground pull the camera in at once, and it eases back out.
+   */
+  thirdPerson(dt = 0): FlyCamera {
     const c = this.controller;
     const pitch = this.pitch;
-    const target: Vec3 = [c.pos[0], c.pos[1], c.viewZ + 1.6];
+    const pivot: Vec3 = [c.pos[0], c.pos[1], c.viewZ + 1.7];
     const cp = Math.cos(pitch);
-    return {
-      pos: [target[0] - Math.cos(c.yaw) * cp * distance, target[1] - Math.sin(c.yaw) * cp * distance, target[2] - Math.sin(pitch) * distance + 0.3],
-      yaw: c.yaw,
-      pitch,
-    };
+    const dir: Vec3 = [-Math.cos(c.yaw) * cp, -Math.sin(c.yaw) * cp, -Math.sin(pitch)];
+    const want = this.thirdDistance;
+    const far: Vec3 = [pivot[0] + dir[0] * (want + 0.3), pivot[1] + dir[1] * (want + 0.3), pivot[2] + dir[2] * (want + 0.3)];
+    const hit = this.world.raycast?.(pivot, far) ?? null;
+    // keep 0.3 m off whatever the arm hits
+    const free = hit === null ? want : Math.max(0.4, hit * (want + 0.3) - 0.3);
+    this.arm = free < this.arm || dt <= 0 ? free : this.arm + (free - this.arm) * Math.min(1, dt * 4);
+    const d = this.arm;
+    return { pos: [pivot[0] + dir[0] * d, pivot[1] + dir[1] * d, pivot[2] + dir[2] * d], yaw: c.yaw, pitch };
   }
 }

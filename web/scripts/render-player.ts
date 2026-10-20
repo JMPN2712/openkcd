@@ -63,7 +63,7 @@ playerR.setModels(avatar.renderItems());
 const sun: [number, number, number] = [0.45, 0.25, 0.85];
 async function render(name: string): Promise<void> {
   session.avatar.upload(playerR);
-  const cam: FlyCamera = session.camera();
+  const cam: FlyCamera = session.camera(1);
   const g = heightAt(lvl.terrain, cam.pos[0], cam.pos[1]);
   if (session.viewMode === "third" && cam.pos[2] < g + 0.3) cam.pos[2] = g + 0.3;
   const vp = TerrainRenderer.viewProj(cam, W / H, { reversed: true, near: session.viewMode === "first" ? 0.01 : 0.1 });

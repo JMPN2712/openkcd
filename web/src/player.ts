@@ -19,6 +19,8 @@ export interface Surroundings {
    * total correction and the most upward-facing contact normal (null without contact).
    */
   depenetrate?(a: Vec3, b: Vec3, r: number): { push: Vec3; normal: Vec3 | null };
+  /** Fraction (0..1) of the segment from → to before it hits anything, null when clear (camera arms). */
+  raycast?(from: Vec3, to: Vec3): number | null;
   /** The terrain height: nothing walks below it (holes aside, which Rataje's heightmap has none of). */
   floor?(x: number, y: number): number;
 }

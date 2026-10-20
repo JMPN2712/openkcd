@@ -1,5 +1,6 @@
 // World view: loads a level's compiled terrain and lets you walk it as Henry, or fly over it.
-// Player: click to capture the mouse · WASD move · Shift sprint · X walk/run · Space jump.
+// Player: click to capture the mouse · WASD move · Shift sprint · X walk/run · Space jump ·
+// V first / third person (mouse wheel: camera distance).
 // F: free-fly (debug): mouse drag look · WASD / arrows move · Q/E or Space/C down/up · Shift fast ·
 // T puts Henry under the fly camera.
 
@@ -162,7 +163,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   host.replaceChildren(
     el("p", "scene-title", `${level}: ${terrain.size} × ${terrain.size} m terrain, ${objects.brushName.length.toLocaleString()} brushes, ${objects.vegGroup.length.toLocaleString()} vegetation instances`),
     stage,
-    el("p", "dim", "Click the view to walk as Henry: mouse look · WASD move · Shift sprint · X walk/run · Space jump · F free-fly (drag to look, Q/E down/up, T puts Henry there) · Esc releases the mouse"),
+    el("p", "dim", "Click the view to walk as Henry: mouse look · WASD move · Shift sprint · X walk/run · Space jump · V first/third person (wheel zooms) · F free-fly (drag to look, Q/E down/up, T puts Henry there) · Esc releases the mouse"),
   );
   const setFull = (on: boolean) => {
     stage.classList.toggle("full", on);
@@ -309,6 +310,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         if (mode === "fly") document.exitPointerLock?.();
       }
       if ((e.code === "KeyX" || e.code === "CapsLock") && player) player.walk = !player.walk;
+      if (e.code === "KeyV" && player && mode === "player") player.setView(player.viewMode === "first" ? "third" : "first");
       if (e.code === "KeyT" && player && mode === "fly") {
         player.controller.pos = [cam.pos[0], cam.pos[1], cam.pos[2]];
         player.controller.vel = [0, 0, 0];
@@ -333,6 +335,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     drag = { x: e.clientX, y: e.clientY };
   });
   canvas.addEventListener("pointerup", () => { drag = null; });
+  canvas.addEventListener("wheel", (e) => {
+    if (mode !== "player" || player?.viewMode !== "third") return;
+    player.zoom(Math.sign(e.deltaY));
+    e.preventDefault();
+  }, { passive: false });
   canvas.addEventListener("pointermove", (e) => {
     if (mode === "player" && player && document.pointerLockElement === canvas) {
       player.look(-e.movementX * 0.0025, -e.movementY * 0.0025);
@@ -359,7 +366,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     last = now;
     if (mode === "player" && player) {
       player.update(dt, player.input(keys));
-      Object.assign(cam, player.camera());
+      Object.assign(cam, player.camera(dt));
       // keep a chase camera above the terrain
       const g = heightAt(terrain, cam.pos[0], cam.pos[1]);
       if (player.viewMode === "third" && cam.pos[2] < g + 0.3) cam.pos[2] = g + 0.3;
@@ -425,7 +432,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     pass.end();
     device.queue.submit([enc.finish()]);
     const pc = player?.controller;
-    const who = mode === "player" && pc ? `Henry ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
+    const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
     hud.textContent = `${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${sceneInfo}${lodInfo} · ${npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
   };
   raf = requestAnimationFrame(frame);
