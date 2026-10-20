@@ -124,6 +124,13 @@ playable frame rates on the Potato preset.
 
 - [ ] Read the GOG offline installer (setup `.exe` + `.bin` files) in the
       browser.
+  - [x] Installer reader (`inno.ts`, `docs/INSTALLER.md`): setup headers
+        (LZMA), GOG's 10 MiB zlib file parts, slices and installers that keep
+        their data in the `.exe`; the base game and all 10 DLC installers,
+        checked against `~/kcd1` and the installers' MD5s
+        (`scripts/test-inno.ts`).
+  - [ ] Drop or pick the installer files in the page (File System Access /
+        drag and drop), with a progress view.
 - [ ] One streaming pass into a slim package in OPFS:
   - compressed textures (GPU formats), compressed meshes, and Opus audio;
   - region chunks plus an index.

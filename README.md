@@ -70,6 +70,7 @@ cd web
 npm install
 npm run dev        # then open http://localhost:5173/ in Chrome
 npm run test:pak   # Node smoke test against ~/kcd1 (or pass a game root)
+node scripts/test-inno.ts                        # read the GOG installers (base + DLC) in place: file lists, sampled files vs ~/kcd1 and MD5s (--full: every file, ~4 min)
 node scripts/test-textures.ts /tmp/tex && python3 -I scripts/compare_pillow.py /tmp/tex   # texture layout + decoder check
 node scripts/test-cgf.ts                         # parse every model, check indices/bounds/normals
 node scripts/test-characters.ts                  # resolve every NPC soul/preset from the database, load a sample

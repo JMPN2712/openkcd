@@ -78,6 +78,7 @@ questlines whole and never cuts anything the main quest depends on.
 | Area | Files | State |
 |---|---|---|
 | Paks, VFS | `zip.ts`, `paks.ts`, `vfs.ts`, `tree.ts` | Reads all paks in place (Blob.slice) |
+| Installer | `inno.ts`, `lzma.ts` | Reads GOG's Inno Setup installers in place (base game and DLC): file list, parts streamed and inflated |
 | Textures | `dds.ts`, `texture.ts`, `bcn.ts` | Split DDS assembly, BC1–7 (GPU and CPU) |
 | Models, materials | `cgf.ts`, `mtl.ts`, `model.ts`, `renderer.ts` | .cgf/.cga/.skin/.chr, WebGPU renderer |
 | Characters | `character.ts`, `skeleton.ts`, `characterView.ts`, `tables.ts` | Souls and clothing presets from the database |
@@ -88,7 +89,7 @@ questlines whole and never cuts anything the main quest depends on.
 | Game logic | `bt.ts`, `btRuntime.ts`, `btWorld.ts`, `luaHost.ts` (wasmoon Lua 5.1), `typeDefs.ts` | Behaviour-tree interpreter running work routines |
 
 - **Docs:** `docs/RECON.md`, `LEVELS.md`, `CHARACTERS.md`, `ANIMATION.md`,
-  `GAMELOGIC.md`, `ROADMAP.md`.
+  `GAMELOGIC.md`, `INSTALLER.md`, `ROADMAP.md`.
 - **Tests:** headless scripts in `web/scripts/` run with
   `node scripts/<name>.ts` against `~/kcd1`. Headless WebGPU renders go
   through Dawn (`webgpu` npm). The README lists every script.
