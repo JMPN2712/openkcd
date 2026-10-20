@@ -4,10 +4,11 @@
 // after the opaque geometry: depth-tested, not depth-writing.
 
 import type { WaterVolume } from "./levelObjects.ts";
-import { DEFAULT_PASS, depthCompare, depthFormat, type PassSetup, type Vec3 } from "./mat4.ts";
+import { DEFAULT_PASS, depthCompare, depthFormat, type Lighting, type PassSetup, type Vec3 } from "./mat4.ts";
 
 const SHADER = /* wgsl */ `
-struct Cam { viewProj: mat4x4f, eye: vec4f, sun: vec4f, params: vec4f }; // params.z fog density
+// params.z fog density; sky = colour reflected at grazing angles; sunColor scales the glint
+struct Cam { viewProj: mat4x4f, eye: vec4f, sun: vec4f, params: vec4f, sky: vec4f, fogColor: vec4f, sunColor: vec4f };
 @group(0) @binding(0) var<uniform> cam: Cam;
 struct VOut { @builtin(position) pos: vec4f, @location(0) wpos: vec3f, @location(1) tint: vec3f };
 @vertex fn vs(@location(0) p: vec3f, @location(1) tint: vec3f) -> VOut {
@@ -21,13 +22,13 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) wpos: vec3f, @location
   let v = normalize(cam.eye.xyz - i.wpos);
   let n = vec3f(0.0, 0.0, 1.0);
   let fres = 0.04 + 0.96 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
-  let sky = vec3f(0.55, 0.62, 0.70);
-  let deep = i.tint * 4.0 + vec3f(0.03, 0.06, 0.06);
+  let sky = cam.sky.rgb;
+  let deep = (i.tint * 4.0 + vec3f(0.03, 0.06, 0.06)) * cam.sky.w;
   let h = normalize(normalize(cam.sun.xyz) + v);
   let glint = pow(max(dot(n, h), 0.0), 400.0) * 3.0;
-  var c = mix(deep, sky, fres) + vec3f(glint);
+  var c = mix(deep, sky, fres) + glint * cam.sunColor.rgb;
   let d = distance(i.wpos, cam.eye.xyz);
-  c = mix(c, sky, clamp(1.0 - exp(-d * cam.params.z), 0.0, 1.0));
+  c = mix(c, cam.fogColor.rgb, clamp(1.0 - exp(-d * cam.params.z), 0.0, 1.0));
   return vec4f(pow(c, vec3f(1.0 / 2.2)), mix(0.78, 0.95, fres));
 }
 `;
@@ -105,16 +106,21 @@ export class WaterRenderer {
       depthStencil: { format: depthFormat(pass), depthWriteEnabled: false, depthCompare: depthCompare(pass) },
       multisample: { count: pass.sampleCount },
     });
-    this.camBuf = device.createBuffer({ size: 112, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.camBuf = device.createBuffer({ size: 160, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.bind = device.createBindGroup({ layout: this.pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.camBuf } }] });
   }
 
-  setCamera(viewProj: Float32Array, eye: Vec3, sun: Vec3, fogDensity = 0.00018): void {
-    const u = new Float32Array(28);
+  setCamera(viewProj: Float32Array, eye: Vec3, sun: Vec3, fogDensity = 0.00018, lighting?: Lighting, skyColor?: Vec3): void {
+    const u = new Float32Array(40);
     u.set(viewProj, 0);
     u.set([...eye, 1], 16);
-    u.set([...sun, 0], 20);
-    u.set([0, 0, fogDensity, 0], 24);
+    u.set([...(lighting?.sunDir ?? sun), 0], 20);
+    u.set([0, 0, lighting?.fogDensity ?? fogDensity, 0], 24);
+    // sky.w scales the water body's own colour with the light (1 = the fixed look)
+    const sky = skyColor ?? [0.55, 0.62, 0.7];
+    u.set([...sky, lighting ? Math.min(1.5, (lighting.skyColor[0] + lighting.skyColor[1] + lighting.skyColor[2]) / 1.05 + 0.2 * (lighting.sunColor[0] + lighting.sunColor[1] + lighting.sunColor[2]) / 2.7) : 1], 28);
+    u.set([...(lighting?.fogColor ?? [0.55, 0.62, 0.7]), 0], 32);
+    u.set([...(lighting?.sunColor ?? [1, 1, 1]), 0], 36);
     this.device.queue.writeBuffer(this.camBuf, 0, u);
   }
 

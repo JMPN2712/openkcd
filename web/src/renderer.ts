@@ -11,14 +11,15 @@
 
 import type { LoadedModel, MipChain } from "./model.ts";
 import { colorizeOf } from "./mtl.ts";
-import { depthCompare, depthFormat, lookAt, multiply, perspective, transformPoint, type PassSetup, type Vec3 } from "./mat4.ts";
+import { DEFAULT_LIGHTING, depthCompare, depthFormat, lookAt, multiply, perspective, transformPoint, type Lighting, type PassSetup, type Vec3 } from "./mat4.ts";
 
 // position 3f, normal 3f, uv 2f, bone ids u16×4, weights unorm8×4
 const VERTEX_BYTES = 44;
 const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
 const SHADER = /* wgsl */ `
-struct Camera { viewProj: mat4x4f, eye: vec4f, light: vec4f }; // light.w = 1 for flat shading; eye.w = -1 for reversed-Z
+// light.w = 1 for flat shading; eye.w = -1 for reversed-Z; fog.w = density per metre
+struct Camera { viewProj: mat4x4f, eye: vec4f, light: vec4f, sunColor: vec4f, skyColor: vec4f, groundColor: vec4f, fog: vec4f };
 // params: x alpha test, y diffuse map, z specular map, w layer
 // colorize: KCD %COLORIZING shader, x/y/z = hue (deg) / saturation / brightness, w = 0 off, 1 global, 2 with mask
 //   (the "Specular" slot then holds the region mask: R/G/B select mask1/2/3)
@@ -101,11 +102,13 @@ fn adjust(lin: vec3f, hsb: vec3f) -> vec3f {
   if (dot(n, v) < 0.0) { n = -n; }
   let l = normalize(cam.light.xyz);
   let ndl = max(dot(n, l), 0.0);
-  let hemi = mix(0.12, 0.35, n.z * 0.5 + 0.5);
+  let hemi = mix(cam.groundColor.rgb, cam.skyColor.rgb, n.z * 0.5 + 0.5);
   // Blinn-Phong stand-in for the PBR specular colour, plus a flat "environment" term so metals read as metal
   let specCol = drw.spec.rgb * specMap;
-  let spec = specCol * (pow(max(dot(n, normalize(l + v)), 0.0), 48.0) * ndl * 2.0 + hemi * 1.2);
-  let lin = base.rgb * (hemi + 0.9 * ndl) + spec;
+  let spec = specCol * (pow(max(dot(n, normalize(l + v)), 0.0), 48.0) * ndl * 2.0 * cam.sunColor.rgb / 0.9 + hemi * 1.2);
+  var lin = base.rgb * (hemi + cam.sunColor.rgb * ndl) + spec;
+  let fd = distance(i.wpos, cam.eye.xyz);
+  lin = mix(lin, cam.fog.rgb, clamp(1.0 - exp(-fd * cam.fog.w), 0.0, 1.0));
   // target is a non-sRGB format: encode manually
   return vec4f(pow(clamp(lin, vec3f(0.0), vec3f(1.0)), vec3f(1.0 / 2.2)), 1.0);
 }
@@ -190,7 +193,7 @@ export class ModelRenderer {
       depthStencil: { format: depthFormat(pass), depthWriteEnabled: true, depthCompare: depthCompare(pass) },
       multisample: { count: sampleCount },
     });
-    this.camBuf = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.camBuf = device.createBuffer({ size: 160, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.camBind = device.createBindGroup({ layout: this.pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.camBuf } }] });
     this.sampler = device.createSampler({ magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", addressModeU: "repeat", addressModeV: "repeat", maxAnisotropy: 8 });
     this.identityInstance = device.createBuffer({ size: 64, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
@@ -412,12 +415,20 @@ export class ModelRenderer {
     this.device.queue.submit([enc.finish()]);
   }
 
-  /** Camera for the next draw(): view-projection, eye position, sun direction. */
-  setCamera(viewProj: Float32Array, eye: Vec3, sun: Vec3, flat = false): void {
-    const cu = new Float32Array(24);
+  /** Light for the next setCamera (the viewers keep the default). */
+  lighting: Lighting = DEFAULT_LIGHTING;
+
+  /** Camera for the next draw(): view-projection, eye position, sun direction (lighting's own when omitted). */
+  setCamera(viewProj: Float32Array, eye: Vec3, sun?: Vec3, flat = false): void {
+    const L = this.lighting;
+    const cu = new Float32Array(40);
     cu.set(viewProj, 0);
     cu.set([...eye, this.reversedZ ? -1 : 1], 16);
-    cu.set([...sun, flat ? 1 : 0], 20);
+    cu.set([...(sun ?? L.sunDir), flat ? 1 : 0], 20);
+    cu.set([...L.sunColor, 0], 24);
+    cu.set([...L.skyColor, 0], 28);
+    cu.set([...L.groundColor, 0], 32);
+    cu.set([...L.fogColor, L.fogDensity], 36);
     this.device.queue.writeBuffer(this.camBuf, 0, cu);
   }
 

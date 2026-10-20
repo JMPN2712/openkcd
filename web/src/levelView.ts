@@ -31,6 +31,8 @@ import { PlayerAvatar } from "./playerAvatar.ts";
 import { PlayerSession } from "./playerSession.ts";
 import { CollisionWorld } from "./collision.ts";
 import { depthClear, depthFormat, type PassSetup } from "./mat4.ts";
+import { parseTimeOfDay, type TimeOfDay } from "./tod.ts";
+import { SkyRenderer, skyAt, pickProfile, invert } from "./sky.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -40,7 +42,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 }
 
 let stopActive: (() => void) | null = null;
-const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules; props: EntityInfo[]; ents: Map<number, EntityInfo>; hiddenLayers: Set<number> }>>();
+const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules; props: EntityInfo[]; ents: Map<number, EntityInfo>; hiddenLayers: Set<number>; tod: TimeOfDay | null }>>();
 const vfsCache = new Map<string, Promise<Vfs>>();
 const worldCaches = newWorldCaches();
 const STREAM_RADIUS = 500; // metres of objects around the camera
@@ -70,6 +72,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let props: EntityInfo[];
   let ents: Map<number, EntityInfo>;
   let hiddenLayers: Set<number>;
+  let tod: TimeOfDay | null;
   let vfs: Vfs;
   let device: GPUDevice;
   try {
@@ -112,12 +115,15 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
             console.warn("navmesh:", err);
           }
         }
-        return { terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers };
+        // the level's time of day (sun, sky, fog over the day, per weather profile)
+        const me = entries.find((e) => e.name.toLowerCase() === "mission_mission0.xml");
+        const tod = me ? parseTimeOfDay(new TextDecoder().decode(await readEntry(blob, me, undefined, false))) : null;
+        return { terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers, tod };
       })();
       p.catch(() => terrainCache.delete(pakPath));
       terrainCache.set(pakPath, p);
     }
-    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers } = await p);
+    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, tod } = await p);
     let v = vfsCache.get(pakPath);
     if (!v) {
       // assets from every non-level pak, with this level's own files (brush/*.cgf, …) on top
@@ -194,6 +200,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const water = new WaterRenderer(device, format, objects.water, passSetup);
   const npcR = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
   const playerR = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
+  const sky = new SkyRenderer(device, format, passSetup);
+  const todProfile = tod ? pickProfile(tod) : null;
   // Henry: the player character (loaded in the background; free-fly until then)
   let player: PlayerSession | null = null;
   let mode: "player" | "fly" = "fly";
@@ -407,11 +415,17 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       msaa = device.createTexture({ size: [target.width, target.height], format, sampleCount: passSetup.sampleCount, usage: GPUTextureUsage.RENDER_ATTACHMENT });
     }
     const vp = TerrainRenderer.viewProj(cam, target.width / target.height, { reversed: true, near: mode === "player" && player?.viewMode === "first" ? 0.01 : 0.1 });
-    renderer.prepare(cam, vp);
-    models.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
-    water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
-    npcR.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
-    playerR.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
+    // day and night from the level's time of day at the game clock
+    const skyState = todProfile ? skyAt(todProfile, minute / 60) : null;
+    if (skyState) {
+      models.lighting = npcR.lighting = playerR.lighting = skyState.lighting;
+      sky.update(invert(vp), cam.pos, skyState);
+    }
+    renderer.prepare(cam, vp, { lighting: skyState?.lighting });
+    models.setCamera(vp, cam.pos);
+    water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85], undefined, skyState?.lighting, skyState?.horizon);
+    npcR.setCamera(vp, cam.pos);
+    playerR.setCamera(vp, cam.pos);
     npcWorld.stepCrowd(npcs, minute, simDt);
     animateNpcs(npcs, npcWorld, minute, simSeconds, npcR);
     if (scene) {
@@ -424,6 +438,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       colorAttachments: [{ view: msaa!.createView(), resolveTarget: target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.70, a: 1 }, loadOp: "clear", storeOp: "discard" }],
       depthStencilAttachment: { view: depth.createView(), depthClearValue: depthClear(passSetup), depthLoadOp: "clear", depthStoreOp: "discard" },
     });
+    if (skyState) sky.draw(pass);
     renderer.draw(pass);
     models.draw(pass);
     npcR.draw(pass);
@@ -444,6 +459,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     models.destroy();
     npcR.destroy();
     playerR.destroy();
+    sky.destroy();
     water.destroy();
     depth?.destroy();
     msaa?.destroy();

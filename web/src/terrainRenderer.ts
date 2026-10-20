@@ -7,10 +7,11 @@
 import { HEIGHT_UNIT, type Terrain } from "./terrain.ts";
 import type { Cover } from "./cover.ts";
 import { decodeBC1 } from "./bcn.ts";
-import { DEFAULT_PASS, depthCompare, depthFormat, lookAt, multiply, perspective, perspectiveReversed, type PassSetup, type Vec3 } from "./mat4.ts";
+import { DEFAULT_LIGHTING, DEFAULT_PASS, depthCompare, depthFormat, lookAt, multiply, perspective, perspectiveReversed, type Lighting, type PassSetup, type Vec3 } from "./mat4.ts";
 
 const SHADER = /* wgsl */ `
-struct Cam { viewProj: mat4x4f, eye: vec4f, sun: vec4f, params: vec4f }; // params: x heightUnit, y size, z fog density, w cover gain (0 = none)
+// params: x heightUnit, y size, z fog density, w cover gain (0 = none)
+struct Cam { viewProj: mat4x4f, eye: vec4f, sun: vec4f, params: vec4f, sunColor: vec4f, skyColor: vec4f, groundColor: vec4f, fogColor: vec4f };
 @group(0) @binding(0) var<uniform> cam: Cam;
 @group(0) @binding(1) var heights: texture_2d<u32>;
 // terrain colour (cover.ctc), stored X-major: sample at (y, x) / size
@@ -54,10 +55,10 @@ fn h(p: vec2i) -> f32 {
   let cov = textureSample(cover, coverSamp, vec2f(i.wpos.y, i.wpos.x) / cam.params.y).rgb;
   c = select(c, cov * cam.params.w, cam.params.w > 0.0);
   let ndl = max(dot(n, normalize(cam.sun.xyz)), 0.0);
-  var lit = c * (0.35 + 0.9 * ndl);
+  var lit = c * (mix(cam.groundColor.rgb, cam.skyColor.rgb, n.z * 0.5 + 0.5) + cam.sunColor.rgb * ndl);
   let d = distance(i.wpos, cam.eye.xyz);
   let fog = 1.0 - exp(-d * cam.params.z);
-  lit = mix(lit, vec3f(0.55, 0.62, 0.70), clamp(fog, 0.0, 1.0));
+  lit = mix(lit, cam.fogColor.rgb, clamp(fog, 0.0, 1.0));
   return vec4f(pow(lit, vec3f(1.0 / 2.2)), 1.0);
 }
 `;
@@ -117,7 +118,7 @@ export class TerrainRenderer {
       depthStencil: { format: depthFormat(pass), depthWriteEnabled: true, depthCompare: depthCompare(pass) },
       multisample: { count: pass.sampleCount },
     });
-    this.camBuf = device.createBuffer({ size: 112, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.camBuf = device.createBuffer({ size: 176, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     ({ tex: this.coverTex, mode: this.coverMode } = this.uploadCover(cover));
     if (this.coverMode !== "none") this.coverGain = 2 * (cover?.brightness ?? 1); // CryEngine terrain doubles the colour map
     const coverSamp = device.createSampler({ magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge", maxAnisotropy: 8 });
@@ -206,12 +207,18 @@ export class TerrainRenderer {
   }
 
   /** Upload camera uniforms and choose patch LODs for the next draw(). */
-  prepare(cam: FlyCamera, viewProj: Float32Array, opts: { lodDistance?: number } = {}): void {
-    const u = new Float32Array(28);
+  prepare(cam: FlyCamera, viewProj: Float32Array, opts: { lodDistance?: number; lighting?: Lighting } = {}): void {
+    // the terrain always had distance fog and a brighter ambient than models (0.35 flat, 0.9 sun)
+    const L = opts.lighting ?? { ...DEFAULT_LIGHTING, skyColor: [0.35, 0.35, 0.35] as Vec3, groundColor: [0.35, 0.35, 0.35] as Vec3, fogDensity: 0.00018 };
+    const u = new Float32Array(44);
     u.set(viewProj, 0);
     u.set([...cam.pos, 1], 16);
-    u.set([0.45, 0.25, 0.85, 0], 20);
-    u.set([HEIGHT_UNIT, this.terrain.size, 0.00018, this.coverGain], 24);
+    u.set([...L.sunDir, 0], 20);
+    u.set([HEIGHT_UNIT, this.terrain.size, L.fogDensity, this.coverGain], 24);
+    u.set([...L.sunColor, 0], 28);
+    u.set([...L.skyColor, 0], 32);
+    u.set([...L.groundColor, 0], 36);
+    u.set([...L.fogColor, 0], 40);
     this.device.queue.writeBuffer(this.camBuf, 0, u);
     const near = opts.lodDistance ?? 250;
     const per = this.terrain.size / PATCH;
@@ -243,7 +250,7 @@ export class TerrainRenderer {
     });
   }
 
-  render(target: GPUTexture, cam: FlyCamera, opts: { lodDistance?: number } = {}): void {
+  render(target: GPUTexture, cam: FlyCamera, opts: { lodDistance?: number; lighting?: Lighting } = {}): void {
     const { width, height } = target;
     if (!this.depth || this.depth.width !== width || this.depth.height !== height) {
       this.depth?.destroy();

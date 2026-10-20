@@ -91,7 +91,7 @@ check(ms / steps < 2, "controller costs under 2 ms a frame");
 {
   const z = h(2577.8, 574) + 1.7;
   const hit = world.raycast([2577.8, 574, z], [2577.8, 550, z]);
-  check(hit !== null && hit * 24 < 16, `ray south from the spawn hits the house after ${hit === null ? "nothing" : `${(hit * 24).toFixed(1)} m`}`);
+  check(hit !== null && hit * 24 < 16, `ray south from the spawn first hits something after ${hit === null ? "nothing" : `${(hit * 24).toFixed(1)} m`}`);
   check(world.raycast([2577.8, 574, z], [2577.8, 574, z + 30]) === null, "ray straight up is clear");
 }
 

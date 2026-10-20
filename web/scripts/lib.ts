@@ -16,6 +16,7 @@ import { parseCover, type Cover } from "../src/cover.ts";
 import { parseEntityIndex, propEntities, type EntityInfo } from "../src/levelEntities.ts";
 import { parseLayerNames, defaultHiddenLayers } from "../src/levelLayers.ts";
 import { setGpuBlockCompression } from "../src/model.ts";
+import { parseTimeOfDay, type TimeOfDay } from "../src/tod.ts";
 
 Object.assign(globalThis, globals);
 
@@ -37,6 +38,7 @@ export interface Level {
   cover?: Cover;
   props: EntityInfo[];
   hiddenLayers: Set<number>;
+  tod: TimeOfDay | null;
 }
 
 /** Rataje with the asset VFS (level files on top), like the world view. */
@@ -64,7 +66,9 @@ export async function openRataje(root: string, opts: { cover?: boolean; hd?: boo
   const props = mission ? propEntities(parseEntityIndex(new TextDecoder().decode(mission))) : [];
   const ld = await read("leveldata.xml");
   const hiddenLayers = ld ? defaultHiddenLayers(parseLayerNames(new TextDecoder().decode(ld))) : new Set<number>();
-  return { sources, vfs, terrain, objects, cover, props, hiddenLayers };
+  const missionEnv = await read("mission_mission0.xml");
+  const tod = missionEnv ? parseTimeOfDay(new TextDecoder().decode(missionEnv)) : null;
+  return { sources, vfs, terrain, objects, cover, props, hiddenLayers, tod };
 }
 
 /** The Dawn instance must outlive its devices (collected, it aborts the process on the next map). */

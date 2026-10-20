@@ -68,7 +68,11 @@ playable frame rates on the Potato preset.
       cast against the world so walls and the ground pull it in. Free-fly
       stays as a debug toggle (F; T puts Henry under the fly camera).
 - [ ] Whole-world streaming beyond Rataje, plus LOD.
-- [ ] Time of day and sky (lighting is basic for now).
+- [x] Time of day and sky: the level's time-of-day profile (sun colour and
+      intensity, fog/sky colours, stars, moonlight) drives the light, the
+      fog and a sky dome with sun, moon and stars (`tod.ts`, `sky.ts`). The
+      sun follows an astronomical path fitted to the profile's sunrise and
+      sunset. Clouds, shadows and weather changes are not done yet.
 - [ ] Performance presets: Potato / Low / Medium / High.
 
 ## 2. Installer converter and slim format

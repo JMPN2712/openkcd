@@ -57,6 +57,30 @@ export const depthFormat = (p: PassSetup): GPUTextureFormat => (p.reversedZ ? "d
 export const depthCompare = (p: PassSetup): GPUCompareFunction => (p.reversedZ ? "greater" : "less");
 export const depthClear = (p: PassSetup): number => (p.reversedZ ? 0 : 1);
 
+/** Light for a frame: shared by the terrain, model and water renderers (sky.ts computes it from the time of day). */
+export interface Lighting {
+  /** towards the sun (or the moon at night), normalised */
+  sunDir: Vec3;
+  /** direct light colour and strength */
+  sunColor: Vec3;
+  /** ambient light from above and from below (hemisphere) */
+  skyColor: Vec3;
+  groundColor: Vec3;
+  /** distance fog colour and density (per metre; 0 = none) */
+  fogColor: Vec3;
+  fogDensity: number;
+}
+
+/** The fixed light the viewers always used: white sun from the upper left, grey ambient, no fog on models. */
+export const DEFAULT_LIGHTING: Lighting = {
+  sunDir: [0.45, 0.25, 0.85],
+  sunColor: [0.9, 0.9, 0.9],
+  skyColor: [0.35, 0.35, 0.35],
+  groundColor: [0.12, 0.12, 0.12],
+  fogColor: [0.55, 0.62, 0.7],
+  fogDensity: 0,
+};
+
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const cross = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
