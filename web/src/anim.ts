@@ -39,6 +39,48 @@ export interface Clip {
   end: number;
   /** frames per second (from MotionParameters when present, else 30) */
   fps: number;
+  /** root (locator) motion over one cycle, from MotionParameters */
+  motion?: Motion;
+}
+
+/** MotionParams905 bytes 24–99: the locator's movement over the clip (docs/ANIMATION.md). */
+export interface Motion {
+  /** metres per second (distance ÷ duration) */
+  moveSpeed: number;
+  distance: number;
+  /** locator offset over one cycle in the character frame (x right, y forward, z up) */
+  travel: Vec3;
+  /** locator yaw over one cycle, radians (positive = to the left) */
+  turn: number;
+}
+
+const qmul = (a: Quat, b: Quat): Quat => [
+  a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+  a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+  a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+  a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+];
+const qconj = (q: Quat): Quat => [-q[0], -q[1], -q[2], q[3]];
+const qrot = (q: Quat, v: Vec3): Vec3 => {
+  const r = qmul(qmul(q, [v[0], v[1], v[2], 0]), qconj(q));
+  return [r[0], r[1], r[2]];
+};
+
+/**
+ * Read the motion fields of a MotionParams905 block starting at `o`. The start and end
+ * locations (quaternion x, y, z, w then position, at 44 and 72) are in the exporter's Y-up
+ * frame: the start rotation maps it to the character's (walk_medium ends at z = 3.03 with
+ * a 180° start rotation about (0, 1, 1)/√2), so the end is taken relative to the start.
+ */
+export function readMotion(dv: DataView, o: number): Motion {
+  const f = (k: number) => dv.getFloat32(o + k, true);
+  const q0: Quat = [f(44), f(48), f(52), f(56)], q1: Quat = [f(72), f(76), f(80), f(84)];
+  const d: Vec3 = [f(88) - f(60), f(92) - f(64), f(96) - f(68)];
+  const travel = qrot(qconj(q0), d);
+  const rel = qmul(qconj(q0), q1);
+  // yaw of the relative rotation: where it takes the forward axis (+Y)
+  const fwd = qrot(rel, [0, 1, 0]);
+  return { moveSpeed: f(24), distance: f(36), travel, turn: Math.atan2(-fwd[0], fwd[1]) };
 }
 
 export const ROT_SIZE: Record<number, number> = { 0: 16, 1: 16, 5: 6, 8: 8 };
@@ -160,6 +202,7 @@ export function parseCaf(bytes: Uint8Array): Clip {
   let start = Infinity;
   let end = -Infinity;
   let fps = 30;
+  let motion: Motion | undefined;
   for (let i = 0; i < n; i++) {
     const e = table + i * 16;
     const type = dv.getUint16(e, true);
@@ -181,8 +224,9 @@ export function parseCaf(bytes: Uint8Array): Clip {
       const ticksPerFrame = dv.getInt32(off + 8, true);
       const secsPerTick = dv.getFloat32(off + 12, true);
       if (ticksPerFrame > 0 && secsPerTick > 0) fps = Math.round(1 / (ticksPerFrame * secsPerTick));
+      motion = readMotion(dv, off);
     }
   }
   if (start === Infinity) { start = 0; end = 0; }
-  return { tracks, start, end, fps };
+  return { tracks, start, end, fps, motion };
 }

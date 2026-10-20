@@ -83,6 +83,8 @@ node scripts/test-lua.ts                         # Lua 5.1 (WebAssembly): semant
 node scripts/bench-npcs.ts                       # CPU benchmark: NPC loading and per-frame cost in Rataje's market (--decode: CPU texture decoding)
 node scripts/render-world.ts /tmp/w --at-npc rat_baker --npc-dist 6 --npcs --clock 12:00   # world with NPCs placed by their schedules, framed on one
 node scripts/render-world.ts /tmp/w --at-entity SO_tailorsTable_40ee6671 --npc-dist 3 --npcs --clock 10:00 --ai 30   # NPCs at work run by their behaviour trees
+node scripts/test-player.ts                      # player controller on Rataje: ground following, climb limit, jump, fall, speeds; Henry's clips
+node scripts/render-player.ts /tmp/p --walk "1:;2:w;1.5:w+shift;1:"   # headless walk as Henry with scripted input, a frame per segment
 node scripts/render-model.ts /tmp/r soul:henry --anim <clip.caf | db.dba#anim.caf> --frames 0,20,40   # animated headless renders
 node scripts/render-model.ts /tmp/renders objects/vehicles/cart/cart_01.cga   # headless WebGPU render to PNG (Dawn)
 ```

@@ -1,5 +1,7 @@
-// World view: loads a level's compiled terrain and lets you fly over it.
-// Mouse drag: look · WASD / arrows: move · Q/E or Space/C: down/up · Shift: fast.
+// World view: loads a level's compiled terrain and lets you walk it as Henry, or fly over it.
+// Player: click to capture the mouse · WASD move · Shift sprint · X walk/run · Space jump.
+// F: free-fly (debug): mouse drag look · WASD / arrows move · Q/E or Space/C down/up · Shift fast ·
+// T puts Henry under the fly camera.
 
 import { readCentralDirectory, readEntry } from "./zip.ts";
 import { parseTerrain, heightAt, type Terrain } from "./terrain.ts";
@@ -24,6 +26,9 @@ import { LuaHost } from "./luaHost.ts";
 // served by Vite with the app (never the package's CDN default)
 import luaWasm from "wasmoon-lua5.1/dist/liblua5.1.wasm?url";
 import { ASSET_RE } from "./assets.ts";
+import { PlayerAvatar } from "./playerAvatar.ts";
+import { PlayerSession } from "./playerSession.ts";
+import { terrainSurroundings } from "./player.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -40,6 +45,9 @@ const STREAM_RADIUS = 500; // metres of objects around the camera
 const STREAM_STEP = 150; // rebuild after moving this far
 const NPC_RADIUS = 120, NPC_MAX = 40;
 const SPEEDS: [string, number][] = [["paused", 0], ["×15 (game speed)", 15], ["×60", 60], ["×720 (1 h per 5 s)", 720]];
+/** Where Henry starts: Rataje's market, under the town wall, facing south. */
+const SPAWN: [number, number, number] = [2577.8, 574, 0];
+const SPAWN_YAW = -Math.PI / 2;
 
 export async function showLevel(host: HTMLElement, paks: PakSource[], level: string): Promise<void> {
   stopActive?.();
@@ -153,7 +161,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   host.replaceChildren(
     el("p", "scene-title", `${level}: ${terrain.size} × ${terrain.size} m terrain, ${objects.brushName.length.toLocaleString()} brushes, ${objects.vegGroup.length.toLocaleString()} vegetation instances`),
     stage,
-    el("p", "dim", "Click the view, then: drag to look · WASD/arrows move · Q/E or Space/C down/up · Shift = fast · Esc leaves full window"),
+    el("p", "dim", "Click the view to walk as Henry: mouse look · WASD move · Shift sprint · X walk/run · Space jump · F free-fly (drag to look, Q/E down/up, T puts Henry there) · Esc releases the mouse"),
   );
   const setFull = (on: boolean) => {
     stage.classList.toggle("full", on);
@@ -163,9 +171,14 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   fullBtn.addEventListener("click", () => setFull(!stage.classList.contains("full")));
   marketBtn.addEventListener("click", () => {
     // Rataje's market under the town wall, looking south at a guard by the stalls
-    cam.pos = [2577.8, 574, 83.8];
-    cam.yaw = -Math.PI / 2;
-    cam.pitch = -0.21;
+    if (player && mode === "player") {
+      player.controller.pos = [SPAWN[0], SPAWN[1], heightAt(terrain, SPAWN[0], SPAWN[1])];
+      player.controller.vel = [0, 0, 0];
+    } else {
+      cam.pos = [2577.8, 574, 83.8];
+      cam.yaw = -Math.PI / 2;
+      cam.pitch = -0.21;
+    }
     canvas.focus();
   });
   canvas.addEventListener("keydown", (e) => { if (e.code === "Escape") setFull(false); });
@@ -176,6 +189,19 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const models = new ModelRenderer(device, format, 4);
   const water = new WaterRenderer(device, format, objects.water);
   const npcR = new ModelRenderer(device, format, 4);
+  const playerR = new ModelRenderer(device, format, 4);
+  // Henry: the player character (loaded in the background; free-fly until then)
+  let player: PlayerSession | null = null;
+  let mode: "player" | "fly" = "fly";
+  let playerInfo = "Henry: loading…";
+  const surroundings = terrainSurroundings((x, y) => heightAt(terrain, x, y));
+  void PlayerAvatar.load(vfs, { maxTextureDim: 512 }).then((avatar) => {
+    if (stopped) return;
+    player = new PlayerSession(surroundings, avatar, SPAWN, SPAWN_YAW);
+    playerR.setModels(avatar.renderItems());
+    mode = "player";
+    playerInfo = "";
+  }).catch((err) => { playerInfo = `Henry: ${(err as Error).message}`; });
   const npcWorld = new NpcWorld(vfs, npcEntities, schedules, (x, y) => heightAt(terrain, x, y));
   // behaviour trees for NPCs at work (loaded in the background: ~1 s of tree parsing)
   let npcAi: NpcAi | null = null;
@@ -271,13 +297,42 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const cam: FlyCamera = { pos: [cx, cy, heightAt(terrain, cx, cy) + 60], yaw: Math.PI / 2, pitch: -0.25 };
 
   const keys = new Set<string>();
-  canvas.addEventListener("keydown", (e) => { keys.add(e.code); e.preventDefault(); });
+  canvas.addEventListener("keydown", (e) => {
+    if (!e.repeat) {
+      if (e.code === "KeyF" && player) {
+        mode = mode === "player" ? "fly" : "player";
+        if (mode === "fly") document.exitPointerLock?.();
+      }
+      if ((e.code === "KeyX" || e.code === "CapsLock") && player) player.walk = !player.walk;
+      if (e.code === "KeyT" && player && mode === "fly") {
+        player.controller.pos = [cam.pos[0], cam.pos[1], cam.pos[2]];
+        player.controller.vel = [0, 0, 0];
+        player.controller.grounded = false;
+        player.controller.yaw = cam.yaw;
+        mode = "player";
+      }
+    }
+    keys.add(e.code);
+    e.preventDefault();
+  });
   canvas.addEventListener("keyup", (e) => keys.delete(e.code));
   canvas.addEventListener("blur", () => keys.clear());
   let drag: { x: number; y: number } | null = null;
-  canvas.addEventListener("pointerdown", (e) => { canvas.focus(); canvas.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY }; });
+  canvas.addEventListener("pointerdown", (e) => {
+    canvas.focus();
+    if (mode === "player") {
+      if (document.pointerLockElement !== canvas) void canvas.requestPointerLock?.();
+      return;
+    }
+    canvas.setPointerCapture(e.pointerId);
+    drag = { x: e.clientX, y: e.clientY };
+  });
   canvas.addEventListener("pointerup", () => { drag = null; });
   canvas.addEventListener("pointermove", (e) => {
+    if (mode === "player" && player && document.pointerLockElement === canvas) {
+      player.look(-e.movementX * 0.0025, -e.movementY * 0.0025);
+      return;
+    }
     if (!drag) return;
     cam.yaw -= (e.clientX - drag.x) * 0.004;
     cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch - (e.clientY - drag.y) * 0.004));
@@ -297,19 +352,29 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     raf = requestAnimationFrame(frame);
     const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
     last = now;
-    const speed = (keys.has("ShiftLeft") || keys.has("ShiftRight") ? 400 : 60) * dt;
-    const fx = Math.cos(cam.yaw), fy = Math.sin(cam.yaw);
-    const mv = (f: number, s: number, u: number) => {
-      cam.pos = [cam.pos[0] + (fx * f - fy * s) * speed, cam.pos[1] + (fy * f + fx * s) * speed, cam.pos[2] + u * speed];
-    };
-    if (keys.has("KeyW") || keys.has("ArrowUp")) mv(1, 0, 0);
-    if (keys.has("KeyS") || keys.has("ArrowDown")) mv(-1, 0, 0);
-    if (keys.has("KeyA") || keys.has("ArrowLeft")) mv(0, 1, 0);
-    if (keys.has("KeyD") || keys.has("ArrowRight")) mv(0, -1, 0);
-    if (keys.has("KeyE") || keys.has("Space")) mv(0, 0, 1);
-    if (keys.has("KeyQ") || keys.has("KeyC")) mv(0, 0, -1);
+    if (mode === "player" && player) {
+      player.update(dt, player.input(keys));
+      Object.assign(cam, player.thirdPerson());
+      // keep the chase camera above the terrain
+      const g = heightAt(terrain, cam.pos[0], cam.pos[1]);
+      if (cam.pos[2] < g + 0.3) cam.pos[2] = g + 0.3;
+      player.avatar.upload(playerR);
+    } else {
+      const speed = (keys.has("ShiftLeft") || keys.has("ShiftRight") ? 400 : 60) * dt;
+      const fx = Math.cos(cam.yaw), fy = Math.sin(cam.yaw);
+      const mv = (f: number, s: number, u: number) => {
+        cam.pos = [cam.pos[0] + (fx * f - fy * s) * speed, cam.pos[1] + (fy * f + fx * s) * speed, cam.pos[2] + u * speed];
+      };
+      if (keys.has("KeyW") || keys.has("ArrowUp")) mv(1, 0, 0);
+      if (keys.has("KeyS") || keys.has("ArrowDown")) mv(-1, 0, 0);
+      if (keys.has("KeyA") || keys.has("ArrowLeft")) mv(0, 1, 0);
+      if (keys.has("KeyD") || keys.has("ArrowRight")) mv(0, -1, 0);
+      if (keys.has("KeyE") || keys.has("Space")) mv(0, 0, 1);
+      if (keys.has("KeyQ") || keys.has("KeyC")) mv(0, 0, -1);
+      const g = heightAt(terrain, cam.pos[0], cam.pos[1]);
+      if (cam.pos[2] < g + 1.7) cam.pos[2] = g + 1.7;
+    }
     const ground = heightAt(terrain, cam.pos[0], cam.pos[1]);
-    if (cam.pos[2] < ground + 1.7) cam.pos[2] = ground + 1.7;
     if (!canvas.width) return;
     if (!streamedAt || Math.hypot(cam.pos[0] - streamedAt[0], cam.pos[1] - streamedAt[1]) > STREAM_STEP) void stream();
     minute = (minute + (dt * Number(speedSel.value)) / 60) % 1440;
@@ -334,6 +399,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     models.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
     water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
     npcR.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
+    playerR.setCamera(vp, cam.pos, [0.45, 0.25, 0.85]);
     npcWorld.stepCrowd(npcs, minute, simDt);
     animateNpcs(npcs, npcWorld, minute, simSeconds, npcR);
     if (scene) {
@@ -349,10 +415,13 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     renderer.draw(pass);
     models.draw(pass);
     npcR.draw(pass);
+    if (player && mode === "player") playerR.draw(pass);
     water.draw(pass);
     pass.end();
     device.queue.submit([enc.finish()]);
-    hud.textContent = `x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${sceneInfo}${lodInfo} · ${npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
+    const pc = player?.controller;
+    const who = mode === "player" && pc ? `Henry ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
+    hud.textContent = `${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${sceneInfo}${lodInfo} · ${npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();
@@ -362,6 +431,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     cancelAnimationFrame(raf);
     models.destroy();
     npcR.destroy();
+    playerR.destroy();
     water.destroy();
     depth?.destroy();
     msaa?.destroy();

@@ -37,10 +37,15 @@ These came before the milestones were set. They are the base for all of them.
 Walk through Rataje (then the whole map) as Henry, in first person, at
 playable frame rates on the Potato preset.
 
-- [ ] Research how KCD stores animations, skeletons and character
+- [x] Research how KCD stores animations, skeletons and character
       controllers (`docs/ANIMATION.md`).
 - [ ] Player character controller: capsule, ground following, slopes,
       steps, collision with buildings and terrain.
+  - [x] Capsule on the terrain with the script values (0.3 m radius, 50°
+        climb, 49° slide, gravity 13 m/s², inertia 11, 1 m jump), code-driven
+        movement at the clip speeds, spawning in Rataje's market
+        (`player.ts`, `playerSession.ts`, `scripts/test-player.ts`).
+  - [ ] Collision with buildings and objects.
 - [ ] First-person camera on Henry's skeleton (head bone), with body
       awareness.
 - [ ] Locomotion: idle, walk, run and turn blending from the game's
