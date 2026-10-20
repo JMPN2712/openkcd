@@ -10,6 +10,7 @@ import type { LoadedModel } from "./model.ts";
 import type { Vfs } from "./vfs.ts";
 import { multiply } from "./mat4.ts";
 import type { NpcRendererOps } from "./npcs.ts";
+import { loadLocomotion, type LoadedLocomotion } from "./locomotion.ts";
 
 /** The player's soul in rpg/soul. */
 export const PLAYER_SOUL = "dude";
@@ -28,11 +29,14 @@ export class PlayerAvatar {
   items: number[] = [];
   /** parts not drawn (first person hides the head) */
   hidden = new Set<number>();
+  /** the player's locomotion blend spaces and Mannequin fragments */
+  readonly locomotion: LoadedLocomotion;
 
-  private constructor(character: LoadedCharacter, animator: Animator, clips: Map<string, () => Clip>) {
+  private constructor(character: LoadedCharacter, animator: Animator, clips: Map<string, () => Clip>, locomotion: LoadedLocomotion) {
     this.character = character;
     this.animator = animator;
     this.clips = clips;
+    this.locomotion = locomotion;
   }
 
   static async load(vfs: Vfs, opts: { maxTextureDim?: number } = {}): Promise<PlayerAvatar> {
@@ -54,7 +58,9 @@ export class PlayerAvatar {
       let c: Clip | null = null;
       clips.set(base, () => (c ??= dba.clip(a.name)));
     }
-    return new PlayerAvatar(character, new Animator(skeleton), clips);
+    const clipOf = (n: string) => clips.get(n.toLowerCase())?.() ?? null;
+    const locomotion = await loadLocomotion(vfs, clipOf, skeleton.bones[0].controllerId);
+    return new PlayerAvatar(character, new Animator(skeleton), clips, locomotion);
   }
 
   clip(name: string): Clip | null {
@@ -96,27 +102,5 @@ export class PlayerAvatar {
     if (!m) return null;
     const w = this.world;
     return [0, 1, 2].map((r) => w[r] * m[12] + w[4 + r] * m[13] + w[8 + r] * m[14] + w[12 + r]) as [number, number, number];
-  }
-}
-
-/**
- * Step-1 animation: one clip per gait, its playback scaled to the actual speed so the feet keep
- * pace (replaced by the locomotion blend spaces, locomotion.ts).
- */
-export class SimpleLocomotion {
-  private phase = 0;
-  private avatar: PlayerAvatar;
-  constructor(avatar: PlayerAvatar) {
-    this.avatar = avatar;
-  }
-
-  update(dt: number, speed: number, gait: "walk" | "run" | "sprint"): void {
-    const name = speed < 0.2 ? "relaxed_idle_both" : gait === "sprint" ? "relaxed_sprint_fast_player" : gait === "run" ? "relaxed_run_medium_player" : "relaxed_walk_medium_player";
-    const clip = this.avatar.clip(name);
-    if (!clip) return;
-    const len = Math.max(1, clip.end - clip.start);
-    const rate = speed < 0.2 || !clip.motion?.moveSpeed ? 1 : speed / clip.motion.moveSpeed;
-    this.phase = (this.phase + (dt * clip.fps * rate) / len) % 1;
-    this.avatar.animator.evaluate(clip, clip.start + this.phase * len, true);
   }
 }

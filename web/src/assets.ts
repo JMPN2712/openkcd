@@ -12,6 +12,6 @@ const LUA_RE = /\.lua$/;
 // .cdf: character definitions
 const CDF_RE = /\.cdf$/;
 // animation clips, databases and the per-skeleton animation lists
-export const ANIM_RE = /\.(caf|dba|chrparams|adb)$/;
+export const ANIM_RE = /\.(caf|dba|chrparams|adb|bspace|comb)$/;
 
 export const ASSET_RE = { test: (n: string) => TEXTURE_RE.test(n) || MODEL_RE.test(n) || MTL_RE.test(n) || TABLE_RE.test(n) || AI_RE.test(n) || LUA_RE.test(n) || CDF_RE.test(n) || ANIM_RE.test(n) };
