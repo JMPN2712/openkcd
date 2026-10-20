@@ -200,6 +200,8 @@ export class PlayerController {
       p[2] = floor;
       if (this.vel[2] < 0) this.vel[2] = 0;
     }
+    // a step up or a snap can lift the capsule into an overhang (eaves, beams): push out again
+    if (Math.abs(p[2] - prevZ) > 1e-4) this.resolve();
   }
 
   /** Capsule end points (sphere centres) for feet position `p`. */

@@ -49,6 +49,7 @@ then, all rights are reserved by the contributors.
 - `docs/CHARACTERS.md`: how NPCs are assembled from the database, .cdf files and clothing materials.
 - `docs/ANIMATION.md`: animation clip format, quaternion decoding, skinning.
 - `docs/LEVELS.md`: level files and the compiled terrain heightmap.
+- `docs/PHYSICS.md`: physics geometry in models (MeshPhysicsData), what the player collides with.
 - `docs/GAMELOGIC.md`: where gameplay logic lives (behaviour trees, quests, Lua, WHGame.dll structure) and a porting plan.
 - `tools/`: read-only Python recon scripts (`pe_info.py`, `pak_survey.py`, `pak_report.py`, `pakread.py`, `rtti_survey.py`, `navmesh.py`).
 - `docs/ROADMAP.md`: milestones and status.
@@ -84,6 +85,7 @@ node scripts/bench-npcs.ts                       # CPU benchmark: NPC loading an
 node scripts/render-world.ts /tmp/w --at-npc rat_baker --npc-dist 6 --npcs --clock 12:00   # world with NPCs placed by their schedules, framed on one
 node scripts/render-world.ts /tmp/w --at-entity SO_tailorsTable_40ee6671 --npc-dist 3 --npcs --clock 10:00 --ai 30   # NPCs at work run by their behaviour trees
 node scripts/test-player.ts                      # player controller on Rataje: ground following, climb limit, jump, fall, speeds; Henry's clips
+node scripts/test-collision.ts                   # collision sources by object type around the market, random runs: no penetration, no falling through
 node scripts/render-player.ts /tmp/p --walk "1:;2:w;1.5:w+shift;1:"   # headless walk as Henry with scripted input, a frame per segment
 node scripts/render-model.ts /tmp/r soul:henry --anim <clip.caf | db.dba#anim.caf> --frames 0,20,40   # animated headless renders
 node scripts/render-model.ts /tmp/renders objects/vehicles/cart/cart_01.cga   # headless WebGPU render to PNG (Dawn)

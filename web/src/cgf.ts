@@ -3,6 +3,7 @@
 // Chunk ids/versions were verified against the KCD install (docs/RECON.md).
 
 import { halfToFloat } from "./bcn.ts";
+import { decodePhysics, type PhysGeometry } from "./physics.ts";
 
 export const CHUNK = {
   Mesh: 0x1000,
@@ -74,6 +75,8 @@ export interface CgfMesh {
   subsets: Subset[];
   bboxMin: [number, number, number];
   bboxMax: [number, number, number];
+  /** the mesh is physicalised itself: this many of its triangles (all, or some subsets') collide */
+  physicsTriangles?: number;
 }
 
 export interface Cgf {
@@ -83,6 +86,8 @@ export interface Cgf {
   material: string | null;
   /** nodes skipped because they are physics proxies / helpers / empty */
   skippedNodes: string[];
+  /** physics proxies ($physics_proxy… nodes and other stored collision geometry), model space */
+  physics: PhysGeometry[];
 }
 
 function cstr(b: Uint8Array, o: number, max: number): string {
@@ -194,6 +199,7 @@ export function parseCgf(bytes: Uint8Array): Cgf {
   let material: string | null = null;
   const meshes: CgfMesh[] = [];
   const skippedNodes: string[] = [];
+  const physics: PhysGeometry[] = [];
   for (const node of nodes.values()) {
     const mc = chunk(node.objectId, CHUNK.Mesh);
     if (!mc) continue; // helpers, bones
@@ -201,6 +207,16 @@ export function parseCgf(bytes: Uint8Array): Cgf {
     const o = mc.offset;
     const nVerts = dv.getInt32(o + 8, true);
     const nIndices = dv.getInt32(o + 12, true);
+    // collision geometry: nPhysicsDataChunkId[4] after the stream ids
+    let physicsTriangles: number | undefined;
+    const perStream = mc.version === 0x802 ? 8 : 1;
+    for (let k = 0; k < 4; k++) {
+      const pc = chunk(dv.getInt32(o + 28 + 16 * 4 * perStream + k * 4, true), CHUNK.MeshPhysicsData);
+      if (!pc || pc.version !== 0x800) continue;
+      const g = decodePhysics(dv, pc.offset, pc.size);
+      if (g?.kind === "render") physicsTriangles = (physicsTriangles ?? 0) + g.triangles;
+      else if (g) physics.push(g);
+    }
     if (node.name.startsWith("$") || nVerts === 0 || nIndices === 0) {
       skippedNodes.push(node.name);
       continue;
@@ -236,10 +252,10 @@ export function parseCgf(bytes: Uint8Array): Cgf {
       transform: worldTm(node),
       positions, normals, uvs, indices, boneIds, boneWeights,
       subsets: subsets.length ? subsets : [{ firstIndex: 0, numIndices: nIndices, firstVert: 0, numVerts: nVerts, matId: 0 }],
-      bboxMin, bboxMax,
+      bboxMin, bboxMax, physicsTriangles,
     });
   }
-  return { chunks, meshes, material, skippedNodes };
+  return { chunks, meshes, material, skippedNodes, physics };
 }
 
 function mul(a: Float32Array, b: Float32Array): Float32Array {
