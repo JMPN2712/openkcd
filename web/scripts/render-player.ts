@@ -22,6 +22,8 @@ import { ShadowMap } from "../src/shadow.ts";
 import { ShadowCasters } from "../src/shadowPass.ts";
 import { depthClear, depthFormat, type PassSetup } from "../src/mat4.ts";
 import { SkyRenderer, skyAt, pickProfile, invert } from "../src/sky.ts";
+import { FarTrees } from "../src/farTrees.ts";
+import { DEFAULT_LIGHTING } from "../src/mat4.ts";
 import { NpcWorld, npcItems, animateNpcs, type WorldNpc } from "../src/npcs.ts";
 import { parseNpcEntities, parseEntityIndex } from "../src/levelEntities.ts";
 import { Schedules } from "../src/schedule.ts";
@@ -127,6 +129,14 @@ if (withNpcs) {
 const minuteOfDay = clock[0] * 60 + clock[1];
 let simSeconds = 0;
 
+// trees beyond the real ones, as cards (--no-far-trees leaves them out)
+const farTrees = new FarTrees(device, format, passSetup);
+if (!args.includes("--no-far-trees")) {
+  const t = performance.now();
+  await farTrees.build(lvl.vfs, lvl.terrain, lvl.objects);
+  console.log(`far trees: ${farTrees.count} cards of ${farTrees.types} types (${((performance.now() - t) / 1000).toFixed(1)} s)`);
+}
+
 const profile = lvl.tod ? pickProfile(lvl.tod) : null;
 async function render(name: string): Promise<void> {
   session.avatar.upload(playerR);
@@ -182,6 +192,7 @@ async function render(name: string): Promise<void> {
   farR.setCamera(vp, cam.pos);
   grassR.setCamera(vp, cam.pos);
   npcR.setCamera(vp, cam.pos);
+  farTrees.setCamera(vp, cam.pos, state?.lighting ?? DEFAULT_LIGHTING, { center: [ax, ay], radius, distanceScale: 1 });
   water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85], undefined, state?.lighting, state?.horizon);
   const enc = device.createCommandEncoder();
   if (shadowMap && state) {
@@ -198,6 +209,7 @@ async function render(name: string): Promise<void> {
   farR.draw(pass);
   models.draw(pass);
   grassR.draw(pass);
+  farTrees.draw(pass);
   if (npcWorld) npcR.draw(pass);
   playerR.draw(pass);
   models.drawBlended(pass);

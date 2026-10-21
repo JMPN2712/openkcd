@@ -123,7 +123,8 @@ playable frame rates on the Potato preset.
       is probably tangents).
 - [ ] Terrain tone: the ground looks brighter and yellower than in the game
       next to the road pieces; check the colour-map gain.
-- [ ] Far vegetation (forests beyond the streamed radius are terrain colour
+- [x] Far trees: every tree beyond the streamed radius as an impostor card.
+- [ ] Far vegetation (bushes) (forests beyond the streamed radius are terrain colour
       only); clouds; weather profiles.
 - [ ] Water: the volumes are flat tinted polygons with a glint (no
       reflections, waves, depth fade or shoreline blending); the most visible

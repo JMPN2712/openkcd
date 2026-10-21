@@ -136,3 +136,18 @@ Headless, `scripts/bench-presets.ts` (`NO_GRASS=1` for the comparison):
 
 Alpha to coverage on alpha-tested materials (with MSAA) costs about 5%
 (Medium market 55 → 52 fps).
+
+## Roads, decals and far trees
+
+Headless, 120 frames:
+
+| GPU | Preset | Fields | Market |
+|---|---|---:|---:|
+| RTX 5070 Ti | Medium | 201 fps | 50 fps |
+| RTX 5070 Ti | Potato | 759 fps | 268 fps |
+| Integrated Radeon (2 CU) | Potato | 148 fps | 55 fps |
+| Integrated Radeon (2 CU) | Medium | 24 fps | 10 fps |
+
+Far trees cost 1.7 ms on the integrated Radeon (Potato fields: 200 fps
+without, 148 with): 293k cards go through the vertex shader every frame.
+Culling them per map cell would cut that if the Vega 7 needs it.

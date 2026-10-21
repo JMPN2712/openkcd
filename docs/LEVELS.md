@@ -439,3 +439,19 @@ checks the profiles, the sunrise and sunset, and the light levels.
   - the detail fades out with distance (preset: Potato 25–80 m to High
     60–220 m);
   - normal and height maps are not used yet.
+
+## Far trees (`web/src/farTrees.ts`)
+
+Past the streamed radius the hills were bald. The game's last tree LOD is a
+placeholder card (`uberlod_big`, `%BILLBOARD_ATLAS`, no texture in the data:
+the engine renders its billboards at run time), so OpenKCD makes its own:
+
+- **Cards:** every vegetation group under `…/trees/` at least 4 m tall (140
+  types, 293,522 trees in Rataje) is rendered once from the side
+  (orthographic, flat light, from its `_lod1`) into a 128×256 layer of a
+  texture array, with alpha-weighted mips. About 0.6 s.
+- **Drawing:** one instanced draw of camera-facing cards, lit like foliage
+  and fogged. The vertex shader drops a card wherever the real tree is
+  drawn: within the streamed radius and inside its view distance
+  (`(80 + 70 r) × distanceScale`, as in `selectLods`), so the two never
+  overlap or leave a gap.
