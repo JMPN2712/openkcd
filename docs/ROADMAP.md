@@ -110,6 +110,17 @@ playable frame rates on the Potato preset.
 - [ ] Research notes needed: the player's base speeds; the stop clips' foot
       choice; NPC messaging (merchants and guards wait for customers) and
       home item slots (eaters find no bowl).
+- [x] Grass and ground plants: the merged-mesh sectors (25.4 million
+      instances), streamed around the camera with a radius per preset.
+- [x] Lighting: shaded sides were navy (pure sky-blue ambient). The sky term
+      is partly white-balanced, and the bounce from below comes from the
+      sunlit ground.
+- [x] Streaming: buildings no longer blink out at each rebuild.
+- [ ] Road-edge pieces and `%DECAL` strips and puddles blended into the
+      ground (needs vertex colours); roads (octree type 11) and decals
+      (type 7).
+- [ ] Terrain tone: the ground looks brighter and yellower than in the game
+      next to the road pieces; check the colour-map gain.
 - [ ] Far vegetation (forests beyond the streamed radius are terrain colour
       only); clouds; weather profiles.
 - [ ] Water: the volumes are flat tinted polygons with a glint (no

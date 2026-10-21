@@ -122,3 +122,17 @@ nothing visible: 47 fps with them and without, Medium, market.
 - **NPC animation is the largest CPU cost left:** bone evaluation and
   palette upload per NPC.
 - **Measure on the real Vega 7 laptop,** in Chrome (Vulkan on).
+
+## Grass (merged-mesh sectors)
+
+Headless, `scripts/bench-presets.ts` (`NO_GRASS=1` for the comparison):
+
+| GPU | Preset | Scene | Without grass | With grass |
+|---|---|---|---:|---:|
+| RTX 5070 Ti | Medium | fields | 241 fps | 224 fps |
+| RTX 5070 Ti | Medium | market | 52 fps | 53 fps |
+| Integrated Radeon (2 CU) | Potato | fields | 272 fps | 218 fps |
+| Integrated Radeon (2 CU) | Potato | market | 65 fps | 67 fps |
+
+Alpha to coverage on alpha-tested materials (with MSAA) costs about 5%
+(Medium market 55 → 52 fps).

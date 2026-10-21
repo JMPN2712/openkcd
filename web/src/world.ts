@@ -9,6 +9,7 @@ import { loadModel, type LoadedModel, type MipChain } from "./model.ts";
 import { vegetationMatrix, type LevelObjects } from "./levelObjects.ts";
 import type { Terrain } from "./terrain.ts";
 import type { Vfs } from "./vfs.ts";
+import type { MergedMeshes } from "./mergedMeshes.ts";
 
 export interface WorldModel {
   path: string;
@@ -222,6 +223,41 @@ export async function buildWorldScene(
     for (const part of (await spec)?.parts ?? []) if (!part.attach) add(skinKey(part.skin, part.material), "prop", m, e.pos[0], e.pos[1]);
   }
 
+  return sceneFromGroups(vfs, groups, caches, opts);
+}
+
+/**
+ * The grass, ground plants and debris of the merged-mesh sectors (mergedMeshes.ts) within
+ * `radius`: a separate, small scene, rebuilt every few metres.
+ */
+export async function buildGrassScene(
+  vfs: Vfs,
+  terrain: Terrain,
+  merged: MergedMeshes,
+  center: [number, number],
+  radius: number,
+  opts: { maxTextureDim?: number; caches?: WorldCaches; normalMaps?: boolean } = {},
+): Promise<WorldScene> {
+  const groups = new Map<string, Group>();
+  await merged.near(center, radius, (group, m) => {
+    const path = terrain.vegetation[group]?.model;
+    if (!path) return;
+    let g = groups.get(path);
+    if (!g) groups.set(path, (g = { path, kind: "vegetation", matrices: [], nearest: 0 }));
+    for (let k = 0; k < 16; k++) g.matrices.push(m[k]);
+  });
+  const caches = opts.caches ?? newWorldCaches();
+  caches.generation++;
+  return sceneFromGroups(vfs, groups, caches, { ...opts, maxModels: Infinity });
+}
+
+/** Load the models of instance groups (nearest first, up to maxModels) into a scene. */
+async function sceneFromGroups(
+  vfs: Vfs,
+  groups: Map<string, Group>,
+  caches: WorldCaches,
+  opts: { maxModels?: number; maxTextureDim?: number; onStatus?: (s: string) => void; normalMaps?: boolean },
+): Promise<WorldScene> {
   const ordered = [...groups.values()].sort((a, b) => a.nearest - b.nearest);
   const max = opts.maxModels ?? 400;
   const failed = new Map<string, string>();
@@ -294,7 +330,11 @@ export function selectLods(
   viewProj: Float32Array,
   out: Float32Array[],
   counts: number[],
-  opts: { lodScale?: number; distanceScale?: number; maxDistance?: number; minRadius?: number; uberNear?: number } = {},
+  opts: {
+    lodScale?: number; distanceScale?: number; maxDistance?: number; minRadius?: number; uberNear?: number;
+    /** shrink instances into the ground between these distances (grass: no hard edge where it ends) */
+    fade?: [number, number];
+  } = {},
 ): LodStats {
   const m = viewProj;
   // frustum planes (a, b, c, d) from the column-major view-projection; WebGPU depth is 0..1
@@ -305,7 +345,7 @@ export function selectLods(
     r3.map((v, k) => v + r1[k]), r3.map((v, k) => v - r1[k]),
     r2, r3.map((v, k) => v - r2[k]),
   ].map((p) => { const l = Math.hypot(p[0], p[1], p[2]) || 1; return p.map((v) => v / l); });
-  const lodScale = opts.lodScale ?? 1, distScale = opts.distanceScale ?? 1, maxD = opts.maxDistance ?? Infinity, minR = opts.minRadius ?? 0;
+  const lodScale = opts.lodScale ?? 1, distScale = opts.distanceScale ?? 1, maxD = opts.maxDistance ?? Infinity, minR = opts.minRadius ?? 0, fade = opts.fade;
   const stats: LodStats = { drawn: 0, culledDistance: 0, culledFrustum: 0, perLod: [] };
   const P = new Float64Array(24);
   planes.forEach((p, k) => P.set(p, k * 4));
@@ -330,6 +370,11 @@ export function selectLods(
       // copy the 16 floats by hand (a subarray per instance kept the garbage collector busy)
       const o = out[dst], to = counts[dst] * 16, from = i * 16;
       for (let c = 0; c < 16; c++) o[to + c] = M[from + c];
+      if (fade && d > fade[0]) {
+        const f = Math.max(0, 1 - (d - fade[0]) / (fade[1] - fade[0]));
+        if (f === 0) { stats.culledDistance++; continue; }
+        for (let c = 0; c < 12; c++) if ((c & 3) !== 3) o[to + c] *= f;
+      }
       counts[dst]++;
       stats.perLod[lod] = (stats.perLod[lod] ?? 0) + 1;
       stats.drawn++;

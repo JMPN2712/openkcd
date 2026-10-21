@@ -65,6 +65,9 @@ export function sunDirection(hours: number, rise: number, set: number): Vec3 {
   return [east / l, north / l, up / l];
 }
 
+/** what sunlight bouncing off the ground picks up (a grassy, earthy average) */
+const GROUND_ALBEDO: Vec3 = [0.22, 0.24, 0.14];
+
 const lum = (c: Vec3) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
 const scale = (c: Vec3, k: number): Vec3 => [c[0] * k, c[1] * k, c[2] * k];
 const hue = (c: Vec3): Vec3 => scale(c, 1 / Math.max(1e-6, lum(c)));
@@ -94,9 +97,11 @@ export function skyAt(p: TodProfile, hours: number): SkyState {
   const skyBlue = hue(todColor(p, "Sky light: Sun intensity", hours, [0.06, 0.15, 0.5]));
   const topK = adapt(todNumber(p, "Fog color (top) multiplier", hours), todNumber(p, "Fog color (top) multiplier", 12.5) || 1);
   const zenith = scale(hue([0, 1, 2].map((i) => topCol[i] * 0.5 + skyBlue[i] * 0.04) as Vec3), 0.42 * topK);
-  // ambient: the sky above, a darker bounce below
-  const skyColor = scale([0, 1, 2].map((i) => horizon[i] * 0.6 + zenith[i] * 0.4) as Vec3, 0.75);
-  const groundColor: Vec3 = [0, 1, 2].map((i) => skyColor[i] * 0.35 + sunColor[i] * 0.08 * Math.max(0, lightDir[2])) as Vec3;
+  // ambient: the sky above, partly white-balanced towards the sun (pure sky blue made every
+  // shaded side navy), and below, light bounced off the sunlit ground (grass and soil: warm green)
+  const skyRaw = scale([0, 1, 2].map((i) => horizon[i] * 0.6 + zenith[i] * 0.4) as Vec3, 0.75);
+  const skyColor = [0, 1, 2].map((i) => skyRaw[i] * 0.65 + lum(skyRaw) * 0.35) as Vec3;
+  const groundColor: Vec3 = [0, 1, 2].map((i) => skyColor[i] * 0.25 + sunColor[i] * GROUND_ALBEDO[i] * Math.max(0, lightDir[2])) as Vec3;
   const fogDensity = 0.0006 * todNumber(p, "Volumetric fog 2: Global fog density", hours, 0.3);
   const glowK = smooth(-0.05, 0.02, sunDir[2]);
   return {

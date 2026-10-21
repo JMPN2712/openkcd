@@ -13,7 +13,7 @@ import { heightAt } from "../src/terrain.ts";
 import { TerrainRenderer } from "../src/terrainRenderer.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 import { WaterRenderer } from "../src/waterRenderer.ts";
-import { buildWorldScene, lodItems, newWorldCaches, selectLods } from "../src/world.ts";
+import { buildGrassScene, buildWorldScene, lodItems, newWorldCaches, selectLods } from "../src/world.ts";
 import { PlayerAvatar } from "../src/playerAvatar.ts";
 import { PlayerSession } from "../src/playerSession.ts";
 import { CollisionWorld } from "../src/collision.ts";
@@ -76,6 +76,7 @@ for (const pp of gpus) {
     const water = new WaterRenderer(device, format, lvl.objects.water, pass);
     const playerR = new ModelRenderer(device, format, q.msaa, pass);
     const npcR = new ModelRenderer(device, format, q.msaa, pass);
+    const grassR = new ModelRenderer(device, format, q.msaa, pass);
     const sky = new SkyRenderer(device, format, pass);
     const shadowMap = q.shadows.cascades ? new ShadowMap(device, q.shadows.size, q.shadows.cascades, q.shadows.splits) : null;
     const casters = new ShadowCasters();
@@ -93,6 +94,12 @@ for (const pp of gpus) {
       if (shadowMap) casters.setScene(scene, items.map((it) => it.capacity), shadowMap.cascades);
       const lodOut = items.map((it) => new Float32Array(it.capacity * 16));
       const lodCounts = items.map(() => 0);
+      // grass around the start (NO_GRASS=1 leaves it out); the run stays well inside its radius
+      const grass = process.env.NO_GRASS || !q.grass ? null : await buildGrassScene(lvl.vfs, lvl.terrain, lvl.merged, sc.at, q.grass, { caches, maxTextureDim: Math.min(1024, q.maxTextureDim * 4), normalMaps: q.normalMaps });
+      const grassItems = grass ? lodItems(grass) : [];
+      grassR.setModels(grassItems);
+      grassR.setShadow(shadowMap);
+      const grassOut = grassItems.map((it) => new Float32Array(it.capacity * 16)), grassCounts = grassItems.map(() => 0);
       const world = new CollisionWorld(h, lvl.terrain.size);
       world.setScene(scene);
       const session = new PlayerSession(world, avatar, [sc.at[0], sc.at[1], 0], sc.yaw);
@@ -119,11 +126,15 @@ for (const pp of gpus) {
         const cam = session.camera(dt);
         const vp = TerrainRenderer.viewProj(cam, w / hgt, { reversed: true, near: 0.01 });
         const state = skyAt(profile, 12);
-        models.lighting = npcR.lighting = playerR.lighting = state.lighting;
+        models.lighting = npcR.lighting = playerR.lighting = grassR.lighting = state.lighting;
         sky.update(invert(vp), cam.pos, state);
         mark("player");
         const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts, { lodScale: q.lodScale, distanceScale: q.distanceScale });
         lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
+        if (grass) {
+          selectLods(grass, cam.pos, vp, grassOut, grassCounts, { maxDistance: q.grass, fade: [q.grass * 0.67, q.grass] });
+          grassCounts.forEach((n, k) => grassR.setInstances(k, grassOut[k], n));
+        }
         mark("lods");
         npcWorld.stepCrowd(npcs, 720, dt);
         animateNpcs(npcs, npcWorld, 720, f * dt, npcR, session.controller.pos);
@@ -132,6 +143,7 @@ for (const pp of gpus) {
         models.setCamera(vp, cam.pos);
         npcR.setCamera(vp, cam.pos);
         playerR.setCamera(vp, cam.pos);
+        grassR.setCamera(vp, cam.pos);
         water.setCamera(vp, cam.pos, state.lighting.sunDir, undefined, state.lighting, state.horizon);
         const enc = device.createCommandEncoder();
         if (shadowMap) casters.render(enc, shadowMap, cam.pos, [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)], state.lighting.sunDir, models, [npcR, playerR], { lodScale: q.lodScale });
@@ -144,6 +156,7 @@ for (const pp of gpus) {
         sky.draw(p);
         terrainR.draw(p);
         models.draw(p);
+        grassR.draw(p);
         npcR.draw(p);
         playerR.draw(p);
         models.drawBlended(p);
@@ -155,7 +168,7 @@ for (const pp of gpus) {
         mark("gpu");
         if (f >= 30) {
           times.push(performance.now() - t0);
-          tris += terrainR.stats.triangles + models.stats.triangles + npcR.stats.triangles;
+          tris += terrainR.stats.triangles + models.stats.triangles + npcR.stats.triangles + grassR.stats.triangles;
           drawn += st.drawn;
           calls += models.stats.drawCalls + npcR.stats.drawCalls + playerR.stats.drawCalls;
         }
@@ -168,7 +181,7 @@ for (const pp of gpus) {
       results.push(line);
       console.log(`     per frame: ${Object.entries(phase).map(([k, v]) => `${k} ${(v / (FRAMES + 30)).toFixed(2)} ms`).join(", ")}`);
     }
-    for (const r of [terrainR, models, water, playerR, npcR, sky]) r.destroy();
+    for (const r of [terrainR, models, water, playerR, npcR, grassR, sky]) r.destroy();
     shadowMap?.destroy();
     for (const t of [target, msaa, depth]) t?.destroy();
   }

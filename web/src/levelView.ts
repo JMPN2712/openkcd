@@ -10,10 +10,11 @@ import { TerrainRenderer, type FlyCamera } from "./terrainRenderer.ts";
 import type { PakSource } from "./paks.ts";
 import { parseLevelObjects, type LevelObjects } from "./levelObjects.ts";
 import { parseCover, type Cover } from "./cover.ts";
+import { MergedMeshes } from "./mergedMeshes.ts";
 import { setGpuBlockCompression } from "./model.ts";
 import { ModelRenderer } from "./renderer.ts";
 import { WaterRenderer } from "./waterRenderer.ts";
-import { buildWorldScene, isUberLod, lodItems, newWorldCaches, selectLods, trimWorldCaches, type WorldScene } from "./world.ts";
+import { buildGrassScene, buildWorldScene, isUberLod, lodItems, newWorldCaches, selectLods, trimWorldCaches, type WorldScene } from "./world.ts";
 import { Vfs } from "./vfs.ts";
 import { parseNpcEntities, parseEntityIndex, propEntities, type EntityInfo, type NpcEntity } from "./levelEntities.ts";
 import { Schedules } from "./schedule.ts";
@@ -46,7 +47,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 }
 
 let stopActive: (() => void) | null = null;
-const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules; props: EntityInfo[]; ents: Map<number, EntityInfo>; hiddenLayers: Set<number>; tod: TimeOfDay | null; surfaceTypes: Map<number, string> }>>();
+const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules; props: EntityInfo[]; ents: Map<number, EntityInfo>; hiddenLayers: Set<number>; tod: TimeOfDay | null; surfaceTypes: Map<number, string>; merged: MergedMeshes }>>();
 const vfsCache = new Map<string, Promise<Vfs>>();
 // model caches per texture size (presets load textures at different sizes)
 const worldCaches = new Map<number, ReturnType<typeof newWorldCaches>>();
@@ -77,6 +78,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let hiddenLayers: Set<number>;
   let tod: TimeOfDay | null;
   let surfaceTypes: Map<number, string>;
+  let merged: MergedMeshes;
   let vfs: Vfs;
   let device: GPUDevice;
   try {
@@ -124,12 +126,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         // the level's time of day (sun, sky, fog over the day, per weather profile)
         const me = entries.find((e) => e.name.toLowerCase() === "mission_mission0.xml");
         const tod = me ? parseTimeOfDay(new TextDecoder().decode(await readEntry(blob, me, undefined, false))) : null;
-        return { terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers, tod, surfaceTypes };
+        return { terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(blob, entries) };
       })();
       p.catch(() => terrainCache.delete(pakPath));
       terrainCache.set(pakPath, p);
     }
-    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, tod, surfaceTypes } = await p);
+    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, tod, surfaceTypes, merged } = await p);
     let v = vfsCache.get(pakPath);
     if (!v) {
       // assets from every non-level pak, with this level's own files (brush/*.cgf, …) on top
@@ -221,6 +223,30 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   // the ground's detail layers (grass, soil, cobbles…) decode in the background
   void loadDetailLayers(vfs, surfaceTypes, q.terrainDetail).then((d) => { if (!stopped) renderer.setDetail(d); }).catch((err) => console.warn("terrain detail:", err));
   const models = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
+  // grass and ground plants (merged-mesh sectors): a small scene of their own around the camera,
+  // rebuilt every few metres, with sharper textures than other objects (thin blades in atlases)
+  const grassR = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
+  const grassCaches = newWorldCaches();
+  let grass: { at: [number, number]; scene: WorldScene; out: Float32Array[]; counts: number[] } | null = null;
+  let grassBusy = false;
+  const streamGrass = async () => {
+    if (grassBusy || !q.grass) return;
+    grassBusy = true;
+    const at: [number, number] = [cam.pos[0], cam.pos[1]];
+    try {
+      const next = await buildGrassScene(vfs, terrain, merged, at, q.grass, { caches: grassCaches, maxTextureDim: Math.min(1024, q.maxTextureDim * 4), normalMaps: q.normalMaps });
+      if (stopped) return;
+      const items = lodItems(next);
+      grassR.setModels(items);
+      grassR.setShadow(shadowMap);
+      grass = { at, scene: next, out: items.map((it) => new Float32Array(it.capacity * 16)), counts: items.map(() => 0) };
+      trimWorldCaches(grassCaches, 8);
+    } catch (err) {
+      console.warn("grass:", err);
+    } finally {
+      grassBusy = false;
+    }
+  };
   const water = new WaterRenderer(device, format, objects.water, passSetup);
   const npcR = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
   const playerR = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
@@ -320,7 +346,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       // two passes: the nearest models first (shown quickly), then everything in range; the second
       // pass reuses the first one's loaded models from the cache (the old 1,500-model cap left
       // dense towns like Rattay missing floors and walls, with their props floating)
-      for (const maxModels of [800, 20000]) {
+      // (at later positions the old scene stays up until the complete one is ready: replacing it
+      // with the quick pass made every building beyond the nearest 800 models blink out)
+      for (const maxModels of scene ? [20000] : [800, 20000]) {
         const next = await buildWorldScene(vfs, terrain, objects, at, STREAM_RADIUS, {
           maxModels, maxTextureDim: q.maxTextureDim, caches, props, hiddenLayers, normalMaps: q.normalMaps,
           onStatus: (s) => { sceneInfo = s; },
@@ -440,6 +468,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const ground = heightAt(terrain, cam.pos[0], cam.pos[1]);
     if (!canvas.width) return;
     if (!streamedAt || Math.hypot(cam.pos[0] - streamedAt[0], cam.pos[1] - streamedAt[1]) > STREAM_STEP) void stream();
+    if (!grass || Math.hypot(cam.pos[0] - grass.at[0], cam.pos[1] - grass.at[1]) > q.grass / 4) void streamGrass();
     minute = (minute + (dt * Number(speedSel.value)) / 60) % 1440;
     // one simulation clock for behaviour trees and NPC animation, scaled like the game clock
     // (×15 = real time): legs keep pace with movement at every speed, and pausing freezes both
@@ -466,7 +495,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       f.counts.forEach((n, k) => farR.setInstances(k, f.out[k], n));
     }
     if (skyState) {
-      models.lighting = npcR.lighting = playerR.lighting = farR.lighting = skyState.lighting;
+      models.lighting = npcR.lighting = playerR.lighting = farR.lighting = grassR.lighting = skyState.lighting;
       sky.update(invert(vp), cam.pos, skyState);
     }
     renderer.prepare(cam, vp, { lighting: skyState?.lighting, lodDistance: q.terrainLod });
@@ -475,6 +504,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     npcR.setCamera(vp, cam.pos);
     playerR.setCamera(vp, cam.pos);
     farR.setCamera(vp, cam.pos);
+    grassR.setCamera(vp, cam.pos);
+    if (grass) {
+      const g = grass;
+      selectLods(g.scene, cam.pos, vp, g.out, g.counts, { maxDistance: q.grass, fade: [q.grass * 0.67, q.grass] });
+      g.counts.forEach((n, k) => grassR.setInstances(k, g.out[k], n));
+    }
     npcWorld.stepCrowd(npcs, minute, simDt);
     animateNpcs(npcs, npcWorld, minute, simSeconds, npcR, cam.pos);
     if (scene) {
@@ -497,6 +532,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     renderer.draw(pass);
     farR.draw(pass);
     models.draw(pass);
+    grassR.draw(pass);
     npcR.draw(pass);
     if (player && mode === "player") playerR.draw(pass);
     // see-through materials (waterfalls, weirs, glass) over everything opaque
@@ -516,6 +552,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     stopped = true;
     cancelAnimationFrame(raf);
     models.destroy();
+    grassR.destroy();
     npcR.destroy();
     playerR.destroy();
     farR.destroy();
