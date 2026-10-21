@@ -226,7 +226,14 @@ elder bushes and branch piles.
 - **Vertex colours** (stream 3, or bytes 8–11 of the packed P3S_C4B_T2S
   vertex) multiply `%VERTCOLORS` materials, except on the Vegetation
   shader, where they hold bending weights (they turned grass black).
-- **Known gaps:** octree decals (type 7) are not drawn.
+- **Octree decals** (type 7, `web/src/decals.ts`): 20,212 in Rataje, mostly
+  facing up (17,679): mud, soil cracks, moss, burn marks, puddles, blood,
+  straw. Record (116 bytes): AABB, centre (+44), then the projection box as
+  three axes each as long as its half-size: normal (+56), right (+68), up
+  (+80); a second normal (+92), f32 (+104), material (+108), sort priority
+  (+112). Each becomes a grid over its box, draped onto the terrain when it
+  faces up and sits within 1 m of it (otherwise in its plane: floors,
+  streets), merged per priority and material and drawn after the roads.
 
 ## Roads (`web/src/roads.ts`)
 

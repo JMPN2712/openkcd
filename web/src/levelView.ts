@@ -12,6 +12,7 @@ import { parseLevelObjects, type LevelObjects } from "./levelObjects.ts";
 import { parseCover, type Cover } from "./cover.ts";
 import { MergedMeshes } from "./mergedMeshes.ts";
 import { Roads } from "./roads.ts";
+import { Decals } from "./decals.ts";
 import { setGpuBlockCompression } from "./model.ts";
 import { ModelRenderer } from "./renderer.ts";
 import { WaterRenderer } from "./waterRenderer.ts";
@@ -48,7 +49,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 }
 
 let stopActive: (() => void) | null = null;
-const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules; props: EntityInfo[]; ents: Map<number, EntityInfo>; hiddenLayers: Set<number>; tod: TimeOfDay | null; surfaceTypes: Map<number, string>; merged: MergedMeshes; roads: Roads }>>();
+const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules; props: EntityInfo[]; ents: Map<number, EntityInfo>; hiddenLayers: Set<number>; tod: TimeOfDay | null; surfaceTypes: Map<number, string>; merged: MergedMeshes; roads: Roads; decals: Decals }>>();
 const vfsCache = new Map<string, Promise<Vfs>>();
 // model caches per texture size (presets load textures at different sizes)
 const worldCaches = new Map<number, ReturnType<typeof newWorldCaches>>();
@@ -81,6 +82,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let surfaceTypes: Map<number, string>;
   let merged: MergedMeshes;
   let roads: Roads;
+  let decals: Decals;
   let vfs: Vfs;
   let device: GPUDevice;
   try {
@@ -128,12 +130,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         // the level's time of day (sun, sky, fog over the day, per weather profile)
         const me = entries.find((e) => e.name.toLowerCase() === "mission_mission0.xml");
         const tod = me ? parseTimeOfDay(new TextDecoder().decode(await readEntry(blob, me, undefined, false))) : null;
-        return { terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(blob, entries), roads: new Roads(blob, dataStart(blob, entry), objects.roads) };
+        return { terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(blob, entries), roads: new Roads(blob, dataStart(blob, entry), objects.roads), decals: new Decals(objects.decalIndex, terrain) };
       })();
       p.catch(() => terrainCache.delete(pakPath));
       terrainCache.set(pakPath, p);
     }
-    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, tod, surfaceTypes, merged, roads } = await p);
+    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, tod, surfaceTypes, merged, roads, decals } = await p);
     let v = vfsCache.get(pakPath);
     if (!v) {
       // assets from every non-level pak, with this level's own files (brush/*.cgf, …) on top
@@ -355,7 +357,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       // with the quick pass made every building beyond the nearest 800 models blink out)
       for (const maxModels of scene ? [20000] : [800, 20000]) {
         const next = await buildWorldScene(vfs, terrain, objects, at, STREAM_RADIUS, {
-          maxModels, maxTextureDim: q.maxTextureDim, caches, props, hiddenLayers, normalMaps: q.normalMaps, roads,
+          maxModels, maxTextureDim: q.maxTextureDim, caches, props, hiddenLayers, normalMaps: q.normalMaps, ground: [roads, decals],
           onStatus: (s) => { sceneInfo = s; },
         });
         if (stopped) return;

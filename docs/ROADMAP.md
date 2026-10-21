@@ -118,7 +118,8 @@ playable frame rates on the Potato preset.
 - [x] Streaming: buildings no longer blink out at each rebuild.
 - [x] Roads (octree type 11, 14,710 meshes) and `%DECAL` strips and
       puddles, blended into the ground; vertex colours.
-- [ ] Octree decals (type 7); road normal maps (the 8-byte-per-vertex block
+- [x] Octree decals (type 7).
+- [ ] Road and decal normal maps (the 8-byte-per-vertex block
       is probably tangents).
 - [ ] Terrain tone: the ground looks brighter and yellower than in the game
       next to the road pieces; check the colour-map gain.

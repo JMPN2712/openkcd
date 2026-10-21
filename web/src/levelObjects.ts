@@ -14,7 +14,7 @@
 //     2 vegetation (64 bytes): u32 type, AABB, u32, u32 renderFlags,
 //       u16 groupIndex (vegetation group), u8, u8, Vec3 position, f32 scale,
 //       u8 angle (1/256 turns about Z), 7 bytes
-//     7 decal (116 bytes): skipped for now
+//     7 decal (116 bytes): centre, projection axes, material (decals.ts)
 //     9 water volume: u32 type, AABB, …, i32 material (+52), f32 fogDensity,
 //       Vec3 fogColor, Plane fogPlane (+72), …, u32 nVertices (+124),
 //       u32 nContour (+136), …, Vec3 vertices[nVertices] (+208, absolute, an
@@ -28,6 +28,8 @@
 //   Blocks are *mostly* sorted by type (123 exceptions): parsing through
 //   decals and water found 3,999 more vegetation instances than stopping at
 //   the first decal.
+
+import { parseDecal, type DecalIndex } from "./decals.ts";
 
 export interface LevelObjects {
   /** brushes: name index, material index, world matrix (column-major 4×4) */
@@ -44,6 +46,8 @@ export interface LevelObjects {
   water: WaterVolume[];
   /** roads (type 11) with a mesh: where each record is in terrain.dat, and what roads.ts needs to place it */
   roads: RoadIndex;
+  /** decals (type 7), see decals.ts */
+  decalIndex: DecalIndex;
   decals: number;
   nodes: number;
   skippedTypes: Map<number, number>; // blocks whose tail starts with an undecoded type
@@ -161,12 +165,14 @@ export function parseLevelObjects(bytes: Uint8Array, offset: number): LevelObjec
     vegAngle: new Float32Array(nVeg),
     water,
     roads: roadIndex(dv, roadAt),
+    decalIndex: { box: new Float32Array(decals * 12), material: new Int32Array(decals), priority: new Uint16Array(decals) },
     decals,
     nodes: 0,
     skippedTypes,
   };
-  let bi = 0, vi = 0;
+  let bi = 0, vi = 0, di = 0;
   const end = walk(offset, (p, t) => {
+    if (t === 7) parseDecal(dv, p, out.decalIndex, di++);
     if (t === 7 || t === 9 || t === 11) return;
     if (t === 1) {
       out.brushName[bi] = dv.getUint16(p + 36, true);
