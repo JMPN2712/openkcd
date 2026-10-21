@@ -193,6 +193,7 @@ async function render(name: string): Promise<void> {
   grassR.setCamera(vp, cam.pos);
   npcR.setCamera(vp, cam.pos);
   farTrees.setCamera(vp, cam.pos, state?.lighting ?? DEFAULT_LIGHTING, { center: [ax, ay], radius, distanceScale: 1 });
+  water.time = simSeconds;
   water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85], undefined, state?.lighting, state?.horizon);
   const enc = device.createCommandEncoder();
   if (shadowMap && state) {

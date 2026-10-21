@@ -7,7 +7,7 @@ import type { WaterVolume } from "./levelObjects.ts";
 import { DEFAULT_PASS, depthCompare, depthFormat, type Lighting, type PassSetup, type Vec3 } from "./mat4.ts";
 
 const SHADER = /* wgsl */ `
-// params.z fog density; sky = colour reflected at grazing angles; sunColor scales the glint
+// params.x time (s), z fog density; sky = colour reflected at grazing angles; sunColor scales the glint
 struct Cam { viewProj: mat4x4f, eye: vec4f, sun: vec4f, params: vec4f, sky: vec4f, fogColor: vec4f, sunColor: vec4f };
 @group(0) @binding(0) var<uniform> cam: Cam;
 struct VOut { @builtin(position) pos: vec4f, @location(0) wpos: vec3f, @location(1) tint: vec3f };
@@ -18,16 +18,40 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) wpos: vec3f, @location
   o.tint = tint;
   return o;
 }
+// ripples: slope of a sum of small wave trains (direction, wavelength in metres, speed in m/s)
+fn ripples(p: vec2f, t: f32) -> vec2f {
+  let waves = array<vec4f, 6>(
+    vec4f(1.0, 0.3, 3.7, 0.9), vec4f(-0.4, 1.0, 2.3, 0.7), vec4f(0.7, -0.8, 1.3, 0.5),
+    vec4f(-1.0, -0.2, 0.9, 0.4), vec4f(0.2, 1.0, 0.6, 0.35), vec4f(0.9, 0.6, 0.45, 0.3));
+  var g = vec2f(0.0);
+  for (var k = 0; k < 6; k++) {
+    let w = waves[k];
+    let d = normalize(w.xy);
+    let f = 6.2831853 / w.z;
+    // amplitude under 1% of the wavelength; a slow drift of each train's phase across the surface
+    // breaks up the regular interference lines
+    let drift = sin(dot(p, vec2f(0.031, 0.047) * f32(k + 1)) + t * 0.1) * 2.0;
+    g += d * 0.035 * cos(dot(d, p) * f - t * w.w * f + drift);
+  }
+  return g;
+}
+
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let v = normalize(cam.eye.xyz - i.wpos);
-  let n = vec3f(0.0, 0.0, 1.0);
+  let d = distance(i.wpos, cam.eye.xyz);
+  // ripples fade out with distance (finer than a pixel there: they would only shimmer)
+  let g = ripples(i.wpos.xy, cam.params.x) * (1.0 - smoothstep(20.0, 160.0, d));
+  let n = normalize(vec3f(-g.x, -g.y, 1.0));
   let fres = 0.04 + 0.96 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
-  let sky = cam.sky.rgb;
+  // what the surface reflects: near the horizon mostly the banks and their trees (dark, green),
+  // then the horizon haze, then the sky
+  let r = reflect(-v, n);
+  let bank = cam.fogColor.rgb * vec3f(0.32, 0.38, 0.3);
+  let sky = mix(mix(bank, cam.fogColor.rgb, smoothstep(0.03, 0.12, r.z)), cam.sky.rgb * 0.85, smoothstep(0.12, 0.5, r.z));
   let deep = (i.tint * 4.0 + vec3f(0.03, 0.06, 0.06)) * cam.sky.w;
   let h = normalize(normalize(cam.sun.xyz) + v);
-  let glint = pow(max(dot(n, h), 0.0), 400.0) * 3.0;
+  let glint = pow(max(dot(n, h), 0.0), 600.0) * 5.0;
   var c = mix(deep, sky, fres) + glint * cam.sunColor.rgb;
-  let d = distance(i.wpos, cam.eye.xyz);
   c = mix(c, cam.fogColor.rgb, clamp(1.0 - exp(-d * cam.params.z), 0.0, 1.0));
   return vec4f(pow(c, vec3f(1.0 / 2.2)), mix(0.78, 0.95, fres));
 }
@@ -110,12 +134,15 @@ export class WaterRenderer {
     this.bind = device.createBindGroup({ layout: this.pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.camBuf } }] });
   }
 
+  /** seconds, for the ripples */
+  time = 0;
+
   setCamera(viewProj: Float32Array, eye: Vec3, sun: Vec3, fogDensity = 0.00018, lighting?: Lighting, skyColor?: Vec3): void {
     const u = new Float32Array(40);
     u.set(viewProj, 0);
     u.set([...eye, 1], 16);
     u.set([...(lighting?.sunDir ?? sun), 0], 20);
-    u.set([0, 0, lighting?.fogDensity ?? fogDensity, 0], 24);
+    u.set([this.time, 0, lighting?.fogDensity ?? fogDensity, 0], 24);
     // sky.w scales the water body's own colour with the light (1 = the fixed look)
     const sky = skyColor ?? [0.55, 0.62, 0.7];
     u.set([...sky, lighting ? Math.min(1.5, (lighting.skyColor[0] + lighting.skyColor[1] + lighting.skyColor[2]) / 1.05 + 0.2 * (lighting.sunColor[0] + lighting.sunColor[1] + lighting.sunColor[2]) / 2.7) : 1], 28);

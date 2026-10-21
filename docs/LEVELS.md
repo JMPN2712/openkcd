@@ -152,8 +152,11 @@ The octree follows the terrain tree and runs exactly to the end of
   it. (Roads, type 11, are decoded: see below.)
 - **Water rendering** (`web/src/waterRenderer.ts`): outlines are ear-clipped
   in XY and drawn in a blended pass after the opaque geometry, with a
-  fog-colour tint, Fresnel sky reflection and a sun glint. That's 2,109
-  triangles for the whole level.
+  fog-colour tint, Fresnel reflection and a sun glint. That's 2,109
+  triangles for the whole level. The surface ripples (six small wave trains
+  whose phase drifts across the surface, fading out by 160 m), and it
+  reflects a dark bank colour near the horizon, then haze, then sky: a
+  river mostly mirrors its banks' trees.
 
 **Rataje totals:** 212,879 brushes (12,436 distinct meshes), 1,483,225
 vegetation instances, 20,212 decals and 282 water volumes. The most common are soil stones, modular rocks,

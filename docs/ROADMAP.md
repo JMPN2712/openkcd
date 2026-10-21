@@ -132,6 +132,9 @@ playable frame rates on the Potato preset.
   - [x] Models with Water, Waterfall and Glass materials (dam overflows,
         weirs, mill races, tubs, buckets, windows) are drawn blended after
         the opaque scene; they had rendered as opaque glitchy surfaces.
+  - [x] Ripples (six small wave trains with drifting phase, fading with
+        distance) and reflections: the banks' dark band near the horizon,
+        then haze, then sky; sun glitter.
   - [ ] Flowing (scrolling) waterfalls, foam, depth fade at the banks.
 
 ## 2. Installer converter and slim format (current)

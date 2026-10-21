@@ -158,9 +158,9 @@ async function withMaterials(vfs: Vfs, path: string, hit: VfsHit | null, cgf: Cg
         continue;
       }
       const stem = textureFile(file);
-      // decals (road strips, puddles, mud) use ground tiles seen up close, and grass cards thin blades in
-      // an atlas: 4× the size (like the terrain's layers and the merged-mesh grass)
-      const dim = /%DECAL|%GRASS/.test(m.genMask) ? Math.min(1024, maxDim * 4) : maxDim;
+      // decals (road strips, puddles, mud) use ground tiles seen up close, and grass and leaves thin
+      // shapes in an atlas (blobs at 256 px): 4× the size, like the terrain's layers and the merged grass
+      const dim = /%DECAL|%GRASS|%LEAVES/.test(m.genMask) ? Math.min(1024, maxDim * 4) : maxDim;
       const key = `${stem}@${dim}`;
       let p = cache.get(key);
       if (!p) {
