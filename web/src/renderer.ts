@@ -25,7 +25,11 @@ struct Camera { viewProj: mat4x4f, eye: vec4f, light: vec4f, sunColor: vec4f, sk
 // colorize: KCD %COLORIZING shader, x/y/z = hue (deg) / saturation / brightness, w = 0 off, 1 global, 2 with mask
 //   (the "Specular" slot then holds the region mask: R/G/B select mask1/2/3)
 // flags: x = 1 with a normal map; y = 1 water (Water, Waterfall shaders), 2 glass: blended
-struct Draw { model: mat4x4f, color: vec4f, spec: vec4f, params: vec4f, colorize: vec4f, mask1: vec4f, mask2: vec4f, mask3: vec4f, flags: vec4f };
+// foliage (%LEAVES materials: grass, plants, tree leaves): rgb transmittance colour, w how much
+//   light comes through from behind (BackDiffuseMultiplier); w = 0 not foliage
+struct Draw { model: mat4x4f, color: vec4f, spec: vec4f, params: vec4f, colorize: vec4f, mask1: vec4f, mask2: vec4f, mask3: vec4f, flags: vec4f, foliage: vec4f };
+// 1 when the pipeline has alpha to coverage (MSAA): alpha-tested edges become partial coverage
+override alphaToCoverage: f32 = 0.0;
 @group(0) @binding(0) var<uniform> cam: Camera;
 @group(0) @binding(1) var shadowTex: texture_depth_2d_array;
 @group(0) @binding(2) var shadowSamp: sampler_comparison;
@@ -98,7 +102,7 @@ fn adjust(lin: vec3f, hsb: vec3f) -> vec3f {
 }
 
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
-  return vec4f(shade(i).rgb, 1.0);
+  return shade(i);
 }
 
 // water and glass materials (flags.y 1 / 2): blended over the opaque scene
@@ -119,7 +123,12 @@ fn shade(i: VOut) -> vec4f {
     specMap = vec3f(0.04);
   }
   if (drw.colorize.w > 0.5) { base = vec4f(adjust(base.rgb, drw.colorize.xyz), base.a); }
-  if (drw.params.x > 0.0 && base.a < drw.params.x) { discard; }
+  // alpha test; with alpha to coverage the edge is spread over about a pixel (sharpened by fwidth)
+  var coverage = 1.0;
+  if (drw.params.x > 0.0) {
+    coverage = select(step(drw.params.x, base.a), clamp((base.a - drw.params.x) / max(fwidth(base.a), 1e-4) + 0.5, 0.0, 1.0), alphaToCoverage > 0.5);
+    if (coverage <= 0.0) { discard; }
+  }
   var n = normalize(i.n);
   if (cam.light.w > 0.5) { n = normalize(cross(dpdx(i.wpos), dpdy(i.wpos))); }
   let v = normalize(cam.eye.xyz - i.wpos);
@@ -135,7 +144,14 @@ fn shade(i: VOut) -> vec4f {
     n = normalize(tt * nm.x + bb * nm.y + n * nz);
   }
   let l = normalize(cam.light.xyz);
-  let ndl = max(dot(n, l), 0.0);
+  var ndl = max(dot(n, l), 0.0);
+  if (drw.foliage.w > 0.0) {
+    // foliage: thin cards facing every way. Bend the normals up so a clump shades as one soft
+    // surface instead of light and dark cards, and let sunlight through from behind
+    let through = max(-dot(n, l), 0.0) * drw.foliage.w;
+    n = normalize(n + vec3f(0.0, 0.0, 1.0));
+    ndl = max(dot(n, l), 0.0) * 0.8 + through * dot(drw.foliage.rgb, vec3f(0.333)) * 0.6;
+  }
   let hemi = mix(cam.groundColor.rgb, cam.skyColor.rgb, n.z * 0.5 + 0.5);
   // Blinn-Phong stand-in for the PBR specular colour, plus a flat "environment" term so metals read as metal
   let specCol = drw.spec.rgb * specMap;
@@ -143,7 +159,7 @@ fn shade(i: VOut) -> vec4f {
   let fd = distance(i.wpos, cam.eye.xyz);
   let sh = shadowFactor(i.wpos, n, fd);
   var lin = base.rgb * (hemi + cam.sunColor.rgb * ndl * sh) + spec * mix(0.3, 1.0, sh);
-  var alpha = 1.0;
+  var alpha = coverage;
   if (drw.flags.y > 0.5) {
     // water / glass: the sky reflected at grazing angles (Schlick), the sun's glint, the material's
     // own texture as the body seen through; more opaque towards the horizon
@@ -314,10 +330,10 @@ export class ModelRenderer {
     this.pipeline = device.createRenderPipeline({
       layout: this.pipelineLayout,
       vertex: { module: this.module, entryPoint: "vs", buffers: VERTEX_LAYOUT },
-      fragment: { module: this.module, entryPoint: "fs", targets: [{ format }] },
+      fragment: { module: this.module, entryPoint: "fs", targets: [{ format }], constants: { alphaToCoverage: sampleCount > 1 ? 1 : 0 } },
       primitive: { topology: "triangle-list", cullMode: "none", frontFace: "ccw" },
       depthStencil: { format: depthFormat(pass), depthWriteEnabled: true, depthCompare: depthCompare(pass) },
-      multisample: { count: sampleCount },
+      multisample: { count: sampleCount, alphaToCoverageEnabled: sampleCount > 1 },
     });
     this.blendPipeline = device.createRenderPipeline({
       layout: this.pipelineLayout,
@@ -553,8 +569,8 @@ export class ModelRenderer {
         const gpuTex = gpu(chain);
         const specTex = gpu(specChain);
         if (chain) this.stats.textured++;
-        const ubuf = this.device.createBuffer({ size: 192, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        const u = new Float32Array(48);
+        const ubuf = this.device.createBuffer({ size: 208, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        const u = new Float32Array(52);
         const blend = BLENDED_SHADER.test(mat?.shader ?? "");
         u.set([normChain ? 1 : 0, blend ? (/glass/i.test(mat!.shader) ? 2 : 1) : 0, 0, 0], 44);
         u.set(meshTm, 0);
@@ -565,6 +581,10 @@ export class ModelRenderer {
         const specular = mat?.specular ?? [0.04, 0.04, 0.04];
         u.set([...(/^hair$/i.test(mat?.shader ?? "") ? specular.map((v) => v * 0.05) : specular), 0], 20);
         u.set([mat?.alphaTest ?? 0, chain ? 1 : 0, specChain ? 1 : 0, layer], 24);
+        if (mat?.genMask.includes("%LEAVES")) {
+          const tc = (mat.params.TransmittanceColor ?? "1,1,1").split(",").map(Number);
+          u.set([tc[0] || 1, tc[1] || 1, tc[2] || 1, Number(mat.params.BackDiffuseMultiplier ?? 0.5) || 0.5], 48);
+        }
         const cz = mat ? colorizeOf(mat) : null;
         if (cz) {
           u.set([...cz.global, cz.withMask && specChain ? 2 : 1], 28);

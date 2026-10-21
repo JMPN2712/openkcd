@@ -214,14 +214,55 @@ elder bushes and branch piles.
     triangles drop from 17–21M to 0.9–2.5M, and the images match the
     full-detail renders closely (`render-world.ts` writes both).
   - **Streaming:** now covers 500 m, up to 1,500 models.
+- **Streaming without gaps.** The first scene loads in two passes (the
+  nearest 800 models, then everything). Later rebuilds load everything in
+  one pass while the old scene stays up: replacing it with the quick pass
+  made every building past the nearest 800 models blink out every 150 m.
 - **Known gaps:**
   - no roads or decals (octree types 7 and 11 are not drawn);
-  - road and terrain-blend meshes render as flat dark patches;
-  - no shadows.
+  - road-edge pieces (`land_deco/road_side_*`, about 10,000) and decal
+    strips (`road_grass_strip*`, `decal_puddle*`: `%DECAL` materials,
+    alpha-tested at 0.5) render as hard-edged dark slabs. In the game they
+    fade into the ground (vertex colours, which aren't decoded yet).
+
+## Grass: merged-mesh sectors (`web/src/mergedMeshes.ts`)
+
+Painted grass, ground plants and small debris aren't in the octree (it holds
+only 5,345 grass instances). They're in `terrain/merged_meshes_sectors/` in
+`level.pak`: 142,830 files, 314 MiB, **25.4 million instances** in Rataje
+(the octree has 1.5 million vegetation instances). Decoded from the data:
+
+- **Files:** `sector_<x>_<y>_<z>_<n>.dat`, one 16 m cube of the world grid
+  (x, y 0–255; z the height band), sometimes split in parts `n`. A few are
+  named `…_n0_0.dat`; the block headers say where they are.
+- **Blocks,** until the end of the file:
+  - u32 `0xCAFEBAB6`, u32 x, u32 y, u32 z (sector indices),
+    u32 vegetation group, u32 count;
+  - count × 12 bytes: u16 x, y, z within the sector (16 m / 65536 per
+    step), u8 scale (64 = 1), i8 × 4 quaternion x, y, z, w (÷127), and one
+    byte not understood (0x41–0x43, maybe a LOD hint).
+- **Checks:** with this mapping, instance heights follow the terrain with
+  R² = 1.000 per block (fitting 18, 20 or 32 m sectors gives 0.99–0.85); the
+  quaternions are unit length (bytes 7–10 have length 127); the group
+  number indexes the terrain's vegetation list, and all 169 groups used are
+  in `mmrm_used_meshes.lst`. The most common are maianthemum (1.7M), mixed
+  grass a (1.6M) and dry grass a (1.4M).
+- **Rendering:** a separate small scene around the camera (`buildGrassScene`
+  in `world.ts`), rebuilt after moving a quarter of its radius: 20 m on
+  Potato, 35 Low, 55 Medium, 80 High (about 18,000 instances at 55 m).
+  Instances shrink into the ground over the last third of the radius, so
+  there's no hard edge. Grass textures load at 4× the preset's object
+  texture size (up to 1024): the blades are thin strips in an atlas.
+- **Foliage shading** (`%LEAVES` materials, grass and tree leaves alike):
+  normals bent upwards, so a clump shades as one surface, plus light
+  through the leaves from behind (`TransmittanceColor`,
+  `BackDiffuseMultiplier`). With MSAA, alpha-tested edges use alpha to
+  coverage.
 
 ## Not yet decoded
 
-- Merged-mesh sectors and the `layers/*.xml` entities.
+- The `layers/*.xml` entities.
+- Vertex colours in models (stream 3), used by `%VERTCOLORS` materials.
 
 ## Entity props, light shafts and uber-LODs
 

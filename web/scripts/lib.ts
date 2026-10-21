@@ -18,6 +18,7 @@ import { parseLayerNames, defaultHiddenLayers } from "../src/levelLayers.ts";
 import { setGpuBlockCompression } from "../src/model.ts";
 import { parseTimeOfDay, type TimeOfDay } from "../src/tod.ts";
 import { parseSurfaceTypes } from "../src/terrainDetail.ts";
+import { MergedMeshes } from "../src/mergedMeshes.ts";
 
 Object.assign(globalThis, globals);
 
@@ -42,6 +43,8 @@ export interface Level {
   tod: TimeOfDay | null;
   /** surface type id → detail material (leveldata.xml) */
   surfaceTypes: Map<number, string>;
+  /** grass and ground plants (merged-mesh sectors) */
+  merged: MergedMeshes;
 }
 
 /** Rataje with the asset VFS (level files on top), like the world view. */
@@ -73,7 +76,7 @@ export async function openRataje(root: string, opts: { cover?: boolean; hd?: boo
   const surfaceTypes = parseSurfaceTypes(ldText);
   const missionEnv = await read("mission_mission0.xml");
   const tod = missionEnv ? parseTimeOfDay(new TextDecoder().decode(missionEnv)) : null;
-  return { sources, vfs, terrain, objects, cover, props, hiddenLayers, tod, surfaceTypes };
+  return { sources, vfs, terrain, objects, cover, props, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(lb, entries) };
 }
 
 /** The Dawn instance must outlive its devices (collected, it aborts the process on the next map). */

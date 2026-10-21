@@ -11,7 +11,7 @@ import { heightAt } from "../src/terrain.ts";
 import { TerrainRenderer, type FlyCamera } from "../src/terrainRenderer.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 import { WaterRenderer } from "../src/waterRenderer.ts";
-import { buildWorldScene, isUberLod, lodItems, newWorldCaches, selectLods } from "../src/world.ts";
+import { buildGrassScene, buildWorldScene, isUberLod, lodItems, newWorldCaches, selectLods, type WorldScene } from "../src/world.ts";
 import { PlayerAvatar } from "../src/playerAvatar.ts";
 import { PlayerSession } from "../src/playerSession.ts";
 import { type MoveInput } from "../src/player.ts";
@@ -34,6 +34,7 @@ const radius = Number(opt("--radius", "250"));
 const clock = opt("--clock", "12:00").split(":").map(Number);
 // a free camera instead of Henry's view: x,y,z,yawDeg,pitchDeg (z 0 = 2 m above the ground)
 const fly = opt("--fly", "");
+const grassRadius = Number(opt("--grass", "55")); // 0: no grass
 const [outDir] = args;
 if (!outDir) throw new Error("usage: render-player.ts OUT_DIR [options]");
 await mkdir(outDir, { recursive: true });
@@ -83,6 +84,21 @@ playerR.setModels(avatar.renderItems());
 playerR.setShadow(shadowMap);
 terrainR.setShadow(shadowMap);
 
+// grass around the camera, rebuilt when it has moved
+const grassR = new ModelRenderer(device, format, 4, passSetup);
+const grassCaches = newWorldCaches();
+let grass: { at: [number, number]; scene: WorldScene; out: Float32Array[]; counts: number[] } | null = null;
+async function updateGrass(at: [number, number]): Promise<void> {
+  if (!grassRadius || (grass && Math.hypot(at[0] - grass.at[0], at[1] - grass.at[1]) < grassRadius / 4)) return;
+  const t = performance.now();
+  const scene = await buildGrassScene(lvl.vfs, lvl.terrain, lvl.merged, at, grassRadius, { caches: grassCaches, maxTextureDim: 1024, normalMaps: !args.includes("--no-normal") });
+  const items = lodItems(scene);
+  grassR.setModels(items);
+  grassR.setShadow(shadowMap);
+  grass = { at, scene, out: items.map((it) => new Float32Array(it.capacity * 16)), counts: items.map(() => 0) };
+  console.log(`grass: ${scene.instances} instances of ${scene.models.length} models within ${grassRadius} m (${((performance.now() - t) / 1000).toFixed(1)} s)`);
+}
+
 const profile = lvl.tod ? pickProfile(lvl.tod) : null;
 async function render(name: string): Promise<void> {
   session.avatar.upload(playerR);
@@ -96,19 +112,26 @@ async function render(name: string): Promise<void> {
   const vp = TerrainRenderer.viewProj(cam, W / H, { reversed: true, near: session.viewMode === "first" ? 0.01 : 0.1 });
   const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts);
   lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
+  await updateGrass([cam.pos[0], cam.pos[1]]);
+  if (grass) {
+    const gs = grass;
+    selectLods(gs.scene, cam.pos, vp, gs.out, gs.counts, { maxDistance: grassRadius, fade: [grassRadius * 0.67, grassRadius] });
+    gs.counts.forEach((n, k) => grassR.setInstances(k, gs.out[k], n));
+  }
   const state = profile ? skyAt(profile, clock[0] + clock[1] / 60) : null;
   if (farScene) {
     selectLods(farScene, cam.pos, vp, farOut, farCounts, { uberNear: radius * 0.9 });
     farCounts.forEach((n, k) => farR.setInstances(k, farOut[k], n));
   }
   if (state) {
-    models.lighting = playerR.lighting = farR.lighting = state.lighting;
+    models.lighting = playerR.lighting = farR.lighting = grassR.lighting = state.lighting;
     sky.update(invert(vp), cam.pos, state);
   }
   terrainR.prepare(cam, vp, { lighting: state?.lighting });
   models.setCamera(vp, cam.pos);
   playerR.setCamera(vp, cam.pos);
   farR.setCamera(vp, cam.pos);
+  grassR.setCamera(vp, cam.pos);
   water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85], undefined, state?.lighting, state?.horizon);
   const enc = device.createCommandEncoder();
   if (shadowMap && state) {
@@ -123,8 +146,10 @@ async function render(name: string): Promise<void> {
   terrainR.draw(pass);
   farR.draw(pass);
   models.draw(pass);
+  grassR.draw(pass);
   playerR.draw(pass);
   models.drawBlended(pass);
+  grassR.drawBlended(pass);
   water.draw(pass);
   pass.end();
   device.queue.submit([enc.finish()]);
