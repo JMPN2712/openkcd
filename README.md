@@ -36,8 +36,12 @@ the GOG offline installer into a compact local package (OPFS).
 
 - A Chromium-based browser (Chrome, Edge, Chromium) with **WebGPU** and the
   **File System Access API**. Firefox and Safari are not supported yet.
-- On Linux, Chromium may need `--ozone-platform=x11` (and possibly
-  `--enable-unsafe-webgpu`) for WebGPU.
+- **On Linux, turn on Vulkan:** open `chrome://flags/#enable-vulkan`, set it
+  to *Enabled* and relaunch (or start Chrome with
+  `--enable-features=Vulkan`). Without it, Chrome on Linux (156) finds no
+  WebGPU adapter. `--enable-unsafe-webgpu` alone only gives the CPU
+  fallback (SwiftShader), which is far too slow. Check that the page's GPU
+  line names your real GPU.
 - A GPU with BC texture compression. Integrated GPUs such as AMD Vega 7 are
   a target; a "Potato" preset is planned for every feature.
 - 16 GB RAM recommended.
@@ -71,6 +75,8 @@ npm install
 npm run dev        # then open http://localhost:5173/ in Chrome
 npm run test:pak   # Node smoke test against ~/kcd1 (or pass a game root)
 node scripts/test-inno.ts                        # read the GOG installers (base + DLC) in place: file lists, sampled files vs ~/kcd1 and MD5s (--full: every file, ~4 min)
+node scripts/test-install.ts ~/Downloads/kingdom_come_deliverance/DLC /tmp/inst --only=band_of_bastards   # install flow into a folder, compare with ~/kcd1, rerun skips
+node scripts/test-install-browser.ts ~/Downloads/kingdom_come_deliverance   # headless Chrome: install into OPFS through the page, check the copy, open it
 node scripts/test-textures.ts /tmp/tex && python3 -I scripts/compare_pillow.py /tmp/tex   # texture layout + decoder check
 node scripts/test-cgf.ts                         # parse every model, check indices/bounds/normals
 node scripts/test-characters.ts                  # resolve every NPC soul/preset from the database, load a sample
@@ -101,6 +107,11 @@ node scripts/render-model.ts /tmp/renders objects/vehicles/cart/cart_01.cga   # 
 ```
 
 Click **Open KCD folder** and pick the game root (the folder containing `Data` and `bin`).
+Or click **Install from GOG installer** (or drop the installer folder on the page): the game's
+`.pak` archives are copied out of GOG's offline installer (setup `.exe` + `.bin` files, DLC
+installers in the same folder or a `DLC` subfolder) into the browser's private storage, and
+**Open installed copy** opens them from there on later visits. The installer can be deleted
+afterwards.
 Click a `.dds*` file for the texture viewer, a `.cgf/.cga/.skin` for the WebGPU model viewer, a `.cdf`
 for a character, **Characters (game database)** to browse every NPC soul and clothing preset, or
 **World: Rataje** to fly over the level (terrain, buildings and vegetation, streamed around the camera).

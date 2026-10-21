@@ -103,7 +103,7 @@ playable frame rates on the Potato preset.
 
 ### Follow-ups from milestone 1
 
-- [ ] Measure Potato on the Vega 7 laptop in Chromium.
+- [ ] Measure Potato on the Vega 7 laptop in Chrome.
 - [ ] Terrain normal maps; terrain casting shadows (hills at dusk).
 - [ ] Turning on the spot (`1d_relaxed_idle_bigturns_nw`), look IK.
 - [ ] Doors that open (they don't block the player yet).
@@ -129,8 +129,18 @@ playable frame rates on the Potato preset.
         their data in the `.exe`; the base game and all 10 DLC installers,
         checked against `~/kcd1` and the installers' MD5s
         (`scripts/test-inno.ts`).
-  - [ ] Drop or pick the installer files in the page (File System Access /
-        drag and drop), with a progress view.
+  - [x] Pick or drop the installer folder in the page, with a progress view
+        (`install.ts`, `installView.ts`). The paks are copied into OPFS as
+        they are, resuming after an interruption; **Open installed copy**
+        runs the engine from there. Base game and all DLC: 166 paks.
+        Headless Chrome test: `scripts/test-install-browser.ts`.
+  - [x] Installable as a web app, so Chrome grants persistent storage and
+        doesn't evict the copy when the disk runs low.
+  - [x] Choose what goes in: one voice language, and the HD textures, HD
+        voice and HD sound packs off by default (85.7 → 52.5 GiB).
+  - [ ] Repack without the files later patches replace (14.3 GiB of
+        `Data/` in 121,525 files).
+  - [ ] Cutscene videos (about 15 GiB) installed on demand, or transcoded.
 - [ ] One streaming pass into a slim package in OPFS:
   - compressed textures (GPU formats), compressed meshes, and Opus audio;
   - region chunks plus an index.

@@ -9,6 +9,8 @@ import { showLevel } from "./levelView.ts";
 import { ASSET_RE } from "./assets.ts";
 import { Vfs } from "./vfs.ts";
 import { formatCount, formatSize } from "./format.ts";
+import { dirFromFiles, installedGame } from "./install.ts";
+import { showInstall } from "./installView.ts";
 
 declare global {
   interface Window {
@@ -98,10 +100,16 @@ $<HTMLButtonElement>("open").addEventListener("click", async () => {
   } catch {
     return; // user cancelled
   }
-  setStatus(`Scanning ${root.name}…`);
+  await openGame(root, root.name);
+});
+
+/** Open a game root: a picked game folder, or the copy installed into browser storage. */
+async function openGame(root: FileSystemDirectoryHandle, label: string, installed = false): Promise<void> {
+  setStatus(`Scanning ${label}…`);
   try {
-    if (!(await looksLikeGameRoot(root))) {
-      setStatus(`"${root.name}" has no Data and bin folders. Pick the game root (e.g. ~/kcd1).`, "error");
+    // the installed copy holds only the paks, so it has Data but no bin
+    if (!installed && !(await looksLikeGameRoot(root))) {
+      setStatus(`"${label}" has no Data and bin folders. Pick the game root (e.g. ~/kcd1).`, "error");
       return;
     }
     const paks = await scanDirectory(root);
@@ -113,11 +121,71 @@ $<HTMLButtonElement>("open").addEventListener("click", async () => {
     worldBtn.disabled = !paks.some((p) => p.path.toLowerCase() === "data/levels/rataje/level.pak");
     renderPakList(paks);
     const total = paks.reduce((s, p) => s + p.size, 0);
-    setStatus(`${root.name}: ${paks.length} archives, ${formatSize(total)}. Read locally, nothing uploaded.`);
+    setStatus(`${label}: ${paks.length} archives, ${formatSize(total)}. Read locally, nothing uploaded.`);
   } catch (err) {
     setStatus(`Scan failed: ${(err as Error).message}`, "error");
   }
+}
+
+// ---------- install from the GOG installer ----------
+
+const installedBtn = $<HTMLButtonElement>("installed");
+
+async function refreshInstalled(): Promise<FileSystemDirectoryHandle | null> {
+  const game = await installedGame().catch(() => null);
+  let ok = false;
+  if (game) for await (const [name, h] of game.entries()) if (h.kind === "directory" && name.toLowerCase() === "data") ok = true;
+  installedBtn.hidden = !ok;
+  return ok ? game : null;
+}
+
+installedBtn.addEventListener("click", async () => {
+  const game = await refreshInstalled();
+  if (game) await openGame(game, "Installed copy (browser storage)", true);
 });
+
+function startInstall(dir: FileSystemDirectoryHandle): void {
+  document.querySelectorAll(".pak.active, .side-action.active").forEach((b) => b.classList.remove("active"));
+  const head = el("div", "preview-head");
+  head.append(el("div", "preview-path", `Install from the GOG installer: ${dir.name}`));
+  const body = el("div", "preview-body");
+  previewEl.replaceChildren(head, body);
+  void showInstall(body, dir, async () => {
+    const game = await refreshInstalled();
+    if (game) await openGame(game, "Installed copy (browser storage)", true);
+  });
+}
+
+// without the File System Access API, a plain folder input does the same job
+const installInput = $<HTMLInputElement>("install-input");
+installInput.addEventListener("change", () => {
+  const files = [...(installInput.files ?? [])];
+  if (files.length) startInstall(dirFromFiles(files));
+});
+
+$<HTMLButtonElement>("install").addEventListener("click", async () => {
+  if (!window.showDirectoryPicker) {
+    installInput.click();
+    return;
+  }
+  try {
+    startInstall(await window.showDirectoryPicker({ id: "kcd-installer", mode: "read" }));
+  } catch {
+    // user cancelled
+  }
+});
+
+// dropping the installer folder anywhere on the page starts the same flow
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  const item = [...(e.dataTransfer?.items ?? [])].find((i) => i.kind === "file");
+  const handle = await (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> })?.getAsFileSystemHandle?.();
+  if (handle?.kind === "directory") startInstall(handle as FileSystemDirectoryHandle);
+  else setStatus("Drop the folder that holds the installer (setup_….exe and its .bin files), not single files.", "error");
+});
+
+void refreshInstalled();
 
 // ---------- pak list ----------
 

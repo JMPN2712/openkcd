@@ -121,4 +121,4 @@ nothing visible: 47 fps with them and without, Medium, market.
   - Proper impostors for far vegetation.
 - **NPC animation is the largest CPU cost left:** bone evaluation and
   palette upload per NPC.
-- **Measure on the real Vega 7 laptop,** in Chromium.
+- **Measure on the real Vega 7 laptop,** in Chrome (Vulkan on).

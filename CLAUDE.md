@@ -46,8 +46,10 @@ affiliated with or endorsed by Warhorse Studios or PLAION. Local folder is
   - region chunks plus an index.
 
   The original installer can then be deleted.
-- **Alternative:** installed-folder mode, which reads the paks directly. This
-  is what works today, via the File System Access API.
+- **Today:** the installer's paks are copied into OPFS as they are (no slim
+  format yet), and the engine reads them from there. Installed-folder mode
+  (reading the paks of an installed game via the File System Access API)
+  stays as the alternative.
 - **Dropped:** no server or R2 streaming of game files.
 
 ## Milestones
@@ -68,8 +70,13 @@ questlines whole and never cuts anything the main quest depends on.
 
 ## Hardware targets
 
-- **Dev machine:** Kubuntu, Ryzen 9 9900X, 64 GB RAM. Chromium needs
-  `--ozone-platform=x11` for WebGPU.
+- **Dev machine:** Kubuntu (Wayland), Ryzen 9 9900X, 64 GB RAM, RTX 5070 Ti
+  plus the CPU's integrated Radeon. The browser is Google Chrome; it needs
+  Vulkan turned on for WebGPU (`chrome://flags/#enable-vulkan`, or
+  `--enable-features=Vulkan`) **and** `--ozone-platform=x11`: Chrome 156 on
+  Wayland logs "not compatible with Vulkan" and glitches until reload. The
+  KDE menu entry (`~/.local/share/applications/google-chrome.desktop`) and
+  the `chrome-webgpu` alias pass both.
 - **Low end:** AMD Vega 7 laptop with 16 GB RAM. Every feature needs a
   **Potato** preset.
 
@@ -78,7 +85,7 @@ questlines whole and never cuts anything the main quest depends on.
 | Area | Files | State |
 |---|---|---|
 | Paks, VFS | `zip.ts`, `paks.ts`, `vfs.ts`, `tree.ts` | Reads all paks in place (Blob.slice) |
-| Installer | `inno.ts`, `lzma.ts` | Reads GOG's Inno Setup installers in place (base game and DLC): file list, parts streamed and inflated |
+| Installer | `inno.ts`, `lzma.ts`, `install.ts`, `installView.ts` | Reads GOG's Inno Setup installers in place (base game and DLC) and installs their paks into OPFS; the engine opens that copy |
 | Textures | `dds.ts`, `texture.ts`, `bcn.ts` | Split DDS assembly, BC1–7 (GPU and CPU) |
 | Models, materials | `cgf.ts`, `mtl.ts`, `model.ts`, `renderer.ts` | .cgf/.cga/.skin/.chr, WebGPU renderer |
 | Characters | `character.ts`, `skeleton.ts`, `characterView.ts`, `tables.ts` | Souls and clothing presets from the database |

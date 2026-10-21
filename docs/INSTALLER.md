@@ -128,8 +128,49 @@ about 3 KB bigger than the raw data.
 
 None of these are needed by the engine.
 
+## Installing into the browser
+
+`web/src/install.ts` and `installView.ts` handle the install.
+
+- **Finding installers.** The page looks for `setup_*.exe` installers in the
+  picked or dropped folder and in its `DLC` subfolder. It lists each with
+  its size, and flags missing or truncated `.bin` files.
+- **Writing.** Every `.pak` is written to OPFS under `game/`, keeping the
+  game's paths. Directories are matched case-insensitively, so Hans Capon's
+  lowercase `localization/` merges into `Localization/`. The engine needs
+  nothing else (no executables, DLLs or GOG metadata). No two installers
+  ship the same pak.
+- **What goes in.** Everything is 85.7 GiB (166 paks). By default it's
+  52.5 GiB:
+
+  | Pak kind | Size | Default |
+  |---|---:|---|
+  | Core (`Data/`, text and subtitles in every language, `common.pak`) | 49.3 GiB | always |
+  | Voice-over, per language (English, German, French 3.2 GiB each; Czech 4.6; Japanese 3.5) | 3.2–4.6 GiB | one language (English) |
+  | HD voice-over, per language (English, German, French) | 3.9 GiB | off |
+  | HD textures | 6.6 GiB | off (Potato and Low don't use them) |
+  | HD sound | 0.4 GiB | off |
+
+  Voice paks are told apart by name: `Localization/` paks other than
+  `*_xml.pak` and `common.pak`, with the language as the first word
+  (`IPL_English.pak`, `English_DLC4.pak`, `english_patch_010900.pak`), and
+  `_hd` in the name for the HD packs.
+- **Resuming.**
+  - `createWritable()` writes to a swap file and only replaces the real file
+    when it is closed, so an interrupted file never looks complete.
+  - A rerun skips every file that is already there at its full size.
+- **Persistent storage.** The page asks for it first. Without it, the browser
+  may clear tens of GB when the disk runs low: in a test run, Chrome deleted
+  the whole copy when its storage ran short. Chrome grants it to sites that
+  are bookmarked, often visited or installed as an app, so the page is an
+  installable web app (`public/manifest.webmanifest`). When the request is
+  refused, the page says so and offers an **Install as app** button.
+- **Without the File System Access API,** a `<input webkitdirectory>`
+  fallback does the same job.
+
 ## Speed
 
-Node reads, inflates, MD5-checks and compares at about 300–350 MiB/s on the
-Ryzen 9 9900X (one thread). The base game's 60 GiB would take about 3
-minutes at that rate, before any conversion work.
+- **Node:** reads, inflates, MD5-checks and compares at about 300–350 MiB/s
+  on the Ryzen 9 9900X (one thread).
+- **Chromium/Chrome:** installing into OPFS runs at about 195 MiB/s (headless, all
+  10 DLC installers, 26 GiB in 2 min 18 s).
