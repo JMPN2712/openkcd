@@ -13,6 +13,7 @@ import { heightAt } from "../src/terrain.ts";
 import { TerrainRenderer } from "../src/terrainRenderer.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 import { WaterRenderer } from "../src/waterRenderer.ts";
+import { FarTrees } from "../src/farTrees.ts";
 import { buildGrassScene, buildWorldScene, lodItems, newWorldCaches, selectLods } from "../src/world.ts";
 import { PlayerAvatar } from "../src/playerAvatar.ts";
 import { PlayerSession } from "../src/playerSession.ts";
@@ -77,6 +78,8 @@ for (const pp of gpus) {
     const playerR = new ModelRenderer(device, format, q.msaa, pass);
     const npcR = new ModelRenderer(device, format, q.msaa, pass);
     const grassR = new ModelRenderer(device, format, q.msaa, pass);
+    const farTrees = new FarTrees(device, format, pass);
+    if (!process.env.NO_FAR_TREES) await farTrees.build(lvl.vfs, lvl.terrain, lvl.objects, { maxTextureDim: q.maxTextureDim });
     const sky = new SkyRenderer(device, format, pass);
     const shadowMap = q.shadows.cascades ? new ShadowMap(device, q.shadows.size, q.shadows.cascades, q.shadows.splits) : null;
     const casters = new ShadowCasters();
@@ -144,6 +147,7 @@ for (const pp of gpus) {
         npcR.setCamera(vp, cam.pos);
         playerR.setCamera(vp, cam.pos);
         grassR.setCamera(vp, cam.pos);
+        farTrees.setCamera(vp, cam.pos, state.lighting, { center: sc.at, radius: q.streamRadius, distanceScale: q.distanceScale });
         water.setCamera(vp, cam.pos, state.lighting.sunDir, undefined, state.lighting, state.horizon);
         const enc = device.createCommandEncoder();
         if (shadowMap) casters.render(enc, shadowMap, cam.pos, [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)], state.lighting.sunDir, models, [npcR, playerR], { lodScale: q.lodScale });
@@ -158,6 +162,7 @@ for (const pp of gpus) {
         models.drawGround(p);
         models.draw(p);
         grassR.draw(p);
+        farTrees.draw(p);
         npcR.draw(p);
         playerR.draw(p);
         models.drawBlended(p);
@@ -182,7 +187,7 @@ for (const pp of gpus) {
       results.push(line);
       console.log(`     per frame: ${Object.entries(phase).map(([k, v]) => `${k} ${(v / (FRAMES + 30)).toFixed(2)} ms`).join(", ")}`);
     }
-    for (const r of [terrainR, models, water, playerR, npcR, grassR, sky]) r.destroy();
+    for (const r of [terrainR, models, water, playerR, npcR, grassR, farTrees, sky]) r.destroy();
     shadowMap?.destroy();
     for (const t of [target, msaa, depth]) t?.destroy();
   }

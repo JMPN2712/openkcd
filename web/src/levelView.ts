@@ -13,6 +13,7 @@ import { parseCover, type Cover } from "./cover.ts";
 import { MergedMeshes } from "./mergedMeshes.ts";
 import { Roads } from "./roads.ts";
 import { Decals } from "./decals.ts";
+import { FarTrees } from "./farTrees.ts";
 import { setGpuBlockCompression } from "./model.ts";
 import { ModelRenderer } from "./renderer.ts";
 import { WaterRenderer } from "./waterRenderer.ts";
@@ -265,6 +266,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     farR.setModels(items);
     far = { scene, out: items.map((it) => new Float32Array(it.capacity * 16)), counts: items.map(() => 0) };
   }).catch((err) => console.warn("far field:", err));
+  // every tree beyond the streamed ones, as cards (built in the background: a second or two)
+  const farTrees = new FarTrees(device, format, passSetup);
+  void farTrees.build(vfs, terrain, objects, { maxTextureDim: q.maxTextureDim }).catch((err) => console.warn("far trees:", err));
   const sky = new SkyRenderer(device, format, passSetup);
   const todProfile = tod ? pickProfile(tod) : null;
   // Henry: the player character (loaded in the background; free-fly until then)
@@ -512,6 +516,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     playerR.setCamera(vp, cam.pos);
     farR.setCamera(vp, cam.pos);
     grassR.setCamera(vp, cam.pos);
+    farTrees.setCamera(vp, cam.pos, skyState?.lighting ?? models.lighting, { center: streamedAt ?? [cam.pos[0], cam.pos[1]], radius: scene ? STREAM_RADIUS : 0, distanceScale: q.distanceScale });
     if (grass) {
       const g = grass;
       selectLods(g.scene, cam.pos, vp, g.out, g.counts, { maxDistance: q.grass, fade: [q.grass * 0.67, q.grass] });
@@ -542,6 +547,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     farR.draw(pass);
     models.draw(pass);
     grassR.draw(pass);
+    farTrees.draw(pass);
     npcR.draw(pass);
     if (player && mode === "player") playerR.draw(pass);
     // see-through materials (waterfalls, weirs, glass) over everything opaque
@@ -562,6 +568,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     cancelAnimationFrame(raf);
     models.destroy();
     grassR.destroy();
+    farTrees.destroy();
     npcR.destroy();
     playerR.destroy();
     farR.destroy();
