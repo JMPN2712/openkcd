@@ -22,6 +22,11 @@ import { ShadowMap } from "../src/shadow.ts";
 import { ShadowCasters } from "../src/shadowPass.ts";
 import { depthClear, depthFormat, type PassSetup } from "../src/mat4.ts";
 import { SkyRenderer, skyAt, pickProfile, invert } from "../src/sky.ts";
+import { NpcWorld, npcItems, animateNpcs, type WorldNpc } from "../src/npcs.ts";
+import { parseNpcEntities, parseEntityIndex } from "../src/levelEntities.ts";
+import { Schedules } from "../src/schedule.ts";
+import { NavMesh } from "../src/navmesh.ts";
+import { readCentralDirectory, readEntry } from "../src/zip.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
@@ -35,6 +40,8 @@ const clock = opt("--clock", "12:00").split(":").map(Number);
 // a free camera instead of Henry's view: x,y,z,yawDeg,pitchDeg (z 0 = 2 m above the ground)
 const fly = opt("--fly", "");
 const grassRadius = Number(opt("--grass", "55")); // 0: no grass
+const atNpc = opt("--at-npc", ""); // with --npcs: the camera 3 m in front of this NPC (by name), facing them
+const withNpcs = args.includes("--npcs") ? (args.splice(args.indexOf("--npcs"), 1), true) : false; // NPCs within 120 m, by their schedules
 const [outDir] = args;
 if (!outDir) throw new Error("usage: render-player.ts OUT_DIR [options]");
 await mkdir(outDir, { recursive: true });
@@ -101,6 +108,25 @@ async function updateGrass(at: [number, number]): Promise<void> {
   console.log(`grass: ${scene.instances} instances of ${scene.models.length} models within ${grassRadius} m (${((performance.now() - t) / 1000).toFixed(1)} s)`);
 }
 
+// NPCs as in the world view: placed by their schedules (navmesh routes), stepped by the crowd, standing
+// on the collision surfaces
+const npcR = new ModelRenderer(device, format, 4, passSetup);
+let npcWorld: NpcWorld | null = null;
+let npcs: WorldNpc[] = [];
+if (withNpcs) {
+  const lb = await lvl.sources.find((x) => x.path.toLowerCase() === "data/levels/rataje/level.pak")!.open();
+  const xml = new TextDecoder().decode(await readEntry(lb, (await readCentralDirectory(lb)).find((e) => e.name.toLowerCase() === "objects_mission0.xml")!));
+  const ents = parseNpcEntities(xml);
+  const schedules = new Schedules(ents, parseEntityIndex(xml));
+  const rb = await lvl.sources.find((x) => x.path.toLowerCase() === "data/levels/rataje/recast.pak")?.open();
+  const ne = rb && (await readCentralDirectory(rb)).find((e) => e.name.toLowerCase() === "recast/rdnavmesh_1.nav");
+  if (rb && ne) schedules.setNavMesh(new NavMesh(await readEntry(rb, ne)));
+  npcWorld = new NpcWorld(lvl.vfs, ents, schedules, (x, y) => heightAt(lvl.terrain, x, y));
+  npcWorld.surface = (x, y, z) => (surroundings.ground(x, y, z + 0.5, z - 1.5) ?? surroundings.ground(x, y, z + 1, z - 1.5))?.z ?? null;
+}
+const minuteOfDay = clock[0] * 60 + clock[1];
+let simSeconds = 0;
+
 const profile = lvl.tod ? pickProfile(lvl.tod) : null;
 async function render(name: string): Promise<void> {
   session.avatar.upload(playerR);
@@ -108,6 +134,27 @@ async function render(name: string): Promise<void> {
   if (fly) {
     const [fx, fy, fz, fyaw, fpitch] = fly.split(",").map(Number);
     cam = { pos: [fx, fy, fz || heightAt(lvl.terrain, fx, fy) + 2], yaw: (fyaw * Math.PI) / 180, pitch: (fpitch * Math.PI) / 180 };
+  }
+  if (npcWorld) {
+    if (!npcs.length) {
+      npcs = await npcWorld.near([cam.pos[0], cam.pos[1], cam.pos[2]], 120, 40, minuteOfDay);
+      npcR.setModels(npcItems(npcs));
+      npcR.setShadow(shadowMap);
+      console.log(`NPCs: ${npcs.length}, ${npcs.filter((n) => n.placement.pose === "walk").length} walking: ${npcs.filter((n) => n.placement.pose === "walk").concat(npcs).slice(0, 12).map((n) => `${n.entity.name}@${n.placement.pos.map((v) => v.toFixed(0)).join(",")} ${n.placement.pose}`).join("; ")}`);
+    }
+    // two seconds of crowd at 30 steps a second (people start walking, settle on their spots)
+    for (let k = 0; k < 60; k++) { npcWorld.stepCrowd(npcs, minuteOfDay, 1 / 30); simSeconds += 1 / 30; }
+    animateNpcs(npcs, npcWorld, minuteOfDay, simSeconds, npcR); // (no eye: every NPC posed, not every few frames)
+    const target = atNpc ? npcs.find((n) => n.entity.name === atNpc) : null;
+    if (atNpc && !target) console.log(`no NPC ${atNpc} in view; NPCs: ${npcs.map((n) => n.entity.name).join(", ")}`);
+    const p = target && npcWorld.drawn(target.entity.id);
+    if (p) {
+      // the model faces +Y turned by its rotation (a yaw quaternion)
+      const yaw = 2 * Math.atan2(p.rot[3], p.rot[0]) + Math.PI / 2;
+      const ex = p.pos[0] + Math.cos(yaw) * 3, ey = p.pos[1] + Math.sin(yaw) * 3;
+      cam = { pos: [ex, ey, p.pos[2] + 1.5], yaw: yaw + Math.PI, pitch: -0.12 };
+      console.log(`framing ${atNpc}: ${p.activity} at ${p.where}, ${p.pose}, feet at z ${p.pos[2].toFixed(2)} (terrain ${heightAt(lvl.terrain, p.pos[0], p.pos[1]).toFixed(2)})`);
+    }
   }
   const g = heightAt(lvl.terrain, cam.pos[0], cam.pos[1]);
   if (session.viewMode === "third" && cam.pos[2] < g + 0.3) cam.pos[2] = g + 0.3;
@@ -126,7 +173,7 @@ async function render(name: string): Promise<void> {
     farCounts.forEach((n, k) => farR.setInstances(k, farOut[k], n));
   }
   if (state) {
-    models.lighting = playerR.lighting = farR.lighting = grassR.lighting = state.lighting;
+    models.lighting = playerR.lighting = farR.lighting = grassR.lighting = npcR.lighting = state.lighting;
     sky.update(invert(vp), cam.pos, state);
   }
   terrainR.prepare(cam, vp, { lighting: state?.lighting });
@@ -134,11 +181,12 @@ async function render(name: string): Promise<void> {
   playerR.setCamera(vp, cam.pos);
   farR.setCamera(vp, cam.pos);
   grassR.setCamera(vp, cam.pos);
+  npcR.setCamera(vp, cam.pos);
   water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85], undefined, state?.lighting, state?.horizon);
   const enc = device.createCommandEncoder();
   if (shadowMap && state) {
     const f = [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)] as [number, number, number];
-    casters.render(enc, shadowMap, cam.pos, f, state.lighting.sunDir, models, [playerR]);
+    casters.render(enc, shadowMap, cam.pos, f, state.lighting.sunDir, models, npcWorld ? [playerR, npcR] : [playerR]);
   }
   const pass = enc.beginRenderPass({
     colorAttachments: [{ view: msaa.createView(), resolveTarget: off.target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.7, a: 1 }, loadOp: "clear", storeOp: "discard" }],
@@ -150,6 +198,7 @@ async function render(name: string): Promise<void> {
   farR.draw(pass);
   models.draw(pass);
   grassR.draw(pass);
+  if (npcWorld) npcR.draw(pass);
   playerR.draw(pass);
   models.drawBlended(pass);
   grassR.drawBlended(pass);
@@ -159,6 +208,7 @@ async function render(name: string): Promise<void> {
   const file = join(outDir, `${name}.png`);
   await writeFile(file, await off.png());
   const c = session.controller;
+  if (npcWorld) console.log(`  NPC triangles drawn: ${npcR.stats.triangles}`);
   console.log(`${file}: Henry at ${c.pos.map((v) => v.toFixed(2))} ${c.gait} ${c.speed().toFixed(2)} m/s ${c.grounded ? "grounded" : "airborne"} · ${st.drawn} instances drawn`);
 }
 

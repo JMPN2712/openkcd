@@ -255,7 +255,9 @@ all. Each carries a mesh built by the editor. Decoded from the data:
   vertex alpha fades its ends.
 - **Streaming:** `terrain.dat` is stored uncompressed in `level.pak`, so a
   road's record is read by byte range when it comes within the streaming
-  radius, and drawn as a one-instance model (lowest priority first).
+  radius. Roads with the same priority and material are merged into one
+  model per rebuild (lowest priority first): one draw each instead of one per
+  road (Medium, fields: 172 → 219 fps; 224 without roads).
 
 ## Grass: merged-mesh sectors (`web/src/mergedMeshes.ts`)
 

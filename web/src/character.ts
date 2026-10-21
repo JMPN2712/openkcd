@@ -169,7 +169,11 @@ export class CharacterDb {
         notes.push(`armor item ${link.armor_id} not in item/armor`);
         continue;
       }
-      for (const cid of [item.clothing_id, item.clothing2_id]) {
+      // clothing2 is another state of the same garment (24 of 26: hood_001 / hood_001_down): draw one.
+      // Hoods are worn down (town, by day); otherwise the first
+      const alt = item.clothing2_id ? this.clothing.get(item.clothing2_id) : undefined;
+      const chosen = alt && /down/i.test(alt.clothing_name ?? "") ? item.clothing2_id : item.clothing_id;
+      for (const cid of [chosen]) {
         if (!cid) continue;
         const c = this.clothing.get(cid);
         if (!c?.model) {

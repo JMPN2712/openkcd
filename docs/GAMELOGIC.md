@@ -447,3 +447,16 @@ game's behaviour:
     trees, which hand out distinct spots.
 - **Check.** `web/scripts/sim-crowd.ts` counts NPCs drawn inside one
   another over a minute of the market.
+
+## NPC heights
+
+Routes between schedule places take their height from the navmesh, which is
+coarse: near Rattay's market, walking NPCs' planned height was 34 cm under
+to 47 cm over the real surface (5th–95th percentile), and in places up to
+0.85 m under the ground. The crowd step now puts every NPC on the walkable
+surface under it (`NpcWorld.surface`: the player's collision world, terrain,
+streets, bridges and floors), searching 0.5 m up and 1.5 m down from the
+planned height, then 1 m up. The walk cycle advances with the distance each
+NPC actually walks (the clip's own speed, 1.40 m/s male and 1.29 m/s female,
+matches the walking speed, but NPCs catch up at up to 1.3× and slow down
+around others), so the feet don't slide.

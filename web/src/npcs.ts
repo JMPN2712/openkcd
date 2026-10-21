@@ -64,6 +64,9 @@ export interface WorldNpc {
   animator: Animator;
   clips: Record<Pose, Clip | null>;
   phase: number;
+  /** walk-cycle position (frames) and the clock of the last animateNpcs, so the cycle follows the distance walked */
+  walkFrame?: number;
+  lastSeconds?: number;
   /** renderer item index of each part (same order as character.parts) */
   items: number[];
 }
@@ -87,6 +90,12 @@ export class NpcWorld {
   readonly entities: NpcEntity[];
   private schedules: Schedules | null;
   private groundAt: (x: number, y: number) => number;
+  /**
+   * The walkable surface under (x, y) near height z (terrain, streets, bridges, floors: the player's
+   * collision world), or null. Set by the world view; without it NPCs stand at their planned height,
+   * which on routes comes from the navmesh and sinks their feet into slopes and cobbles.
+   */
+  surface: ((x: number, y: number, z: number) => number | null) | null = null;
   constructor(vfs: Vfs, entities: NpcEntity[], schedules: Schedules | null = null, groundAt: (x: number, y: number) => number = () => 0) {
     this.vfs = vfs;
     this.entities = entities;
@@ -219,7 +228,8 @@ export class NpcWorld {
       const m = this.movers.get(n.entity.id)!;
       m.agent.pos[0] += m.agent.vel[0] * dt;
       m.agent.pos[1] += m.agent.vel[1] * dt;
-      m.agent.pos[2] = m.goalZ ?? m.agent.pos[2];
+      const z = m.goalZ ?? m.agent.pos[2];
+      m.agent.pos[2] = this.surface?.(m.agent.pos[0], m.agent.pos[1], z) ?? z;
     }
     this.collideBodies(npcs);
     npcs.forEach((n) => {
@@ -234,6 +244,12 @@ export class NpcWorld {
       const pose: Pose = moving ? "walk" : settled && m.ref.pose !== "walk" ? m.ref.pose : "stand";
       m.shown = { ...m.ref, pos: [...a.pos], rot: [Math.cos(m.yaw / 2), 0, 0, Math.sin(m.yaw / 2)], pose };
     });
+  }
+
+  /** NPC `id`'s current walking speed (m/s) from the crowd step, if it has moved. */
+  speed(id: number): number | undefined {
+    const a = this.movers.get(id)?.agent;
+    return a ? Math.hypot(a.vel[0], a.vel[1]) : undefined;
   }
 
   /** Whether NPC `id`'s body covers point `p` (same floor). */
@@ -442,6 +458,14 @@ export function animateNpcs(npcs: WorldNpc[], world: NpcWorld, minute: number, s
   animFrame++;
   for (const [k, n] of npcs.entries()) {
     const p = world.drawn(n.entity.id) ?? world.placeAt(n.entity, n.schedule, minute);
+    // the walk cycle advances with the distance actually walked (the clip's own speed is the NPCs'
+    // walking speed, but they catch up and slow down around others): no sliding feet
+    const walk = n.clips.walk, dt = seconds - (n.lastSeconds ?? seconds);
+    n.lastSeconds = seconds;
+    if (walk) {
+      const clipSpeed = walk.motion?.moveSpeed || 1;
+      n.walkFrame = (n.walkFrame ?? n.phase) + dt * walk.fps * ((world.speed(n.entity.id) ?? clipSpeed) / clipSpeed);
+    }
     const moved = p.pos.some((v, i) => v !== n.placement.pos[i]) || p.rot.some((v, i) => v !== n.placement.rot[i]);
     n.placement = p;
     if (moved) {
@@ -456,7 +480,7 @@ export function animateNpcs(npcs: WorldNpc[], world: NpcWorld, minute: number, s
     }
     const st = p.pose === "act" ? world.ai?.state(n.entity.id) : undefined;
     let c = n.clips[p.pose] ?? n.clips.stand;
-    let frame = c ? c.start + ((seconds * c.fps + n.phase) % Math.max(1, c.end - c.start)) : 0;
+    let frame = c ? c.start + (((c === walk ? n.walkFrame ?? 0 : seconds * c.fps + n.phase)) % Math.max(1, c.end - c.start)) : 0;
     if (st?.clip && world.ai) {
       // a behaviour-tree animation: from its start, looping or holding the last frame
       c = st.clip.clip;

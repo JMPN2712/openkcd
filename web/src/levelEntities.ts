@@ -94,6 +94,7 @@ export function entityProperties(e: EntityInfo): Record<string, unknown> | null 
 /** Index every entity in the mission XML by EntityId (Rataje: 55k entities, ~0.5 s). */
 export function parseEntityIndex(xml: string): Map<number, EntityInfo> {
   const out = new Map<number, EntityInfo>();
+  const parents = new Map<number, number>();
   const attr = (s: string, k: string) => new RegExp(`\\b${k}="([^"]*)"`).exec(s)?.[1];
   const re = /<Entity\s([^>]*)>/g;
   let m: RegExpExecArray | null;
@@ -144,8 +145,45 @@ export function parseEntityIndex(xml: string): Map<number, EntityInfo> {
       }
     }
     out.set(id, info);
+    const parent = attr(head, "ParentId");
+    if (parent) parents.set(id, Number(parent));
   }
+  // attached entities (5,039 in Rataje: tools on wall slots, items on shelves, buckets) store Pos and
+  // Rotate relative to their parent: compose them into world space, parents first
+  const done = new Set<number>();
+  const place = (id: number, depth: number): void => {
+    if (done.has(id)) return;
+    done.add(id);
+    const e = out.get(id), pid = parents.get(id), p = pid === undefined ? undefined : out.get(pid);
+    if (!e || !p || depth > 16) return;
+    place(p.id, depth + 1);
+    const s = p.scale ?? [1, 1, 1];
+    const local: [number, number, number] = [e.pos[0] * s[0], e.pos[1] * s[1], e.pos[2] * s[2]];
+    const r = rotate(p.rot, local);
+    e.pos = [p.pos[0] + r[0], p.pos[1] + r[1], p.pos[2] + r[2]];
+    e.rot = qmul(p.rot, e.rot);
+  };
+  for (const id of parents.keys()) place(id, 0);
   return out;
+}
+
+/** Quaternion product a·b, both w, x, y, z. */
+function qmul(a: [number, number, number, number], b: [number, number, number, number]): [number, number, number, number] {
+  const [aw, ax, ay, az] = a, [bw, bx, by, bz] = b;
+  return [
+    aw * bw - ax * bx - ay * by - az * bz,
+    aw * bx + ax * bw + ay * bz - az * by,
+    aw * by - ax * bz + ay * bw + az * bx,
+    aw * bz + ax * by - ay * bx + az * bw,
+  ];
+}
+
+/** Vector v rotated by quaternion q (w, x, y, z). */
+function rotate(q: [number, number, number, number], v: [number, number, number]): [number, number, number] {
+  const [w, x, y, z] = q;
+  const l = Math.hypot(w, x, y, z) || 1;
+  const p = qmul(qmul([w / l, x / l, y / l, z / l], [0, v[0], v[1], v[2]]), [w / l, -x / l, -y / l, -z / l]);
+  return [p[1], p[2], p[3]];
 }
 
 /**

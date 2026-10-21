@@ -95,8 +95,8 @@ export function trimWorldCaches(caches: WorldCaches, keep = 3): { models: number
 /** Group key for a character skin with its material override (.cdf parts): "skin|mtl". */
 const skinKey = (skin: string, mtl: string | null) => `${skin}|${mtl ?? ""}`;
 
-/** Group key of road `i`: roads are one model each, built from their record (roads.ts). */
-const roadKey = (i: number) => `road:${i}`;
+/** Group key of a batch of roads (same material and priority) merged into one model (roads.ts). */
+const roadKey = (ids: number[]) => `road:${ids.join(",")}`;
 
 async function loadLods(vfs: Vfs, path: string, caches: WorldCaches, maxTextureDim: number, normalMaps = true, road?: { roads: Roads; terrain: Terrain }): Promise<LoadedModel[] | null> {
   const load = (p: string) => {
@@ -105,9 +105,9 @@ async function loadLods(vfs: Vfs, path: string, caches: WorldCaches, maxTextureD
     if (!m) {
       const [file, material] = p.split("|");
       if (road && p.startsWith("road:")) {
-        const i = Number(p.slice(5));
-        const mtl = `${road.terrain.materials[road.roads.index.material[i]] ?? ""}.mtl`.toLowerCase();
-        m = road.roads.mesh(i).then((mesh) => meshModel(vfs, p, mesh, mtl, { maxTextureDim, textureCache: caches.textures, normalMaps })).catch(() => null);
+        const ids = p.slice(5).split(",").map(Number);
+        const mtl = `${road.terrain.materials[road.roads.index.material[ids[0]]] ?? ""}.mtl`.toLowerCase();
+        m = road.roads.merged(ids).then((mesh) => meshModel(vfs, p, mesh, mtl, { maxTextureDim, textureCache: caches.textures, normalMaps })).catch(() => null);
       } else m = loadModel(vfs, file, { maxTextureDim, textureCache: caches.textures, material: material || undefined, normalMaps }).catch(() => null);
       caches.models.set(p, m);
       void m.then((x) => { if (caches.models.get(p) === m) caches.loaded.set(p, x); });
@@ -212,13 +212,20 @@ export async function buildWorldScene(
     const name = terrain.brushNames[objects.brushName[i]];
     if (name && !HIDDEN_BRUSH.test(name) && (!opts.onlyBrushes || opts.onlyBrushes(name))) add(resolveLevelPath(name), "brush", m, m[12], m[13]);
   }
-  // roads, lowest sort priority first so higher ones blend over them
-  const roadIds = opts.roads && !opts.onlyBrushes ? opts.roads.near(center, radius) : [];
-  roadIds.sort((a, b) => opts.roads!.index.priority[a] - opts.roads!.index.priority[b]);
-  for (const i of roadIds) {
-    const c = opts.roads!.index.center;
-    const m = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, c[i * 3], c[i * 3 + 1], c[i * 3 + 2], 1];
-    groups.set(roadKey(i), { path: roadKey(i), kind: "brush", matrices: m, nearest: 0 });
+  // roads, merged by (priority, material), lowest priority first so higher ones blend over them
+  if (opts.roads && !opts.onlyBrushes) {
+    const ix = opts.roads.index;
+    const batches = new Map<string, number[]>();
+    for (const i of opts.roads.near(center, radius)) {
+      const k = `${String(ix.priority[i]).padStart(3, "0")}/${ix.material[i]}`;
+      const b = batches.get(k);
+      if (b) b.push(i); else batches.set(k, [i]);
+    }
+    for (const [, ids] of [...batches].sort((a, b) => a[0].localeCompare(b[0]))) {
+      ids.sort((a, b) => a - b);
+      const c = ix.center, o = ids[0] * 3;
+      groups.set(roadKey(ids), { path: roadKey(ids), kind: "brush", matrices: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, c[o], c[o + 1], c[o + 2], 1], nearest: 0 });
+    }
   }
   const caches = opts.caches ?? newWorldCaches();
   caches.generation++;
