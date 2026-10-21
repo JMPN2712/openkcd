@@ -1,6 +1,6 @@
 // Loads a model with its materials and diffuse textures from the asset VFS.
 
-import { parseCgf, type Cgf } from "./cgf.ts";
+import { parseCgf, type Cgf, type CgfMesh } from "./cgf.ts";
 import { parseSkeleton, type Skeleton } from "./skeleton.ts";
 import { parseMtl, mtlPath, textureFile, type Material } from "./mtl.ts";
 import { decodeMip, mipData, openTexture } from "./texture.ts";
@@ -30,7 +30,8 @@ const BC_FORMATS: Record<string, string> = { BC1: "bc1-rgba-unorm", BC2: "bc2-rg
 
 export interface LoadedModel {
   path: string;
-  hit: VfsHit;
+  /** where the model came from (null for meshes built in code: roads) */
+  hit: VfsHit | null;
   cgf: Cgf;
   /** bones the mesh is weighted to (.skin/.chr), indexed by the bone-mapping stream */
   skeleton: Skeleton | null;
@@ -77,20 +78,24 @@ export async function loadMipChain(vfs: Vfs, stem: string, maxDim: number, opts:
   return { stem, srgb: t.header.srgb, levels };
 }
 
-export async function loadModel(
-  vfs: Vfs,
-  path: string,
-  opts: {
-    maxTextureDim?: number;
-    onStatus?: (s: string) => void;
-    /** .mtl path overriding the model's own (CDF / database) */
-    material?: string | null;
-    /** shared across models (e.g. a model's LODs reuse its textures); keyed by texture and size */
-    textureCache?: Map<string, Promise<MipChain | null>>;
-    /** load the materials' normal maps (default true) */
-    normalMaps?: boolean;
-  } = {},
-): Promise<LoadedModel> {
+interface LoadOptions {
+  maxTextureDim?: number;
+  onStatus?: (s: string) => void;
+  /** .mtl path overriding the model's own (CDF / database) */
+  material?: string | null;
+  /** shared across models (e.g. a model's LODs reuse its textures); keyed by texture and size */
+  textureCache?: Map<string, Promise<MipChain | null>>;
+  /** load the materials' normal maps (default true) */
+  normalMaps?: boolean;
+}
+
+/** A mesh built in code (a road) with a material from the VFS, as a model. */
+export function meshModel(vfs: Vfs, name: string, mesh: CgfMesh, material: string, opts: LoadOptions = {}): Promise<LoadedModel> {
+  const cgf: Cgf = { chunks: [], meshes: [mesh], material: null, skippedNodes: [], physics: [] };
+  return withMaterials(vfs, name, null, cgf, null, { ...opts, material }, []);
+}
+
+export async function loadModel(vfs: Vfs, path: string, opts: LoadOptions = {}): Promise<LoadedModel> {
   const notes: string[] = [];
   // The fast-load paks hold stub copies without geometry: take the highest-
   // priority version that actually has a mesh.
@@ -120,7 +125,11 @@ export async function loadModel(
     throw new Error(`no renderable geometry (skipped nodes: ${c.skippedNodes.join(", ") || "none"})`);
   }
   if (hit !== versions[0]) notes.push(`using ${hit.pak.path}; higher-priority ${versions[0].pak.path} has no geometry`);
+  return withMaterials(vfs, path, hit, cgf, skeleton, opts, notes);
+}
 
+/** Load a model's materials and their textures. */
+async function withMaterials(vfs: Vfs, path: string, hit: VfsHit | null, cgf: Cgf, skeleton: Skeleton | null, opts: LoadOptions, notes: string[]): Promise<LoadedModel> {
   let materials: Material[] = [];
   let mpath: string | null = null;
   if (opts.material || cgf.material) {
@@ -149,11 +158,14 @@ export async function loadModel(
         continue;
       }
       const stem = textureFile(file);
-      const key = `${stem}@${maxDim}`;
+      // decals (road strips, puddles, mud) use ground tiles seen up close, and grass cards thin blades in
+      // an atlas: 4× the size (like the terrain's layers and the merged-mesh grass)
+      const dim = /%DECAL|%GRASS/.test(m.genMask) ? Math.min(1024, maxDim * 4) : maxDim;
+      const key = `${stem}@${dim}`;
       let p = cache.get(key);
       if (!p) {
         opts.onStatus?.(`Decoding ${stem.slice(stem.lastIndexOf("/") + 1)}…`);
-        p = loadMipChain(vfs, stem, maxDim, { normalMap: slotName === "Bumpmap" }).catch((err) => {
+        p = loadMipChain(vfs, stem, dim, { normalMap: slotName === "Bumpmap" }).catch((err) => {
           notes.push(`material ${i} (${m.name}) ${slotName} ${stem}: ${(err as Error).message}`);
           return null;
         });

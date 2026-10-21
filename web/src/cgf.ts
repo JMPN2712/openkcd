@@ -70,6 +70,8 @@ export interface CgfMesh {
   /** tangent xyz and handedness w (±1: bitangent = cross(normal, tangent) × w), from the Tangents stream */
   tangents: Float32Array | null;
   uvs: Float32Array | null; // uv
+  /** vertex colours, 4 bytes per vertex (Colors stream, or packed in P3S_C4B_T2S); %VERTCOLORS materials use them */
+  colors: Uint8Array | null;
   /** skinning (stream 9): 4 bone indices into the file's own CompiledBones list, 4 weights /255 */
   boneIds: Uint16Array | null;
   boneWeights: Uint8Array | null;
@@ -243,6 +245,7 @@ export function parseCgf(bytes: Uint8Array): Cgf {
     }
     const positions = decodePositions(pos, nVerts);
     const uvs = decodeUvs(get(STREAM.TexCoords), pos.type === STREAM.P3S_C4B_T2S ? pos : null, nVerts);
+    const colors = decodeColors(get(STREAM.Colors), pos.type === STREAM.P3S_C4B_T2S ? pos : null, nVerts);
     const normals = decodeNormals(get(STREAM.Normals), get(STREAM.Tangents), get(STREAM.QTangents), nVerts);
     const tangents = decodeTangents(get(STREAM.Tangents), normals, nVerts);
     const { boneIds, boneWeights } = decodeBoneMapping(get(STREAM.BoneMapping), nVerts);
@@ -253,7 +256,7 @@ export function parseCgf(bytes: Uint8Array): Cgf {
     meshes.push({
       nodeName: node.name,
       transform: worldTm(node),
-      positions, normals, tangents, uvs, indices, boneIds, boneWeights,
+      positions, normals, tangents, uvs, colors, indices, boneIds, boneWeights,
       subsets: subsets.length ? subsets : [{ firstIndex: 0, numIndices: nIndices, firstVert: 0, numVerts: nVerts, matId: 0 }],
       bboxMin, bboxMax, physicsTriangles,
     });
@@ -286,6 +289,15 @@ function decodePositions(s: Stream, n: number): Float32Array {
           : halfToFloat(s.data.getUint16(o + c * 2, true)); // 8-byte half4, or P3S_C4B_T2S
     }
   }
+  return out;
+}
+
+function decodeColors(s: Stream | null, packed: Stream | null, n: number): Uint8Array | null {
+  // the Colors stream (4 bytes each), else the colour packed at byte 8 of P3S_C4B_T2S
+  const src = s && s.count >= n && s.elemSize === 4 ? { st: s, off: 0 } : packed ? { st: packed, off: 8 } : null;
+  if (!src) return null;
+  const out = new Uint8Array(n * 4);
+  for (let i = 0; i < n; i++) for (let k = 0; k < 4; k++) out[i * 4 + k] = src.st.data.getUint8(i * src.st.elemSize + src.off + k);
   return out;
 }
 

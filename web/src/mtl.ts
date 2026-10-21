@@ -52,8 +52,8 @@ function toMaterial(n: XmlNode): Material {
     diffuse: [rgb[0] ?? 1, rgb[1] ?? 1, rgb[2] ?? 1],
     specular: [spec[0] ?? 0.04, spec[1] ?? 0.04, spec[2] ?? 0.04],
     opacity: Number(n.attrs.Opacity ?? 1),
-    // %DECAL sub-materials are blended overlays in the engine; without a blend pass, cut them out
-    alphaTest: Math.max(Number(n.attrs.AlphaTest ?? 0), (n.attrs.StringGenMask ?? "").includes("%DECAL") ? 0.5 : 0),
+    // (%DECAL sub-materials are drawn blended by the renderer, not alpha-tested)
+    alphaTest: Number(n.attrs.AlphaTest ?? 0),
     // hidden: Nodraw shader, the NODRAW flag (0x400), helper textures, physics/shadow proxy
     // sub-materials (proxy_mat_*, shadowproxy: present in render meshes, never
     // drawn), EYE_AO_OVERLAY (a blended shadow shell over the eyeballs), and volumetric

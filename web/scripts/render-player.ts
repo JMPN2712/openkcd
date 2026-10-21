@@ -58,7 +58,9 @@ const msaa = device.createTexture({ size: [W, H], format, sampleCount: 4, usage:
 const depth = device.createTexture({ size: [W, H], format: depthFormat(passSetup), sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
 
 const t0 = performance.now();
-const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, [ax, ay], radius, { maxModels: 20000, caches: newWorldCaches(), props: lvl.props, hiddenLayers: lvl.hiddenLayers, normalMaps: !args.includes("--no-normal") });
+const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, [ax, ay], radius, { maxModels: 20000, caches: newWorldCaches(), props: lvl.props, hiddenLayers: lvl.hiddenLayers, normalMaps: !args.includes("--no-normal"), roads: args.includes("--no-roads") ? undefined : lvl.roads });
+// debug: HIDE=regex leaves matching models out (e.g. HIDE='^road:|road_side')
+if (process.env.HIDE) scene.models = scene.models.filter((m) => !new RegExp(process.env.HIDE!).test(m.path));
 const items = lodItems(scene);
 models.setModels(items);
 models.setShadow(shadowMap);
@@ -144,6 +146,7 @@ async function render(name: string): Promise<void> {
   });
   if (state) sky.draw(pass);
   terrainR.draw(pass);
+  models.drawGround(pass);
   farR.draw(pass);
   models.draw(pass);
   grassR.draw(pass);

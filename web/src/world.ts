@@ -5,7 +5,8 @@
 
 import type { EntityInfo } from "./levelEntities.ts";
 import { parseCdf, poseMatrix, type CharacterSpec } from "./character.ts";
-import { loadModel, type LoadedModel, type MipChain } from "./model.ts";
+import { loadModel, meshModel, type LoadedModel, type MipChain } from "./model.ts";
+import type { Roads } from "./roads.ts";
 import { vegetationMatrix, type LevelObjects } from "./levelObjects.ts";
 import type { Terrain } from "./terrain.ts";
 import type { Vfs } from "./vfs.ts";
@@ -94,13 +95,20 @@ export function trimWorldCaches(caches: WorldCaches, keep = 3): { models: number
 /** Group key for a character skin with its material override (.cdf parts): "skin|mtl". */
 const skinKey = (skin: string, mtl: string | null) => `${skin}|${mtl ?? ""}`;
 
-async function loadLods(vfs: Vfs, path: string, caches: WorldCaches, maxTextureDim: number, normalMaps = true): Promise<LoadedModel[] | null> {
+/** Group key of road `i`: roads are one model each, built from their record (roads.ts). */
+const roadKey = (i: number) => `road:${i}`;
+
+async function loadLods(vfs: Vfs, path: string, caches: WorldCaches, maxTextureDim: number, normalMaps = true, road?: { roads: Roads; terrain: Terrain }): Promise<LoadedModel[] | null> {
   const load = (p: string) => {
     caches.usedAt.set(p, caches.generation);
     let m = caches.models.get(p);
     if (!m) {
       const [file, material] = p.split("|");
-      m = loadModel(vfs, file, { maxTextureDim, textureCache: caches.textures, material: material || undefined, normalMaps }).catch(() => null);
+      if (road && p.startsWith("road:")) {
+        const i = Number(p.slice(5));
+        const mtl = `${road.terrain.materials[road.roads.index.material[i]] ?? ""}.mtl`.toLowerCase();
+        m = road.roads.mesh(i).then((mesh) => meshModel(vfs, p, mesh, mtl, { maxTextureDim, textureCache: caches.textures, normalMaps })).catch(() => null);
+      } else m = loadModel(vfs, file, { maxTextureDim, textureCache: caches.textures, material: material || undefined, normalMaps }).catch(() => null);
       caches.models.set(p, m);
       void m.then((x) => { if (caches.models.get(p) === m) caches.loaded.set(p, x); });
     }
@@ -108,7 +116,7 @@ async function loadLods(vfs: Vfs, path: string, caches: WorldCaches, maxTextureD
   };
   const base = await load(path);
   if (!base) return null;
-  if (path.includes("|")) return [base];
+  if (path.includes("|") || path.startsWith("road:")) return [base];
   const lods = [base];
   for (let k = 1; k < 6; k++) {
     const p = path.replace(/\.(cgf|cga)$/, `_lod${k}.$1`);
@@ -176,6 +184,8 @@ export async function buildWorldScene(
     normalMaps?: boolean;
     /** only brushes whose path passes (no vegetation or props): e.g. the uber-LOD far field */
     onlyBrushes?: (path: string) => boolean;
+    /** the level's roads (roads.ts), drawn as blended meshes over the terrain */
+    roads?: Roads;
   } = {},
 ): Promise<WorldScene> {
   const groups = new Map<string, Group>();
@@ -202,6 +212,14 @@ export async function buildWorldScene(
     const name = terrain.brushNames[objects.brushName[i]];
     if (name && !HIDDEN_BRUSH.test(name) && (!opts.onlyBrushes || opts.onlyBrushes(name))) add(resolveLevelPath(name), "brush", m, m[12], m[13]);
   }
+  // roads, lowest sort priority first so higher ones blend over them
+  const roadIds = opts.roads && !opts.onlyBrushes ? opts.roads.near(center, radius) : [];
+  roadIds.sort((a, b) => opts.roads!.index.priority[a] - opts.roads!.index.priority[b]);
+  for (const i of roadIds) {
+    const c = opts.roads!.index.center;
+    const m = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, c[i * 3], c[i * 3 + 1], c[i * 3 + 2], 1];
+    groups.set(roadKey(i), { path: roadKey(i), kind: "brush", matrices: m, nearest: 0 });
+  }
   const caches = opts.caches ?? newWorldCaches();
   caches.generation++;
   for (const e of opts.onlyBrushes ? [] : opts.props ?? []) {
@@ -223,7 +241,7 @@ export async function buildWorldScene(
     for (const part of (await spec)?.parts ?? []) if (!part.attach) add(skinKey(part.skin, part.material), "prop", m, e.pos[0], e.pos[1]);
   }
 
-  return sceneFromGroups(vfs, groups, caches, opts);
+  return sceneFromGroups(vfs, groups, caches, { ...opts, road: opts.roads ? { roads: opts.roads, terrain } : undefined });
 }
 
 /**
@@ -256,8 +274,9 @@ async function sceneFromGroups(
   vfs: Vfs,
   groups: Map<string, Group>,
   caches: WorldCaches,
-  opts: { maxModels?: number; maxTextureDim?: number; onStatus?: (s: string) => void; normalMaps?: boolean },
+  opts: { maxModels?: number; maxTextureDim?: number; onStatus?: (s: string) => void; normalMaps?: boolean; road?: { roads: Roads; terrain: Terrain } },
 ): Promise<WorldScene> {
+  // nearest first (roads, at 0, come first and keep their priority order: the sort is stable)
   const ordered = [...groups.values()].sort((a, b) => a.nearest - b.nearest);
   const max = opts.maxModels ?? 400;
   const failed = new Map<string, string>();
@@ -270,7 +289,7 @@ async function sceneFromGroups(
   const worker = async () => {
     while (next < chosen.length) {
       const k = next++;
-      lodsOf[k] = loadLods(vfs, chosen[k].path, caches, opts.maxTextureDim ?? 256, opts.normalMaps ?? true);
+      lodsOf[k] = loadLods(vfs, chosen[k].path, caches, opts.maxTextureDim ?? 256, opts.normalMaps ?? true, opts.road);
       await lodsOf[k];
       opts.onStatus?.(`Loading models ${++loaded}/${chosen.length}`);
     }

@@ -14,8 +14,8 @@ import { colorizeOf } from "./mtl.ts";
 import { ShadowMap, SHADOW_FORMAT, SHADOW_WGSL } from "./shadow.ts";
 import { DEFAULT_LIGHTING, depthCompare, depthFormat, lookAt, multiply, perspective, transformPoint, type Lighting, type PassSetup, type Vec3 } from "./mat4.ts";
 
-// position 3f, normal 3f, uv 2f, bone ids u16×4, weights unorm8×4, tangent 4f (w handedness)
-const VERTEX_BYTES = 60;
+// position 3f, normal 3f, uv 2f, bone ids u16×4, weights unorm8×4, tangent 4f (w handedness), colour unorm8×4
+const VERTEX_BYTES = 64;
 const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
 const SHADER = /* wgsl */ `${SHADOW_WGSL}
@@ -24,7 +24,8 @@ struct Camera { viewProj: mat4x4f, eye: vec4f, light: vec4f, sunColor: vec4f, sk
 // params: x alpha test, y diffuse map, z specular map, w layer
 // colorize: KCD %COLORIZING shader, x/y/z = hue (deg) / saturation / brightness, w = 0 off, 1 global, 2 with mask
 //   (the "Specular" slot then holds the region mask: R/G/B select mask1/2/3)
-// flags: x = 1 with a normal map; y = 1 water (Water, Waterfall shaders), 2 glass: blended
+// flags: x = 1 with a normal map; y = 1 water (Water, Waterfall shaders), 2 glass, 3 decal: blended;
+//   z = 1 vertex colours shade the surface (%VERTCOLORS)
 // foliage (%LEAVES materials: grass, plants, tree leaves): rgb transmittance colour, w how much
 //   light comes through from behind (BackDiffuseMultiplier); w = 0 not foliage
 struct Draw { model: mat4x4f, color: vec4f, spec: vec4f, params: vec4f, colorize: vec4f, mask1: vec4f, mask2: vec4f, mask3: vec4f, flags: vec4f, foliage: vec4f };
@@ -49,16 +50,24 @@ struct VOut {
   @location(1) uv: vec2f,
   @location(2) wpos: vec3f,
   @location(3) t: vec4f,
+  @location(4) col: vec4f,
 };
 
 @vertex fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @location(2) uv: vec2f,
-               @location(3) bi: vec4u, @location(4) bw: vec4f, @location(9) tan: vec4f,
+               @location(3) bi: vec4u, @location(4) bw: vec4f, @location(9) tan: vec4f, @location(10) vc: vec4f,
                @location(5) i0: vec4f, @location(6) i1: vec4f, @location(7) i2: vec4f, @location(8) i3: vec4f) -> VOut {
   var o: VOut;
   let sk = bones[bi.x] * bw.x + bones[bi.y] * bw.y + bones[bi.z] * bw.z + bones[bi.w] * bw.w;
   // per-instance world matrix (identity for single models)
   let world = mat4x4f(i0, i1, i2, i3) * drw.model;
-  let w = world * (sk * vec4f(p, 1.0));
+  var w = world * (sk * vec4f(p, 1.0));
+  if (drw.flags.y > 2.5) {
+    // decals and roads lie on the ground, whose triangulation differs a little from theirs:
+    // pull them towards the eye (8 cm plus 0.3% of the distance) so the terrain never pokes through
+    let toEye = cam.eye.xyz - w.xyz;
+    let d = length(toEye);
+    w = vec4f(w.xyz + toEye / max(d, 1e-3) * min(0.08 + d * 0.003, d * 0.5), 1.0);
+  }
   o.pos = cam.viewProj * w;
   // layered character clothing shares the body's surface: pull outer layers slightly towards the camera
   // (reversed-Z: scale the depth up by 0.02% per layer, about 0.4 mm at 2 m)
@@ -66,6 +75,7 @@ struct VOut {
   o.n = (world * (sk * vec4f(n, 0.0))).xyz;
   o.t = vec4f((world * (sk * vec4f(tan.xyz, 0.0))).xyz, tan.w);
   o.uv = uv;
+  o.col = vc;
   o.wpos = w.xyz;
   return o;
 }
@@ -114,6 +124,7 @@ fn shade(i: VOut) -> vec4f {
   let t = textureSample(tex, samp, i.uv);
   let st = textureSample(specTex, samp, i.uv);
   var base = drw.color * select(vec4f(1.0), t, drw.params.y > 0.5);
+  if (drw.flags.z > 0.5) { base = vec4f(base.rgb * i.col.rgb, base.a); }
   var specMap = select(vec3f(1.0), st.rgb, drw.params.z > 0.5);
   if (drw.colorize.w > 1.5) {
     let m = clamp(st.rgb, vec3f(0.0), vec3f(1.0));
@@ -169,6 +180,12 @@ fn shade(i: VOut) -> vec4f {
     let bodyC = select(lin * 0.6 + cam.skyColor.rgb * 0.1, lin, water);
     lin = mix(bodyC, cam.skyColor.rgb * 1.5, fres) + cam.sunColor.rgb * glint;
     alpha = select(mix(0.25, 0.85, fres), mix(0.55, 0.95, fres), water);
+    if (drw.flags.y > 2.5) {
+      // decal (%DECAL: road strips, puddles, mud): the lit surface, faded by the texture's alpha and
+      // the vertex alpha (strips fade out towards their edges)
+      lin = base.rgb * (hemi + cam.sunColor.rgb * ndl * sh) + spec * mix(0.3, 1.0, sh);
+      alpha = base.a * i.col.a;
+    }
   }
   lin = mix(lin, cam.fog.rgb, clamp(1.0 - exp(-fd * cam.fog.w), 0.0, 1.0));
   // target is a non-sRGB format: encode manually
@@ -199,6 +216,8 @@ interface DrawItem {
   meshTm: Float32Array;
   /** water or glass: drawn blended, after every opaque draw (drawBlended), never in shadows */
   blend: boolean;
+  /** decals and roads (%DECAL): blended onto the ground right after the terrain (drawGround), before other objects */
+  ground: boolean;
 }
 
 /** Shaders whose surfaces are see-through: drawn in the blended pass. */
@@ -229,6 +248,8 @@ interface View {
   /** camera view only: the blended draws' bundles */
   blendBundles: (GPURenderBundle | null | undefined)[];
   liveBlend: GPURenderBundle[];
+  groundBundles: (GPURenderBundle | null | undefined)[];
+  liveGround: GPURenderBundle[];
   triangles: number;
   calls: number;
 }
@@ -242,6 +263,7 @@ const VERTEX_LAYOUT: GPUVertexBufferLayout[] = [{
     { shaderLocation: 3, offset: 32, format: "uint16x4" },
     { shaderLocation: 4, offset: 40, format: "unorm8x4" },
     { shaderLocation: 9, offset: 44, format: "float32x4" },
+    { shaderLocation: 10, offset: 60, format: "unorm8x4" },
   ],
 }, {
   arrayStride: 64,
@@ -414,7 +436,7 @@ export class ModelRenderer {
       return {
         pipeline, camBuf, camBind, colorFormats, depthFormat: depth, sampleCount: samples, counts,
         pending: new Array(items).fill(null), itemFirst: new Uint32Array(items), packed, packedCpu: new Float32Array(Math.max(1, total) * 16),
-        args, argsBuf, bundles: new Array(items).fill(null), live: [], blendBundles: new Array(items).fill(null), liveBlend: [], triangles: 0, calls: 0,
+        args, argsBuf, bundles: new Array(items).fill(null), live: [], blendBundles: new Array(items).fill(null), liveBlend: [], groundBundles: new Array(items).fill(null), liveGround: [], triangles: 0, calls: 0,
       };
     };
     this.views.push(make(this.pipeline, this.camBuf, this.camBind, [this.format], depthFormat(this.pass), this.sampleCount));
@@ -531,6 +553,7 @@ export class ModelRenderer {
         else verts[i * F + 5] = 1;
         if (mesh.uvs) verts.set(mesh.uvs.subarray(i * 2, i * 2 + 2), i * F + 6);
         if (mesh.tangents) verts.set(mesh.tangents.subarray(i * 4, i * 4 + 4), i * F + 11);
+        for (let k = 0; k < 4; k++) wts[i * VERTEX_BYTES + 60 + k] = mesh.colors ? mesh.colors[i * 4 + k] : 255;
         if (palette) {
           for (let k = 0; k < 4; k++) {
             ids[i * U + 16 + k] = Math.min(mesh.boneIds![i * 4 + k], palette.count - 1);
@@ -571,8 +594,11 @@ export class ModelRenderer {
         if (chain) this.stats.textured++;
         const ubuf = this.device.createBuffer({ size: 208, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         const u = new Float32Array(52);
-        const blend = BLENDED_SHADER.test(mat?.shader ?? "");
-        u.set([normChain ? 1 : 0, blend ? (/glass/i.test(mat!.shader) ? 2 : 1) : 0, 0, 0], 44);
+        const decal = !!mat?.genMask.includes("%DECAL");
+        const blend = decal || BLENDED_SHADER.test(mat?.shader ?? "");
+        // (on Vegetation materials the vertex colours are bending and wind weights, not colour)
+        const vertColors = !!mesh.colors && !!mat?.genMask.includes("%VERTCOLORS") && !/^vegetation$/i.test(mat.shader);
+        u.set([normChain ? 1 : 0, decal ? 3 : blend ? (/glass/i.test(mat!.shader) ? 2 : 1) : 0, vertColors ? 1 : 0, 0], 44);
         u.set(meshTm, 0);
         const col = mat?.diffuse ?? [0.8, 0.8, 0.8];
         u.set([col[0], col[1], col[2], 1], 16);
@@ -580,8 +606,8 @@ export class ModelRenderer {
         // reflectance it turned lashes and hair partings white, so scale it to a dielectric level
         const specular = mat?.specular ?? [0.04, 0.04, 0.04];
         u.set([...(/^hair$/i.test(mat?.shader ?? "") ? specular.map((v) => v * 0.05) : specular), 0], 20);
-        u.set([mat?.alphaTest ?? 0, chain ? 1 : 0, specChain ? 1 : 0, layer], 24);
-        if (mat?.genMask.includes("%LEAVES")) {
+        u.set([decal ? 0 : mat?.alphaTest ?? 0, chain ? 1 : 0, specChain ? 1 : 0, layer], 24);
+        if (/%LEAVES|%GRASS/.test(mat?.genMask ?? "")) {
           const tc = (mat.params.TransmittanceColor ?? "1,1,1").split(",").map(Number);
           u.set([tc[0] || 1, tc[1] || 1, tc[2] || 1, Number(mat.params.BackDiffuseMultiplier ?? 0.5) || 0.5], 48);
         }
@@ -604,7 +630,7 @@ export class ModelRenderer {
           ],
         });
         const ib2 = instBufs[itemIndex];
-        this.draws.push({ vb, ib, firstIndex: s.firstIndex, count: s.numIndices, bind, item: itemIndex, ubuf, meshTm: mesh.transform, inst: ib2.buf, instCount: ib2.count, blend });
+        this.draws.push({ vb, ib, firstIndex: s.firstIndex, count: s.numIndices, bind, item: itemIndex, ubuf, meshTm: mesh.transform, inst: ib2.buf, instCount: ib2.count, blend: blend && !decal, ground: decal });
       }
     }
     this.stats.draws = this.draws.length;
@@ -682,7 +708,9 @@ export class ModelRenderer {
     if (this.indirect) {
       const v = this.views[0];
       if (!v) return;
-      this.flush(v);
+      // (drawGround, earlier in the same pass, has already flushed the camera view)
+      if (this.groundFlushed) this.groundFlushed = false;
+      else this.flush(v);
       this.stats.triangles = v.triangles;
       this.stats.drawCalls = v.calls;
       if (v.live.length) pass.executeBundles(v.live);
@@ -693,7 +721,7 @@ export class ModelRenderer {
     let tris = 0, calls = 0;
     for (const d of this.draws) {
       const n = this.itemInst[d.item]?.count ?? d.instCount;
-      if (!n || !d.count || d.blend) continue;
+      if (!n || !d.count || d.blend || d.ground) continue;
       pass.setVertexBuffer(0, d.vb);
       pass.setVertexBuffer(1, d.inst);
       pass.setIndexBuffer(d.ib, "uint32");
@@ -709,16 +737,29 @@ export class ModelRenderer {
 
   /** Record the water and glass draws: call after every renderer's opaque draw() in the pass. */
   drawBlended(pass: GPURenderPassEncoder): void {
+    this.drawKind(pass, "blend");
+  }
+
+  /** Record the decals and roads: call right after the terrain, before any renderer's draw(). */
+  drawGround(pass: GPURenderPassEncoder): void {
+    this.drawKind(pass, "ground");
+  }
+
+  private drawKind(pass: GPURenderPassEncoder, kind: "blend" | "ground"): void {
     if (this.indirect) {
       const v = this.views[0];
-      if (v?.liveBlend.length) pass.executeBundles(v.liveBlend);
+      if (!v) return;
+      // the ground comes first in the pass: flush here, and draw() then skips it
+      if (kind === "ground") { this.flush(v); this.groundFlushed = true; }
+      const live = kind === "blend" ? v.liveBlend : v.liveGround;
+      if (live.length) pass.executeBundles(live);
       return;
     }
     pass.setPipeline(this.blendPipeline);
     pass.setBindGroup(0, this.camBind);
     for (const d of this.draws) {
       const n = this.itemInst[d.item]?.count ?? d.instCount;
-      if (!n || !d.count || !d.blend) continue;
+      if (!n || !d.count || !d[kind]) continue;
       pass.setVertexBuffer(0, d.vb);
       pass.setVertexBuffer(1, d.inst);
       pass.setIndexBuffer(d.ib, "uint32");
@@ -780,6 +821,9 @@ export class ModelRenderer {
   }
 
   /** Indirect mode: pack a view's dynamic instances, write its draw arguments, list its live bundles. */
+  /** drawGround flushed the camera view this frame (draw() needn't again) */
+  private groundFlushed = false;
+
   private flush(v: View): void {
     let off = 0;
     for (const k of this.dynamicItems) {
@@ -807,16 +851,20 @@ export class ModelRenderer {
     v.calls = calls;
     v.live.length = 0;
     v.liveBlend.length = 0;
+    v.liveGround.length = 0;
     const camera = v === this.views[0];
     for (let k = 0; k < v.counts.length; k++) {
       if (!v.counts[k]) continue;
       let b = v.bundles[k];
-      if (b === null) b = v.bundles[k] = this.record(v, k, false);
+      if (b === null) b = v.bundles[k] = this.record(v, k, "opaque");
       if (b) v.live.push(b);
       if (!camera) continue;
       let bb = v.blendBundles[k];
-      if (bb === null) bb = v.blendBundles[k] = this.record(v, k, true);
+      if (bb === null) bb = v.blendBundles[k] = this.record(v, k, "blend");
       if (bb) v.liveBlend.push(bb);
+      let gb = v.groundBundles[k];
+      if (gb === null) gb = v.groundBundles[k] = this.record(v, k, "ground");
+      if (gb) v.liveGround.push(gb);
     }
   }
 
@@ -824,7 +872,7 @@ export class ModelRenderer {
    * Indirect mode: an item's draws, once, into a render bundle for a view (buffers and bind
    * groups are fixed until setModels). Items without draws get none.
    */
-  private record(v: View, item: number, blend: boolean): GPURenderBundle | undefined {
+  private record(v: View, item: number, kind: "opaque" | "blend" | "ground"): GPURenderBundle | undefined {
     if (!this.drawIndex) {
       this.drawIndex = new Map();
       this.draws.forEach((d, i) => {
@@ -832,10 +880,11 @@ export class ModelRenderer {
         if (l) l.push(i); else this.drawIndex!.set(d.item, [i]);
       });
     }
-    const list = this.drawIndex.get(item)?.filter((i) => this.draws[i].blend === blend);
+    const kindOf = (d: DrawItem) => (d.ground ? "ground" : d.blend ? "blend" : "opaque");
+    const list = this.drawIndex.get(item)?.filter((i) => kindOf(this.draws[i]) === kind);
     if (!list?.length) return undefined;
     const enc = this.device.createRenderBundleEncoder({ colorFormats: v.colorFormats, depthStencilFormat: v.depthFormat, sampleCount: v.sampleCount });
-    enc.setPipeline(blend ? this.blendPipeline : v.pipeline);
+    enc.setPipeline(kind === "opaque" ? v.pipeline : this.blendPipeline);
     enc.setBindGroup(0, v === this.views[0] ? this.camBind : v.camBind);
     const dynamic = this.dynamicItems.includes(item);
     let vb: GPUBuffer | null = null, ib: GPUBuffer | null = null, inst: GPUBuffer | null = null;
