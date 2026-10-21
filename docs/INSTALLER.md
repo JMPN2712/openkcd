@@ -159,6 +159,31 @@ None of these are needed by the engine.
   - `createWritable()` writes to a swap file and only replaces the real file
     when it is closed, so an interrupted file never looks complete.
   - A rerun skips every file that is already there at its full size.
+- **Leaving out replaced files** (`web/src/repack.ts`, on by default). Each
+  patch re-ships whole files, so the default install carries 14.2 GiB of
+  versions a later pak replaces (124,993 files; some patch paks are
+  replaced almost entirely by later ones). After copying, the page works
+  out which versions the engine can never pick and rewrites the 48 affected
+  paks without them: the kept entries are copied byte for byte, then the
+  central directory with new offsets. A version goes only when:
+  - **most files:** a higher-ranked pak has the same path (the engine only
+    reads the top version);
+  - **split texture mips** (`foo.dds.N`): a higher version has the **same
+    size**. The engine takes the highest version of the size its header
+    needs, so this stays true for any header, including HD ones added
+    later;
+  - **texture headers:** it's below the highest version whose mips are all
+    there (no complete version: all stay);
+  - **models:** it's below the highest version with geometry (fast-load
+    stubs have none).
+
+  Level paks and HD paks are never rewritten and never replace anything,
+  and paks of equal rank don't replace each other. `game/repacked.json`
+  records each rewritten pak's original size, so a rerun doesn't take it
+  for an unfinished copy. The repack runs over everything installed, so
+  installing a DLC later repacks again. Rank order is `pakRank()` in
+  `vfs.ts`, inferred from the data: if it's ever wrong, the only fix is to
+  install again from the installer.
 - **Persistent storage.** The page asks for it first. Without it, the browser
   may clear tens of GB when the disk runs low: in a test run, Chrome deleted
   the whole copy when its storage ran short. Chrome grants it to sites that
