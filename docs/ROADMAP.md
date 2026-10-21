@@ -138,8 +138,9 @@ playable frame rates on the Potato preset.
         doesn't evict the copy when the disk runs low.
   - [x] Choose what goes in: one voice language, and the HD textures, HD
         voice and HD sound packs off by default (85.7 → 52.5 GiB).
-  - [ ] Repack without the files later patches replace (14.3 GiB of
-        `Data/` in 121,525 files).
+  - [x] Repack without the files later patches replace (`repack.ts`):
+        14.2 GiB of the default 52.5 GiB, in 48 paks. Checked by
+        `scripts/test-repack.ts`.
   - [ ] Cutscene videos (about 15 GiB) installed on demand, or transcoded.
 - [ ] One streaming pass into a slim package in OPFS:
   - compressed textures (GPU formats), compressed meshes, and Opus audio;

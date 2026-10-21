@@ -13,6 +13,8 @@ export interface PakEntry {
   csize: number;
   usize: number;
   offset: number; // local header offset
+  record: number; // central directory record: offset in the archive
+  recordLen: number; // and length
 }
 
 const SIG_EOCD = 0x06054b50;
@@ -32,6 +34,11 @@ function u64(v: DataView, o: number): number {
 }
 
 export async function readCentralDirectory(blob: Blob): Promise<PakEntry[]> {
+  return (await readZip(blob)).entries;
+}
+
+/** The entries plus where the central directory starts (the end of the file data). */
+export async function readZip(blob: Blob): Promise<{ entries: PakEntry[]; cdOffset: number }> {
   const size = blob.size;
   const tailStart = Math.max(0, size - (65535 + 22));
   const tail = await bytes(blob, tailStart, size);
@@ -93,10 +100,11 @@ export async function readCentralDirectory(blob: Blob): Promise<PakEntry[]> {
       }
       x += 4 + len;
     }
+    const record = cdOffset + o;
     o = xEnd + commentLen;
-    if (!name.endsWith("/")) entries.push({ name, method, flags, crc, csize, usize, offset });
+    if (!name.endsWith("/")) entries.push({ name, method, flags, crc, csize, usize, offset, record, recordLen: cdOffset + o - record });
   }
-  return entries;
+  return { entries, cdOffset };
 }
 
 async function dataStart(blob: Blob, e: PakEntry): Promise<number> {

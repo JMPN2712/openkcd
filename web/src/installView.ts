@@ -114,6 +114,12 @@ export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHa
     opts.append(label);
     optBoxes.push({ key, kind, box, size });
   }
+  const repackLabel = el("label", "ctl check");
+  const repackBox = el("input");
+  repackBox.type = "checkbox";
+  repackBox.checked = options.repack;
+  repackLabel.append(repackBox, el("span", undefined, "Leave out the files later patches replace (about 14 GiB with the base game)"));
+  opts.append(repackLabel);
 
   const list = el("ul", "install-list");
   const checks: HTMLInputElement[] = [];
@@ -148,6 +154,7 @@ export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHa
   const selected = () => found.filter((_, i) => checks[i].checked);
   async function updateStorage(): Promise<void> {
     options.language = lang.value;
+    options.repack = repackBox.checked;
     for (const o of optBoxes) {
       (options[o.key] as boolean) = o.box.checked;
       o.size.textContent = formatSize(kindSize(o.kind, o.kind === "hd-voice" ? options.language : undefined));
@@ -162,7 +169,7 @@ export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHa
     storage.className = free !== undefined && free < need ? "note warn" : "note";
     start.disabled = need === 0;
   }
-  for (const c of [...checks, lang, ...optBoxes.map((o) => o.box)]) c.addEventListener("change", () => void updateStorage());
+  for (const c of [...checks, lang, repackBox, ...optBoxes.map((o) => o.box)]) c.addEventListener("change", () => void updateStorage());
   await updateStorage();
 
   const persistNote = el("p", "note");
@@ -185,7 +192,7 @@ export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHa
     const persisted = await navigator.storage.persist().catch(() => false);
     const ac = new AbortController();
     start.disabled = true;
-    const controls = [lang, ...optBoxes.map((o) => o.box)];
+    const controls = [lang, repackBox, ...optBoxes.map((o) => o.box)];
     checks.forEach((c) => (c.disabled = true));
     controls.forEach((c) => (c.disabled = true));
     cancel.hidden = false;
@@ -200,22 +207,30 @@ export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHa
     const target = opfsTarget(await opfs.getDirectoryHandle(GAME_DIR, { create: true }));
     const t0 = performance.now();
     let lastPaint = 0;
-    const paint = (p: Progress) => {
+    const paint = (p: Progress, force = false) => {
       const now = performance.now();
-      if (now - lastPaint < 250 && p.filesDone < p.files) return;
+      if (now - lastPaint < 250 && !force) return;
       lastPaint = now;
-      // rate from bytes actually written, so skipped files don't inflate it
-      const rate = p.written / Math.max((now - t0) / 1000, 0.001);
       bar.max = p.total;
       bar.value = p.done;
+      if (p.phase === "plan") {
+        line.textContent = `Finding the files later patches replace: ${p.done} of ${p.total} paths`;
+        return;
+      }
+      if (p.phase === "repack") {
+        line.textContent = `Rewriting the archives without them: ${formatSize(p.done)} of ${formatSize(p.total)} · ${p.file}`;
+        return;
+      }
+      // rate from bytes actually written, so skipped files don't inflate it
+      const rate = p.written / Math.max((now - t0) / 1000, 0.001);
       line.textContent = `${formatSize(p.done)} of ${formatSize(p.total)} · ${p.filesDone}/${p.files} files · ${formatSize(rate)}/s · ${duration((p.total - p.done) / rate)} left · ${p.file}`;
     };
     try {
       const p = await install(chosen, { ...options }, target, paint, ac.signal);
-      paint(p);
+      paint(p, true);
       const secs = (performance.now() - t0) / 1000;
       result.className = "note ok";
-      result.textContent = `Installed ${p.files - p.skipped} files in ${duration(secs)}${p.skipped ? ` (${p.skipped} were already there)` : ""}. You can delete the installer files now.`;
+      result.textContent = `Installed ${p.files - p.skipped} files in ${duration(secs)}${p.skipped ? ` (${p.skipped} were already there)` : ""}.${p.removed ? ` Left out ${formatSize(p.removed)} of files later patches replace.` : ""} You can delete the installer files now.`;
       onInstalled();
     } catch (err) {
       const e = err as Error;

@@ -2,6 +2,8 @@
 // hands the page an installer folder through its folder input, clicks
 // Install, waits, then checks the copy in OPFS: each installed file's size,
 // and a SHA-256 of its first 64 MiB against the same file in GAME_ROOT.
+// Paks the install repacked (repacked.json) are checked for their recorded
+// sizes instead; scripts/test-repack.ts checks their contents.
 // Driven over the DevTools protocol (Node's built-in WebSocket); no npm deps.
 // usage: node scripts/test-install-browser.ts INSTALLER_DIR [--root=GAME_ROOT] [--keep]
 //   INSTALLER_DIR must hold real files: Chrome's folder upload skips symlinks.
@@ -11,7 +13,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { open, rm } from "node:fs/promises";
+import { open, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -141,7 +143,26 @@ const installed = await evaluate<{ path: string; size: number; sha: string }[]>(
 })()`);
 let failures = 0;
 let compared = 0;
+let repacked = 0;
+const manifest = installed.find((f) => f.path === "repacked.json");
+const sizes: Record<string, { from: number; to: number }> = manifest
+  ? await evaluate(`(async () => {
+      const game = await (await navigator.storage.getDirectory()).getDirectoryHandle("game");
+      return JSON.parse(await (await (await game.getFileHandle("repacked.json")).getFile()).text());
+    })()`)
+  : {};
 for (const f of installed) {
+  if (f === manifest) continue;
+  const r = sizes[f.path.toLowerCase()];
+  if (r && f.size === r.to) {
+    const st = await stat(join(root, f.path)).catch(() => null);
+    if (st && st.size !== r.from) {
+      failures++;
+      console.log(`FAIL ${f.path}: repacked from ${r.from} bytes, the original has ${st.size}`);
+    }
+    repacked++;
+    continue;
+  }
   const fh = await open(join(root, f.path)).catch(() => null);
   if (!fh) continue; // not installed in GAME_ROOT (e.g. the HD voice packs)
   const size = (await fh.stat()).size;
@@ -155,7 +176,7 @@ for (const f of installed) {
     console.log(`FAIL ${f.path}: ${f.size} bytes ${f.sha.slice(0, 12)}, expected ${size} bytes ${sha.slice(0, 12)}`);
   }
 }
-console.log(`${installed.length} files in OPFS, ${compared} compared with ${root}, ${failures} failures`);
+console.log(`${installed.length} files in OPFS, ${compared} compared with ${root}, ${repacked} repacked, ${failures} failures`);
 
 // the page offers the installed copy and opens it
 const opened = await evaluate<string>(`(async () => {

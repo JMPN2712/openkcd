@@ -3,11 +3,15 @@
 // under game/, in the game's folder layout, so the engine opens that copy
 // like an installed game folder. Nothing is uploaded. Interrupted runs
 // resume: a file that is already there at its full size is skipped, and a
-// file being written only appears once it is complete.
+// file being written only appears once it is complete. Afterwards the paks
+// can be repacked without the files later patches replace (repack.ts).
 
+import { planRepack, repackedPak, repackedSize } from "./repack.ts";
 import { checkSlice, readFile, readInstaller, sliceName, sliceSource, type Installer, type InstallerFile } from "./inno.ts";
 
 export const GAME_DIR = "game";
+/** Repacked paks and their original sizes, so a rerun doesn't take them for unfinished copies. */
+const REPACKED = "repacked.json";
 
 /** One installer found in the picked folder. */
 export interface FoundInstaller {
@@ -57,9 +61,11 @@ export interface InstallOptions {
   hdTextures: boolean;
   hdVoice: boolean;
   hdSound: boolean;
+  /** leave out the files later patches replace */
+  repack: boolean;
 }
 
-export const DEFAULT_OPTIONS: InstallOptions = { language: "english", hdTextures: false, hdVoice: false, hdSound: false };
+export const DEFAULT_OPTIONS: InstallOptions = { language: "english", hdTextures: false, hdVoice: false, hdSound: false, repack: true };
 
 export function wanted(f: InstallerFile, o: InstallOptions): boolean {
   if (!isPak(f)) return false;
@@ -174,6 +180,10 @@ export async function findInstallers(root: Dir): Promise<FoundInstaller[]> {
 export interface Target {
   /** size of the file at `path`, or -1 */
   size(path: string): Promise<number>;
+  /** the file at `path`, or null */
+  file(path: string): Promise<Blob | null>;
+  /** every file's path */
+  list(): Promise<string[]>;
   /** write a file; it must only become visible at `path` once complete */
   write(path: string, data: AsyncIterable<Uint8Array>, signal?: AbortSignal): Promise<void>;
 }
@@ -197,14 +207,27 @@ async function resolve(root: Dir, path: string, create: boolean): Promise<{ dir:
 
 /** OPFS target: createWritable() writes to a swap file and only replaces the file on close. */
 export function opfsTarget(root: Dir): Target {
+  async function file(path: string): Promise<File | null> {
+    const at = await resolve(root, path, false);
+    if (!at) return null;
+    for await (const [n, h] of at.dir.entries()) {
+      if (h.kind === "file" && n.toLowerCase() === at.name.toLowerCase()) return (h as FileSystemFileHandle).getFile();
+    }
+    return null;
+  }
   return {
-    async size(path) {
-      const at = await resolve(root, path, false);
-      if (!at) return -1;
-      for await (const [n, h] of at.dir.entries()) {
-        if (h.kind === "file" && n.toLowerCase() === at.name.toLowerCase()) return (await (h as FileSystemFileHandle).getFile()).size;
+    file,
+    size: async (path) => (await file(path))?.size ?? -1,
+    async list() {
+      const out: string[] = [];
+      async function walk(dir: Dir, prefix: string): Promise<void> {
+        for await (const [n, h] of dir.entries()) {
+          if (h.kind === "directory") await walk(h as Dir, `${prefix}${n}/`);
+          else out.push(prefix + n);
+        }
       }
-      return -1;
+      await walk(root, "");
+      return out;
     },
     async write(path, data, signal) {
       const at = (await resolve(root, path, true))!;
@@ -233,6 +256,8 @@ export async function installedGame(): Promise<Dir | null> {
 }
 
 export interface Progress {
+  /** copying out of the installers, finding replaced files, or rewriting paks without them */
+  phase: "copy" | "plan" | "repack";
   done: number; // bytes written or skipped
   written: number; // bytes written in this run
   total: number;
@@ -240,6 +265,20 @@ export interface Progress {
   filesDone: number;
   files: number;
   skipped: number; // files already installed
+  /** paks the repack rewrote, and the bytes it left out (this run) */
+  repacked: number;
+  removed: number;
+}
+
+type Repacked = Record<string, { from: number; to: number }>; // by lower-case path
+
+async function readRepacked(target: Target): Promise<Repacked> {
+  const f = await target.file(REPACKED);
+  return f ? (JSON.parse(await f.text()) as Repacked) : {};
+}
+
+async function* bytes(text: string): AsyncGenerator<Uint8Array> {
+  yield new TextEncoder().encode(text);
 }
 
 /** Install every wanted file of the given installers into `target`. */
@@ -251,12 +290,15 @@ export async function install(
   signal?: AbortSignal,
 ): Promise<Progress> {
   const jobs = installers.flatMap((ins) => ins.installer.files.filter((f) => wanted(f, options)).map((f) => ({ ins, f })));
-  const p: Progress = { done: 0, total: jobs.reduce((a, j) => a + j.f.size, 0), written: 0, file: "", filesDone: 0, files: jobs.length, skipped: 0 };
+  const p: Progress = { phase: "copy", done: 0, total: jobs.reduce((a, j) => a + j.f.size, 0), written: 0, file: "", filesDone: 0, files: jobs.length, skipped: 0, repacked: 0, removed: 0 };
+  const repacked = await readRepacked(target);
   for (const { ins, f } of jobs) {
     if (signal?.aborted) throw signal.reason;
     p.file = f.path;
     onProgress(p);
-    if ((await target.size(f.path)) === f.size) {
+    const size = await target.size(f.path);
+    const r = repacked[f.path.toLowerCase()];
+    if (size === f.size || (r && r.from === f.size && r.to === size)) {
       p.skipped++;
     } else {
       const before = p.done;
@@ -275,5 +317,45 @@ export async function install(
     p.filesDone++;
     onProgress(p);
   }
+  if (options.repack) await repack(target, repacked, p, onProgress, signal);
   return p;
+}
+
+/** Rewrite the installed paks without the files that later patches replace. */
+async function repack(target: Target, repacked: Repacked, p: Progress, onProgress: (p: Progress) => void, signal?: AbortSignal): Promise<void> {
+  const paks = [];
+  for (const path of await target.list()) {
+    if (!path.toLowerCase().endsWith(".pak")) continue;
+    const size = await target.size(path);
+    paks.push({ path, size, open: async () => (await target.file(path))! });
+  }
+  Object.assign(p, { phase: "plan", file: "", done: 0, total: 1 });
+  onProgress(p);
+  const plans = (await planRepack(paks, (done, total) => {
+    p.done = done;
+    p.total = total;
+    onProgress(p);
+  })).filter((plan) => plan.dead.size);
+  Object.assign(p, { phase: "repack", done: 0, total: plans.reduce((a, plan) => a + repackedSize(plan), 0) });
+  for (const plan of plans) {
+    if (signal?.aborted) throw signal.reason;
+    p.file = plan.pak.path;
+    const before = p.done;
+    async function* counted(): AsyncGenerator<Uint8Array> {
+      for await (const chunk of repackedPak(await plan.pak.open(), plan)) {
+        p.done += chunk.byteLength;
+        onProgress(p);
+        yield chunk;
+      }
+    }
+    await target.write(plan.pak.path, counted(), signal);
+    const key = plan.pak.path.toLowerCase();
+    const to = repackedSize(plan);
+    repacked[key] = { from: repacked[key]?.from ?? plan.pak.size, to };
+    await target.write(REPACKED, bytes(JSON.stringify(repacked)));
+    p.done = before + to;
+    p.removed += plan.pak.size - to;
+    p.repacked++;
+    onProgress(p);
+  }
 }

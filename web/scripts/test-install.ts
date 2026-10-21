@@ -1,11 +1,14 @@
 // Node test for src/install.ts: find the installers in a folder, install
 // their .pak files into a scratch folder (standing in for OPFS), compare
 // them with ~/kcd1, then run again to check that finished files are skipped.
+// Then repacks them (leaving out replaced files) and runs once more: nothing
+// is copied again and nothing is left to repack.
 // Also reports paths that more than one installer ships.
 // usage: node scripts/test-install.ts INSTALLER_DIR OUT_DIR [--root=GAME_ROOT] [--only=substring]
 
 import { openAsBlob } from "node:fs";
 import { mkdir, open, readdir, rename, stat } from "node:fs/promises";
+import { relative } from "node:path";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { DEFAULT_OPTIONS, findInstallers, install, isPak, wanted, type Target } from "../src/install.ts";
@@ -35,6 +38,14 @@ function nodeDir(path: string): FileSystemDirectoryHandle {
 // like OPFS: write to a temporary name, rename when complete
 const target: Target = {
   size: (p) => stat(join(outDir, p)).then((s) => s.size, () => -1),
+  file: (p) => Promise.resolve().then(() => openAsBlob(join(outDir, p))).catch(() => null), // openAsBlob throws synchronously
+  async list() {
+    const out: string[] = [];
+    for (const e of await readdir(outDir, { withFileTypes: true, recursive: true })) {
+      if (e.isFile() && !e.name.endsWith(".part")) out.push(relative(outDir, join(e.parentPath, e.name)));
+    }
+    return out;
+  },
   async write(p, data) {
     const dest = join(outDir, p);
     await mkdir(dirname(dest), { recursive: true });
@@ -58,7 +69,8 @@ console.log(`${owners.size} paths, ${shared.length} shipped by more than one ins
 
 let last = 0;
 const t0 = performance.now();
-const p = await install(found, DEFAULT_OPTIONS, target, (pr) => {
+const copyOnly = { ...DEFAULT_OPTIONS, repack: false };
+const p = await install(found, copyOnly, target, (pr) => {
   const now = performance.now();
   if (now - last > 5000) {
     last = now;
@@ -94,10 +106,19 @@ for (const f of found) for (const file of f.installer.files.filter((x) => wanted
   await b.close();
 }
 
-const again = await install(found, DEFAULT_OPTIONS, target, () => {});
+const again = await install(found, copyOnly, target, () => {});
 if (again.skipped !== again.files) {
   console.log(`FAIL second run reinstalled ${again.files - again.skipped} files`);
   failures++;
 }
-console.log(`compared ${compared} files with ${root}; second run skipped ${again.skipped}/${again.files}; ${failures} failures`);
+console.log(`compared ${compared} files with ${root}; second run skipped ${again.skipped}/${again.files}`);
+
+const packed = await install(found, DEFAULT_OPTIONS, target, () => {});
+console.log(`repack: ${packed.repacked} paks rewritten, ${(packed.removed / 2 ** 30).toFixed(2)} GiB left out`);
+const third = await install(found, DEFAULT_OPTIONS, target, () => {});
+if (third.skipped !== third.files || third.removed) {
+  console.log(`FAIL run after the repack copied ${third.files - third.skipped} files and left out ${third.removed} more bytes`);
+  failures++;
+}
+console.log(`${failures} failures`);
 process.exit(failures ? 1 : 0);
