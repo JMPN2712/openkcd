@@ -280,6 +280,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     playerInfo = "";
   }).catch((err) => { playerInfo = `Henry: ${(err as Error).message}`; });
   const npcWorld = new NpcWorld(vfs, npcEntities, schedules, (x, y) => heightAt(terrain, x, y));
+  // NPCs stand on the same surfaces as Henry: within 0.5 m up (steps) and 1.5 m down of their planned height,
+  // else up to 1 m up (navmesh routes run up to 0.85 m under the ground in places)
+  npcWorld.surface = (x, y, z) => (surroundings.ground(x, y, z + 0.5, z - 1.5) ?? surroundings.ground(x, y, z + 1, z - 1.5))?.z ?? null;
   // behaviour trees for NPCs at work (loaded in the background: ~1 s of tree parsing)
   let npcAi: NpcAi | null = null;
   void (async () => {

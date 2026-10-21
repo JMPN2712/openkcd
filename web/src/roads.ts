@@ -92,8 +92,50 @@ export class Roads {
     return out;
   }
 
+  private meshes = new Map<number, Promise<CgfMesh>>();
+
   async mesh(i: number): Promise<CgfMesh> {
-    const s = (await this.start) + this.index.offset[i];
-    return roadMesh(new Uint8Array(await this.blob.slice(s, s + this.index.size[i]).arrayBuffer()));
+    let m = this.meshes.get(i);
+    if (!m) {
+      m = this.start.then(async (start) => {
+        const s = start + this.index.offset[i];
+        return roadMesh(new Uint8Array(await this.blob.slice(s, s + this.index.size[i]).arrayBuffer()));
+      });
+      this.meshes.set(i, m);
+      // keep the last couple of thousand (a long walk would otherwise keep every road it passed)
+      if (this.meshes.size > 2048) this.meshes.delete(this.meshes.keys().next().value!);
+    }
+    return m;
+  }
+
+  /**
+   * Roads `ids` (same material) as one mesh, relative to the first road's centre: one draw
+   * instead of one per road (Rataje's streamed radius holds hundreds).
+   */
+  async merged(ids: number[]): Promise<CgfMesh> {
+    const parts = await Promise.all(ids.map((i) => this.mesh(i)));
+    const c = this.index.center, o = ids[0] * 3;
+    let nv = 0, ni = 0;
+    for (const p of parts) { nv += p.positions.length / 3; ni += p.indices.length; }
+    const positions = new Float32Array(nv * 3), normals = new Float32Array(nv * 3), uvs = new Float32Array(nv * 2), colors = new Uint8Array(nv * 4), indices = new Uint32Array(ni);
+    const min: [number, number, number] = [Infinity, Infinity, Infinity], max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+    let v = 0, k = 0;
+    parts.forEach((p, n) => {
+      const d = [0, 1, 2].map((a) => c[ids[n] * 3 + a] - c[o + a]);
+      const count = p.positions.length / 3;
+      for (let i = 0; i < count; i++) for (let a = 0; a < 3; a++) {
+        const x = p.positions[i * 3 + a] + d[a];
+        positions[(v + i) * 3 + a] = x;
+        min[a] = Math.min(min[a], x);
+        max[a] = Math.max(max[a], x);
+      }
+      normals.set(p.normals!, v * 3);
+      uvs.set(p.uvs!, v * 2);
+      colors.set(p.colors!, v * 4);
+      for (let i = 0; i < p.indices.length; i++) indices[k + i] = p.indices[i] + v;
+      v += count;
+      k += p.indices.length;
+    });
+    return { ...parts[0], positions, normals, uvs, colors, indices, subsets: [{ firstIndex: 0, numIndices: ni, firstVert: 0, numVerts: nv, matId: 0 }], bboxMin: min, bboxMax: max };
   }
 }

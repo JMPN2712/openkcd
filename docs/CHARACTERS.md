@@ -74,3 +74,20 @@ viewer (`web/src/character.ts`, `characterView.ts`). Verified with
 - **Also unused for now:** dirt, blood and scratch layers (`%DIRT_SYSTEM`,
   `Decal`/`Custom` slots, `ZoneBloodN`), detail maps, normal maps, and the
   `Humanskin` subsurface shading.
+
+## Two-state garments
+
+`item/armor` rows can name a second clothing piece (`clothing2_id`). In all
+26 such rows it's another state of the same garment: 24 hoods up and down
+(`hood_001` / `hood_001_down`, `hood_004_up` / `hood_004_down`), a tabard
+variant and a test item. Only one is drawn: the `…down` hood (towns by day),
+else the first. Drawing both put a raised hood on everyone wearing one and
+made the two shapes clip through each other.
+
+## Attached entities
+
+5,039 entities in Rataje's mission file have a `ParentId`; their `Pos` and
+`Rotate` are relative to the parent (`HoeOnSlot` at `-0.0001, 0.05, 1.07`).
+`parseEntityIndex` composes them into world space (parents first). None of
+them is a drawn prop yet: they're pickable items, whose models come from the
+item database.
