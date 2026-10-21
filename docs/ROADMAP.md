@@ -3,6 +3,38 @@
 The milestones come in order. Every feature ships with a **Potato** preset,
 because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
 
+## Where things stand (2026-10-20)
+
+- **Milestone 2:** installing from the GOG installer into OPFS works,
+  including the repack without replaced files (default install 38.2 GiB).
+  Next: the slim format (GPU-compressed textures, compressed meshes, Opus
+  audio, region chunks).
+- **Visual pass on the walking simulator (done this session):** grass
+  (merged-mesh sectors), roads, octree decals, `%DECAL` blending and vertex
+  colours, far-tree impostors, water ripples, ambient light rebalanced,
+  foliage shading, alpha to coverage, sharper grass/leaf/decal textures.
+  Formats and choices are in `docs/LEVELS.md`; costs in
+  `docs/PERFORMANCE.md`.
+- **NPC fixes:** NPCs stand on collision surfaces (not navmesh heights), the
+  walk cycle follows the distance walked, hoods draw one state (down). See
+  `docs/GAMELOGIC.md` and `docs/CHARACTERS.md`.
+- **Open, reported by the user:** "objects completely misarranged" somewhere
+  in the world. Not found: `.cga` parts, prop rotations, editor layers and
+  parented entities were checked. Ask the user for the x / y from the HUD.
+- **Not yet checked in the user's Chrome:** everything since the installer
+  commit was verified headless only (`scripts/render-player.ts`,
+  `bench-presets.ts`, the tests). Ask the user to walk around and report.
+- **Candidates next:** waterfalls and shore foam; road/decal normal maps (the
+  8-byte-per-vertex road block is probably tangents); far-tree culling per
+  map cell for the Vega 7; NPCs in Rattay are mostly indoors at noon
+  (schedules); hiding body parts under clothes (needs a research note on how
+  the game maps `item/body_subpart` to the body mesh).
+- **Debugging renders:** `node scripts/render-player.ts OUT --at x,y,yaw`
+  with `--fly x,y,z,yaw,pitch` (z 0 = 2 m above ground; keep `--at` near the
+  camera so the scene streams there, but not on it, or Henry blocks the
+  view), `--npcs`, `--at-npc NAME`, `--grass R`, `--no-roads`,
+  `--no-far-trees`, `HIDE=regex` to drop models, `--clock HH:MM`.
+
 ## Done so far (foundations)
 
 These came before the milestones were set. They are the base for all of them.

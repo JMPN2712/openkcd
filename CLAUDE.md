@@ -85,12 +85,13 @@ questlines whole and never cuts anything the main quest depends on.
 | Area | Files | State |
 |---|---|---|
 | Paks, VFS | `zip.ts`, `paks.ts`, `vfs.ts`, `tree.ts` | Reads all paks in place (Blob.slice) |
-| Installer | `inno.ts`, `lzma.ts`, `install.ts`, `installView.ts` | Reads GOG's Inno Setup installers in place (base game and DLC) and installs their paks into OPFS; the engine opens that copy |
+| Installer | `inno.ts`, `lzma.ts`, `install.ts`, `installView.ts`, `repack.ts` | Reads GOG's Inno Setup installers in place (base game and DLC), installs their paks into OPFS and repacks them without files later patches replace (52.5 → 38.2 GiB); the engine opens that copy |
 | Textures | `dds.ts`, `texture.ts`, `bcn.ts` | Split DDS assembly, BC1–7 (GPU and CPU) |
 | Models, materials | `cgf.ts`, `mtl.ts`, `model.ts`, `renderer.ts` | .cgf/.cga/.skin/.chr, WebGPU renderer |
 | Characters | `character.ts`, `skeleton.ts`, `characterView.ts`, `tables.ts` | Souls and clothing presets from the database |
 | Animation | `anim.ts` (.caf), `dba.ts`, `clips.ts`, `pose.ts`, `mannequin.ts` | Clips decode and skin; no blending or locomotion controller yet |
-| Terrain, levels | `terrain.ts`, `cover.ts`, `terrainRenderer.ts`, `waterRenderer.ts`, `levelObjects.ts`, `levelLayers.ts`, `world.ts`, `levelView.ts` | Rataje level: terrain, objects, vegetation, water, editor layers, streaming |
+| Terrain, levels | `terrain.ts`, `cover.ts`, `terrainRenderer.ts`, `waterRenderer.ts`, `levelObjects.ts`, `levelLayers.ts`, `world.ts`, `levelView.ts` | Rataje level: terrain, objects, vegetation, water (ripples), editor layers, streaming |
+| Ground and far field | `mergedMeshes.ts` (grass), `roads.ts`, `decals.ts`, `farTrees.ts` | 25M grass/plant instances, 14,710 roads, 20,212 decals (blended in the ground pass), impostor cards for 293k distant trees |
 | Navigation | `navmesh.ts`, `crowd.ts` | Navmesh decode, A* plus funnel, collision avoidance |
 | NPCs | `levelEntities.ts`, `schedule.ts`, `npcs.ts`, `npcAi.ts` | Placement, daily schedules, crowd |
 | Game logic | `bt.ts`, `btRuntime.ts`, `btWorld.ts`, `luaHost.ts` (wasmoon Lua 5.1), `typeDefs.ts` | Behaviour-tree interpreter running work routines |
