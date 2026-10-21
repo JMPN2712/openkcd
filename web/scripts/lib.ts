@@ -11,6 +11,7 @@ import { Vfs } from "../src/vfs.ts";
 import { ASSET_RE } from "../src/assets.ts";
 import { dataStart, readCentralDirectory, readEntry } from "../src/zip.ts";
 import { Roads } from "../src/roads.ts";
+import { Decals } from "../src/decals.ts";
 import { parseTerrain, type Terrain } from "../src/terrain.ts";
 import { parseLevelObjects, type LevelObjects } from "../src/levelObjects.ts";
 import { parseCover, type Cover } from "../src/cover.ts";
@@ -46,8 +47,9 @@ export interface Level {
   surfaceTypes: Map<number, string>;
   /** grass and ground plants (merged-mesh sectors) */
   merged: MergedMeshes;
-  /** roads, read from terrain.dat as they stream in */
+  /** roads, read from terrain.dat as they stream in, and the octree decals */
   roads: Roads;
+  decals: Decals;
 }
 
 /** Rataje with the asset VFS (level files on top), like the world view. */
@@ -79,7 +81,7 @@ export async function openRataje(root: string, opts: { cover?: boolean; hd?: boo
   const surfaceTypes = parseSurfaceTypes(ldText);
   const missionEnv = await read("mission_mission0.xml");
   const tod = missionEnv ? parseTimeOfDay(new TextDecoder().decode(missionEnv)) : null;
-  return { sources, vfs, terrain, objects, cover, props, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(lb, entries), roads: new Roads(lb, dataStart(lb, entries.find((x) => x.name.toLowerCase() === "terrain/terrain.dat")!), objects.roads) };
+  return { sources, vfs, terrain, objects, cover, props, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(lb, entries), roads: new Roads(lb, dataStart(lb, entries.find((x) => x.name.toLowerCase() === "terrain/terrain.dat")!), objects.roads), decals: new Decals(objects.decalIndex, terrain) };
 }
 
 /** The Dawn instance must outlive its devices (collected, it aborts the process on the next map). */

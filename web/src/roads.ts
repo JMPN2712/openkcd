@@ -82,6 +82,19 @@ export class Roads {
     return this.index.radius.length;
   }
 
+  center(i: number): [number, number, number] {
+    const c = this.index.center;
+    return [c[i * 3], c[i * 3 + 1], c[i * 3 + 2]];
+  }
+
+  priority(i: number): number {
+    return this.index.priority[i];
+  }
+
+  material(i: number): number {
+    return this.index.material[i];
+  }
+
   /** Roads whose bounds come within `radius` of `center` (xy). */
   near(center: [number, number], radius: number): number[] {
     const out: number[] = [];
