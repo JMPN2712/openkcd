@@ -403,7 +403,7 @@ export async function showScene(host: HTMLElement, ctx: TextureContext, load: Sc
   ];
   if (scene.parts.length === 1) {
     const m = scene.parts[0].model;
-    rows.push(["Source", m.hit.pak.path], ["Material", m.mtlPath ?? "none"]);
+    rows.push(["Source", m.hit?.pak.path ?? "built in code"], ["Material", m.mtlPath ?? "none"]);
     if (m.cgf.skippedNodes.length) rows.push(["Hidden nodes", m.cgf.skippedNodes.join(", ")]);
   }
   for (const [k, v] of rows) info.append(el("dt", undefined, k), el("dd", undefined, v));
@@ -414,7 +414,7 @@ export async function showScene(host: HTMLElement, ctx: TextureContext, load: Sc
       const d = el("details", "part");
       const sum = el("summary");
       sum.append(el("span", undefined, p.label ?? p.model.path), el("span", "dim", ` ${p.model.path.slice(p.model.path.lastIndexOf("/") + 1)}`));
-      d.append(sum, el("p", "dim", `${p.model.hit.pak.path} · ${p.model.mtlPath ?? "no material"}`), materialList(p.model, openTexture));
+      d.append(sum, el("p", "dim", `${p.model.hit?.pak.path ?? "built in code"} · ${p.model.mtlPath ?? "no material"}`), materialList(p.model, openTexture));
       host.append(d);
     }
   }

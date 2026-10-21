@@ -243,7 +243,7 @@ for (const [i, v] of list.entries()) {
     colorAttachments: [{ view: msaa.createView(), resolveTarget: target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.70, a: 1 }, loadOp: "clear", storeOp: "discard" }],
     depthStencilAttachment: { view: depth.createView(), depthClearValue: 1, depthLoadOp: "clear", depthStoreOp: "discard" },
   });
-  if (!npcsOnly) { terrainR.draw(pass); models.draw(pass); }
+  if (!npcsOnly) { terrainR.draw(pass); models.drawGround(pass); models.draw(pass); }
   if (npcWorld) npcR.draw(pass);
   if (!npcsOnly) water.draw(pass);
   pass.end();

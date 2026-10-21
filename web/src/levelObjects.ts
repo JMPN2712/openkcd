@@ -19,7 +19,12 @@
 //       Vec3 fogColor, Plane fogPlane (+72), …, u32 nVertices (+124),
 //       u32 nContour (+136), …, Vec3 vertices[nVertices] (+208, absolute, an
 //       outline at the water height; rivers slope), Vec3 contour[nContour]
-//     11 road, 23 …: variable size, not decoded; parsing a block stops there.
+//     11 road (decoded from the data, see roads.ts and docs/LEVELS.md): u32 type, AABB, …,
+//       u8 sort priority (+38), u32 mesh vertices V (+80), u32 indices I (+84), u32 V again,
+//       u32 0, u32 outline points O (+96), u32, i32 material (+104), then V × 12 bytes of
+//       vertices, I × u16 indices (padded to 4 bytes), V × 8 bytes, O × 12 bytes:
+//       108 + 20 V + 2 I (+2) + 12 O bytes
+//     23 …: variable size, not decoded; parsing a block stops there.
 //   Blocks are *mostly* sorted by type (123 exceptions): parsing through
 //   decals and water found 3,999 more vegetation instances than stopping at
 //   the first decal.
@@ -37,9 +42,23 @@ export interface LevelObjects {
   vegScale: Float32Array;
   vegAngle: Float32Array;
   water: WaterVolume[];
+  /** roads (type 11) with a mesh: where each record is in terrain.dat, and what roads.ts needs to place it */
+  roads: RoadIndex;
   decals: number;
   nodes: number;
   skippedTypes: Map<number, number>; // blocks whose tail starts with an undecoded type
+}
+
+export interface RoadIndex {
+  /** byte offset of the record in terrain.dat, and its size */
+  offset: Float64Array;
+  size: Uint32Array;
+  /** bounding box centre (the vertices are relative to it) and radius */
+  center: Float32Array; // 3 per road
+  radius: Float32Array;
+  material: Int32Array;
+  /** draw order: higher priorities over lower */
+  priority: Uint8Array;
 }
 
 export interface WaterVolume {
@@ -51,6 +70,12 @@ export interface WaterVolume {
   fogDensity: number;
 }
 
+/** Bytes of a road record (type 11). */
+export function roadSize(dv: DataView, p: number): number {
+  const v = dv.getUint32(p + 80, true), i = dv.getUint32(p + 84, true), o = dv.getUint32(p + 96, true);
+  return 108 + 20 * v + ((2 * i + 3) & ~3) + 12 * o;
+}
+
 /** Bytes of an object record, or null for types not decoded. */
 function recordSize(dv: DataView, p: number, type: number): number | null {
   switch (type) {
@@ -58,14 +83,35 @@ function recordSize(dv: DataView, p: number, type: number): number | null {
     case 2: return 64;
     case 7: return 116;
     case 9: return 208 + 12 * (dv.getUint32(p + 124, true) + dv.getUint32(p + 136, true));
+    case 11: return roadSize(dv, p);
     default: return null;
   }
+}
+
+function roadIndex(dv: DataView, at: number[]): RoadIndex {
+  const n = at.length;
+  const r: RoadIndex = { offset: new Float64Array(n), size: new Uint32Array(n), center: new Float32Array(n * 3), radius: new Float32Array(n), material: new Int32Array(n), priority: new Uint8Array(n) };
+  at.forEach((p, i) => {
+    r.offset[i] = p;
+    r.size[i] = roadSize(dv, p);
+    let d2 = 0;
+    for (let k = 0; k < 3; k++) {
+      const lo = dv.getFloat32(p + 4 + k * 4, true), hi = dv.getFloat32(p + 16 + k * 4, true);
+      r.center[i * 3 + k] = (lo + hi) / 2;
+      d2 += ((hi - lo) / 2) ** 2;
+    }
+    r.radius[i] = Math.sqrt(d2);
+    r.material[i] = dv.getInt32(p + 104, true);
+    r.priority[i] = dv.getUint8(p + 38);
+  });
+  return r;
 }
 
 export function parseLevelObjects(bytes: Uint8Array, offset: number): LevelObjects {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   // first pass: count, so the typed arrays can be sized exactly
   let nBrush = 0, nVeg = 0, nodes = 0, decals = 0;
+  const roadAt: number[] = [];
   const water: WaterVolume[] = [];
   const skippedTypes = new Map<number, number>();
   const walk = (o: number, visit: (p: number, type: number) => void): number => {
@@ -90,6 +136,7 @@ export function parseLevelObjects(bytes: Uint8Array, offset: number): LevelObjec
     if (t === 1) nBrush++;
     else if (t === 2) nVeg++;
     else if (t === 7) decals++;
+    else if (t === 11) { if (dv.getUint32(p + 80, true)) roadAt.push(p); }
     else if (t === 9) {
       const n = dv.getUint32(p + 124, true);
       const vertices = new Float32Array(n * 3);
@@ -113,13 +160,14 @@ export function parseLevelObjects(bytes: Uint8Array, offset: number): LevelObjec
     vegScale: new Float32Array(nVeg),
     vegAngle: new Float32Array(nVeg),
     water,
+    roads: roadIndex(dv, roadAt),
     decals,
     nodes: 0,
     skippedTypes,
   };
   let bi = 0, vi = 0;
   const end = walk(offset, (p, t) => {
-    if (t === 7 || t === 9) return;
+    if (t === 7 || t === 9 || t === 11) return;
     if (t === 1) {
       out.brushName[bi] = dv.getUint16(p + 36, true);
       out.brushMaterial[bi] = dv.getInt32(p + 92, true);

@@ -148,10 +148,8 @@ The octree follows the terrain tree and runs exactly to the end of
 - **Type order is not strict.** 123 blocks break ascending type order.
   Parsing through decals and water found **3,999 more vegetation
   instances** that had been hidden behind decals.
-- **Not decoded yet:** roads (11) and type 23, both variable-length.
-  Size formulas based on the road's vertex and index counts (e.g. 108 + 12v
-  + 2i) don't reproduce where the next record starts, so parsing a block
-  stops at them.
+- **Not decoded yet:** type 23, variable-length; parsing a block stops at
+  it. (Roads, type 11, are decoded: see below.)
 - **Water rendering** (`web/src/waterRenderer.ts`): outlines are ear-clipped
   in XY and drawn in a blended pass after the opaque geometry, with a
   fog-colour tint, Fresnel sky reflection and a sun glint. That's 2,109
@@ -218,12 +216,46 @@ elder bushes and branch piles.
   nearest 800 models, then everything). Later rebuilds load everything in
   one pass while the old scene stays up: replacing it with the quick pass
   made every building past the nearest 800 models blink out every 150 m.
-- **Known gaps:**
-  - no roads or decals (octree types 7 and 11 are not drawn);
-  - road-edge pieces (`land_deco/road_side_*`, about 10,000) and decal
-    strips (`road_grass_strip*`, `decal_puddle*`: `%DECAL` materials,
-    alpha-tested at 0.5) render as hard-edged dark slabs. In the game they
-    fade into the ground (vertex colours, which aren't decoded yet).
+- **Ground decals** (`%DECAL` materials: road strips `road_grass_strip*`,
+  puddles, mud, and every road) are drawn blended right after the terrain
+  (`ModelRenderer.drawGround`), before any other object, so grass and rocks
+  cover them normally. Their alpha is the texture's alpha times the vertex
+  alpha. The vertex shader pulls them 8 cm plus 0.3% of the distance towards
+  the eye, because the terrain's triangulation pokes through by a few
+  centimetres here and there. Their textures load at 4× the object size.
+- **Vertex colours** (stream 3, or bytes 8–11 of the packed P3S_C4B_T2S
+  vertex) multiply `%VERTCOLORS` materials, except on the Vegetation
+  shader, where they hold bending weights (they turned grass black).
+- **Known gaps:** octree decals (type 7) are not drawn.
+
+## Roads (`web/src/roads.ts`)
+
+Octree type 11: 14,710 roads in Rataje (trails, mud tracks with ruts,
+drainage ditches, ploughed fields), 3.8M vertices and 5.7M triangles in
+all. Each carries a mesh built by the editor. Decoded from the data:
+
+| Offset | Field |
+|---|---|
+| +0 | u32 type (11), AABB (6 f32) |
+| +38 | u8 sort priority (5–100; higher draws over lower) |
+| +40 | 4 f32 (texture range along the road; unused) |
+| +80 | u32 mesh vertices V, u32 indices I, u32 V again, u32 0 |
+| +96 | u32 outline points O, u32 (0–3), i32 material (terrain material list) |
+| +108 | V × 12 bytes: half x, y, z relative to the AABB centre, half alpha, half u, v |
+| | I × u16 indices (padded to 4 bytes), V × 8 bytes, O × 12 bytes |
+
+- **Size:** 108 + 20 V + 2 I (+2) + 12 O bytes. With it, every road is
+  followed by a valid record or its node's end (no overruns), and parsing
+  now runs through the roads to the next type 23 record.
+- **Checks:** the indices stay below V and come in whole triangles; the
+  vertices sit 4 cm under the bilinear terrain height (median; 5th–95th
+  percentile −5 to 0 cm), so they're lifted 6 cm.
+- **Materials:** `Materials/terrain/roads/*.mtl`, Illum `%DECAL%VERTCOLORS`.
+  The diffuse texture's alpha fades the road's sides (0 at v = 0 and 1); the
+  vertex alpha fades its ends.
+- **Streaming:** `terrain.dat` is stored uncompressed in `level.pak`, so a
+  road's record is read by byte range when it comes within the streaming
+  radius, and drawn as a one-instance model (lowest priority first).
 
 ## Grass: merged-mesh sectors (`web/src/mergedMeshes.ts`)
 

@@ -116,9 +116,10 @@ playable frame rates on the Potato preset.
       is partly white-balanced, and the bounce from below comes from the
       sunlit ground.
 - [x] Streaming: buildings no longer blink out at each rebuild.
-- [ ] Road-edge pieces and `%DECAL` strips and puddles blended into the
-      ground (needs vertex colours); roads (octree type 11) and decals
-      (type 7).
+- [x] Roads (octree type 11, 14,710 meshes) and `%DECAL` strips and
+      puddles, blended into the ground; vertex colours.
+- [ ] Octree decals (type 7); road normal maps (the 8-byte-per-vertex block
+      is probably tangents).
 - [ ] Terrain tone: the ground looks brighter and yellower than in the game
       next to the road pieces; check the colour-map gain.
 - [ ] Far vegetation (forests beyond the streamed radius are terrain colour

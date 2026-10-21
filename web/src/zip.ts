@@ -107,7 +107,8 @@ export async function readZip(blob: Blob): Promise<{ entries: PakEntry[]; cdOffs
   return { entries, cdOffset };
 }
 
-async function dataStart(blob: Blob, e: PakEntry): Promise<number> {
+/** Where an entry's data starts in the archive (after its local header). */
+export async function dataStart(blob: Blob, e: PakEntry): Promise<number> {
   const lh = await bytes(blob, e.offset, e.offset + 30);
   if (lh.byteLength < 30 || lh.getUint32(0, true) !== SIG_LFH) {
     throw new Error(`bad local header for ${e.name}`);

@@ -87,7 +87,7 @@ for (const pp of gpus) {
     let caches = cachesByDim.get(q.maxTextureDim);
     if (!caches) cachesByDim.set(q.maxTextureDim, (caches = newWorldCaches()));
     for (const sc of SCENES) {
-      const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, sc.at, q.streamRadius, { maxModels: 20000, maxTextureDim: q.maxTextureDim, caches, props: lvl.props, hiddenLayers: lvl.hiddenLayers, normalMaps: q.normalMaps && !process.env.NO_NORMAL });
+      const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, sc.at, q.streamRadius, { maxModels: 20000, maxTextureDim: q.maxTextureDim, caches, props: lvl.props, hiddenLayers: lvl.hiddenLayers, normalMaps: q.normalMaps && !process.env.NO_NORMAL, roads: process.env.NO_ROADS ? undefined : lvl.roads });
       const items = lodItems(scene);
       models.setModels(items);
       models.setShadow(shadowMap);
@@ -155,6 +155,7 @@ for (const pp of gpus) {
         });
         sky.draw(p);
         terrainR.draw(p);
+        models.drawGround(p);
         models.draw(p);
         grassR.draw(p);
         npcR.draw(p);

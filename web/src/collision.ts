@@ -83,7 +83,7 @@ export function collisionShape(wm: Pick<WorldModel, "path" | "kind" | "lods">): 
   const opaque = (mesh: LoadedModel["cgf"]["meshes"][number]) => mesh.subsets
     .filter((s) => {
       const mat = m.materials[m.materials.length === 1 ? 0 : s.matId];
-      return !mat?.nodraw && !(mat?.alphaTest && mat.alphaTest > 0);
+      return !mat?.nodraw && !(mat?.alphaTest && mat.alphaTest > 0) && !mat?.genMask.includes("%DECAL");
     })
     .map((s) => [s.firstIndex, s.numIndices]);
   const vis = transformed(m, opaque);
