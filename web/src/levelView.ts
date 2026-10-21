@@ -511,6 +511,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     }
     renderer.prepare(cam, vp, { lighting: skyState?.lighting, lodDistance: q.terrainLod });
     models.setCamera(vp, cam.pos);
+    water.time = now / 1000;
     water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85], undefined, skyState?.lighting, skyState?.horizon);
     npcR.setCamera(vp, cam.pos);
     playerR.setCamera(vp, cam.pos);
