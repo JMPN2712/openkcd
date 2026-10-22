@@ -56,12 +56,12 @@ function toMaterial(n: XmlNode): Material {
     alphaTest: Number(n.attrs.AlphaTest ?? 0),
     // hidden: Nodraw shader, the NODRAW flag (0x400), helper textures, physics/shadow proxy
     // sub-materials (proxy_mat_*, shadowproxy: present in render meshes, never
-    // drawn), EYE_AO_OVERLAY (a blended shadow shell over the eyeballs), and volumetric
+    // drawn), and volumetric
     // light-shaft shaders (Geometrybeam, Templbeamproc: additive beams, black when drawn opaque)
     nodraw: /^(nodraw|geometrybeam|templbeamproc)$/i.test(shader) || (Number(n.attrs.MtlFlags ?? 0) & 0x400) !== 0 ||
       // Materials/special/: collision/barrier/raycast proxies, replace-me placeholders
       /^materials[\\/]special[\\/]/i.test(textures.get("Diffuse") ?? "") ||
-      /(^|_)proxy|shadowproxy/i.test(n.attrs.Name ?? "") || (n.attrs.StringGenMask ?? "").includes("%EYE_AO_OVERLAY"),
+      /(^|_)proxy|shadowproxy/i.test(n.attrs.Name ?? ""),
     genMask: n.attrs.StringGenMask ?? "",
     params: { ...(n.children.find((c) => c.tag === "PublicParams")?.attrs ?? {}) },
   };

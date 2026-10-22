@@ -14,6 +14,7 @@ import { parseXml, type XmlNode } from "./xml.ts";
 import { readTable, indexBy, groupBy, type Row } from "./tables.ts";
 import type { Vfs } from "./vfs.ts";
 import { loadModel, type LoadedModel } from "./model.ts";
+import { hideCoveredSkin } from "./coverage.ts";
 import { parseSkeleton, type Skeleton } from "./skeleton.ts";
 import { multiply } from "./mat4.ts";
 
@@ -334,6 +335,17 @@ export async function loadCharacter(
     } catch (err) {
       notes.push(`${part.kind} ${part.label} (${part.skin}): ${(err as Error).message}`);
     }
+  }
+  // the body's skin under the clothes is left out, so it can't poke through (coverage.ts)
+  const garments = parts.filter((p) => (p.part.kind === "cloth" || p.part.kind === "attachment") && !p.transform).flatMap((p) => p.model.cgf.meshes);
+  // and hair strands just under or over headwear (rays outward from the middle of the head)
+  const head = parts.find((p) => p.part.kind === "head")?.model.cgf.meshes[0];
+  const headCentre = head ? ([0, 1, 2].map((k) => (head.bboxMin[k] + head.bboxMax[k]) / 2 + head.transform[12 + k]) as [number, number, number]) : undefined;
+  for (const p of parts) {
+    if (p.part.kind !== "body" && !(p.part.kind === "hair" && headCentre)) continue;
+    const { model, hidden } = hideCoveredSkin(p.model, garments, p.part.kind === "hair" ? { from: headCentre } : {});
+    p.model = model;
+    if (hidden) notes.push(`${p.part.label}: ${hidden} triangles under clothing left out`);
   }
   return { spec, parts, notes };
 }

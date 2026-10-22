@@ -56,6 +56,16 @@ viewer (`web/src/character.ts`, `characterView.ts`). Verified with
   viewer nudges outer layers towards the camera by their body-layer order to
   avoid z-fighting.
 
+- **Skin and hair under clothing.** Where the body is fuller than the garment, the skin pokes
+  through: toes and insteps showed through every shoe and boot. The body's skin under clothing
+  is left out when a character is assembled (`web/src/coverage.ts`). This is our own geometric
+  test, not the game's method, which is undocumented: a body vertex is covered when a ray along
+  its normal, from 3 cm inside the skin to 4 cm outside, meets a garment. Triangles with all three
+  vertices covered are dropped. Hair gets the same test with rays outward from the middle of the
+  head, so strands no longer poke through hat bands. The NPC body skins carry no region data
+  that would do this (no vertex colours, one subset); a research note on how the game hides body
+  parts (`item/armor_archetype2body_subpart`, `is_exclusive`) could replace it later.
+
 ## Materials
 
 - **Colorizing (`%COLORIZING`, 1,313 materials;
@@ -68,9 +78,13 @@ viewer (`web/src/character.ts`, `characterView.ts`). Verified with
     (0…6). About 10–25% of the materials use non-neutral values.
   - The viewer applies these in gamma space using an HSV shift. The exact
     engine formula is not verified.
-- **Eyes.** `Shader="Eye"` with `%EYE_AO_OVERLAY` is a blended shadow shell
-  over the eyeballs. Drawn opaque it hides the eyes, so the viewer skips it
-  until there is a blended pass.
+- **Eyes.** `Shader="Eye"` with `%EYE_AO_OVERLAY` is a shadow shell over the
+  eyeballs. Its texture is a darkening mask: white in the middle, black at the
+  lids and corners, alpha its coverage. It is multiplied over the eyeball in
+  the blended pass, at 70%: at full strength the lids got a hard black line.
+- **Vertex colours on character skins are masks, not colour.** Every eye
+  vertex is `255,255,0`, so multiplying them in made eyes yellow. Only static
+  meshes use `%VERTCOLORS` as a tint.
 - **Also unused for now:** dirt, blood and scratch layers (`%DIRT_SYSTEM`,
   `Decal`/`Custom` slots, `ZoneBloodN`), detail maps, normal maps, and the
   `Humanskin` subsurface shading.
