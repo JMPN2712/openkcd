@@ -6,7 +6,7 @@
 
 import { dataStart, readCentralDirectory, readEntry } from "./zip.ts";
 import { parseTerrain, heightAt, type Terrain } from "./terrain.ts";
-import { TerrainRenderer, type FlyCamera } from "./terrainRenderer.ts";
+import { FOV_Y, TerrainRenderer, type FlyCamera } from "./terrainRenderer.ts";
 import type { PakSource } from "./paks.ts";
 import { parseLevelObjects, type LevelObjects } from "./levelObjects.ts";
 import { parseCover, type Cover } from "./cover.ts";
@@ -16,6 +16,8 @@ import { Decals } from "./decals.ts";
 import { FarTrees } from "./farTrees.ts";
 import { setGpuBlockCompression } from "./model.ts";
 import { ModelRenderer } from "./renderer.ts";
+import { TexturePool } from "./texturePool.ts";
+import { ReadWorkers } from "./readWorkers.ts";
 import { WaterRenderer } from "./waterRenderer.ts";
 import { buildGrassScene, buildWorldScene, isUberLod, lodItems, newWorldCaches, selectLods, trimWorldCaches, type WorldScene } from "./world.ts";
 import { Vfs } from "./vfs.ts";
@@ -149,6 +151,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       vfsCache.set(pakPath, v);
     }
     vfs = await v;
+    // large reads (models, textures) inflate on worker threads, off the frame
+    vfs.workers ??= ReadWorkers.browser();
     if (!navigator.gpu) throw new Error("WebGPU is not available in this browser (chrome://flags/#enable-unsafe-webgpu).");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter) throw new Error("No WebGPU adapter.");
@@ -227,10 +231,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   renderer.setShadow(shadowMap);
   // the ground's detail layers (grass, soil, cobbles…) decode in the background
   void loadDetailLayers(vfs, surfaceTypes, q.terrainDetail).then((d) => { if (!stopped) renderer.setDetail(d); }).catch((err) => console.warn("terrain detail:", err));
-  const models = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
+  // textures shared by the object, grass, NPC and player renderers, sharper for what is near
+  const pool = new TexturePool(device, vfs, { budget: q.textures.budgetMiB * 2 ** 20, maxDim: q.textures.maxDim });
+  const models = new ModelRenderer(device, format, passSetup.sampleCount, { ...passSetup, pool });
   // grass and ground plants (merged-mesh sectors): a small scene of their own around the camera,
   // rebuilt every few metres, with sharper textures than other objects (thin blades in atlases)
-  const grassR = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
+  const grassR = new ModelRenderer(device, format, passSetup.sampleCount, { ...passSetup, pool });
   const grassCaches = newWorldCaches();
   let grass: { at: [number, number]; scene: WorldScene; out: Float32Array[]; counts: number[] } | null = null;
   let grassBusy = false;
@@ -253,10 +259,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     }
   };
   const water = new WaterRenderer(device, format, objects.water, passSetup);
-  const npcR = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
-  const playerR = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
+  const npcR = new ModelRenderer(device, format, passSetup.sampleCount, { ...passSetup, pool });
+  const playerR = new ModelRenderer(device, format, passSetup.sampleCount, { ...passSetup, pool });
   // the far field: every town's uber-LOD (94 in Rataje), drawn beyond the streamed objects
-  const farR = new ModelRenderer(device, format, passSetup.sampleCount, passSetup);
+  const farR = new ModelRenderer(device, format, passSetup.sampleCount, { ...passSetup, pool });
   let far: { scene: WorldScene; out: Float32Array[]; counts: number[] } | null = null;
   void buildWorldScene(vfs, terrain, objects, [terrain.size / 2, terrain.size / 2], terrain.size, {
     maxModels: 1000, maxTextureDim: q.maxTextureDim, caches: newWorldCaches(), hiddenLayers, normalMaps: false, onlyBrushes: isUberLod,
@@ -498,6 +504,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       msaa = passSetup.sampleCount > 1 ? device.createTexture({ size: [target.width, target.height], format, sampleCount: passSetup.sampleCount, usage: GPUTextureUsage.RENDER_ATTACHMENT }) : null;
     }
     const vp = TerrainRenderer.viewProj(cam, target.width / target.height, { reversed: true, near: mode === "player" && player?.viewMode === "first" ? 0.01 : 0.1 });
+    // streamed textures that finished loading go in before anything is drawn
+    pool.setViewport(target.height, FOV_Y);
+    pool.beginFrame();
     // day and night from the level's time of day at the game clock
     const skyState = todProfile ? skyAt(todProfile, minute / 60) : null;
     if (far) {
@@ -559,7 +568,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     device.queue.submit([enc.finish()]);
     const pc = player?.controller;
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
-    hud.textContent = `${(1000 / fpsAvg).toFixed(0)} fps (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${sceneInfo}${lodInfo} · ${npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
+    hud.textContent = `${(1000 / fpsAvg).toFixed(0)} fps (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();
@@ -573,6 +582,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     npcR.destroy();
     playerR.destroy();
     farR.destroy();
+    pool.destroy();
     sky.destroy();
     shadowMap?.destroy();
     water.destroy();

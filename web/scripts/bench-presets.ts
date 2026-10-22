@@ -10,7 +10,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { create } from "webgpu";
 import { heightAt } from "../src/terrain.ts";
-import { TerrainRenderer } from "../src/terrainRenderer.ts";
+import { FOV_Y, TerrainRenderer } from "../src/terrainRenderer.ts";
+import { TexturePool } from "../src/texturePool.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 import { WaterRenderer } from "../src/waterRenderer.ts";
 import { FarTrees } from "../src/farTrees.ts";
@@ -27,7 +28,7 @@ import { parseNpcEntities, parseEntityIndex } from "../src/levelEntities.ts";
 import { Schedules } from "../src/schedule.ts";
 import { readCentralDirectory, readEntry } from "../src/zip.ts";
 import type { MoveInput } from "../src/player.ts";
-import { openRataje } from "./lib.ts";
+import { nodeReadWorkers, openRataje } from "./lib.ts";
 import { loadDetailLayers } from "../src/terrainDetail.ts";
 import { ShadowMap } from "../src/shadow.ts";
 import { ShadowCasters } from "../src/shadowPass.ts";
@@ -41,6 +42,8 @@ const presets = opt("--presets", "potato,low,medium,high").split(",") as PresetN
 const W = 1920, H = 1080;
 
 const lvl = await openRataje(root);
+// pak reads on worker threads, as in the browser (NO_WORKERS=1: on the main thread)
+if (!process.env.NO_WORKERS) lvl.vfs.workers = nodeReadWorkers(root);
 const lb = await lvl.sources.find((s) => s.path.toLowerCase() === "data/levels/rataje/level.pak")!.open();
 const missionEntry = (await readCentralDirectory(lb)).find((e) => e.name.toLowerCase() === "objects_mission0.xml")!;
 const missionXml = new TextDecoder().decode(await readEntry(lb, missionEntry));
@@ -49,7 +52,7 @@ const schedules = new Schedules(npcEnts, parseEntityIndex(missionXml));
 const h = (x: number, y: number) => heightAt(lvl.terrain, x, y);
 const profile = pickProfile(lvl.tod!);
 const avatar = await PlayerAvatar.load(lvl.vfs);
-const cachesByDim = new Map<number, ReturnType<typeof newWorldCaches>>();
+const cachesByDim = new Map<string, ReturnType<typeof newWorldCaches>>();
 
 const SCENES = [
   // the market: run south-west, turning, among stalls and NPCs
@@ -73,11 +76,13 @@ for (const pp of gpus) {
     const pass: PassSetup = { sampleCount: q.msaa, reversedZ: true };
     const w = Math.round(W * q.renderScale), hgt = Math.round(H * q.renderScale);
     const terrainR = new TerrainRenderer(device, format, lvl.terrain, lvl.cover, pass, await loadDetailLayers(lvl.vfs, lvl.surfaceTypes, q.terrainDetail), { detailFade: q.detailFade });
-    const models = new ModelRenderer(device, format, q.msaa, pass);
+    // streamed textures (NO_POOL=1: every renderer uploads its own at the preset's first size)
+    const pool = process.env.NO_POOL ? undefined : new TexturePool(device, lvl.vfs, { budget: Number(process.env.POOL_MIB ?? q.textures.budgetMiB) * 2 ** 20, maxDim: q.textures.maxDim });
+    const models = new ModelRenderer(device, format, q.msaa, { ...pass, pool });
     const water = new WaterRenderer(device, format, lvl.objects.water, pass);
-    const playerR = new ModelRenderer(device, format, q.msaa, pass);
-    const npcR = new ModelRenderer(device, format, q.msaa, pass);
-    const grassR = new ModelRenderer(device, format, q.msaa, pass);
+    const playerR = new ModelRenderer(device, format, q.msaa, { ...pass, pool });
+    const npcR = new ModelRenderer(device, format, q.msaa, { ...pass, pool });
+    const grassR = new ModelRenderer(device, format, q.msaa, { ...pass, pool });
     const farTrees = new FarTrees(device, format, pass);
     if (!process.env.NO_FAR_TREES) await farTrees.build(lvl.vfs, lvl.terrain, lvl.objects, { maxTextureDim: q.maxTextureDim });
     const sky = new SkyRenderer(device, format, pass);
@@ -87,8 +92,10 @@ for (const pp of gpus) {
     const target = device.createTexture({ size: [w, hgt], format, usage: GPUTextureUsage.RENDER_ATTACHMENT });
     const msaa = q.msaa > 1 ? device.createTexture({ size: [w, hgt], format, sampleCount: q.msaa, usage: GPUTextureUsage.RENDER_ATTACHMENT }) : null;
     const depth = device.createTexture({ size: [w, hgt], format: depthFormat(pass), sampleCount: q.msaa, usage: GPUTextureUsage.RENDER_ATTACHMENT });
-    let caches = cachesByDim.get(q.maxTextureDim);
-    if (!caches) cachesByDim.set(q.maxTextureDim, (caches = newWorldCaches()));
+    // per preset: the pool drops the cached models' texture data once it is on the GPU, so a cache
+    // shared with an earlier preset's run comes back with stand-ins (a preset switch, not a start)
+    let caches = cachesByDim.get(`${name}:${q.maxTextureDim}`);
+    if (!caches) cachesByDim.set(`${name}:${q.maxTextureDim}`, (caches = newWorldCaches()));
     for (const sc of SCENES) {
       const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, sc.at, q.streamRadius, { maxModels: 20000, maxTextureDim: q.maxTextureDim, caches, props: lvl.props, hiddenLayers: lvl.hiddenLayers, normalMaps: q.normalMaps && !process.env.NO_NORMAL, ground: process.env.NO_ROADS ? undefined : [lvl.roads, lvl.decals] });
       const items = lodItems(scene);
@@ -119,6 +126,36 @@ for (const pp of gpus) {
       let tp = 0;
       const mark = (k: string) => { const n = performance.now(); phase[k] += n - tp; tp = n; };
       let tris = 0, drawn = 0, calls = 0;
+      // the streamed textures load first (frames until the pool has been idle for 30 frames, at most
+      // 1,200): the run then measures the settled scene, and the ramp is reported on its own
+      let ramp = 0, ms = 0;
+      if (pool) {
+        let quiet = 0;
+        const t = performance.now();
+        for (; ramp < 1200 && quiet < 30; ramp++) {
+          // (standing at the start: the run's first frames see the same textures)
+          session.update(1 / 60, { forward: 0, right: 0, gait: "run", sprint: false });
+          const cam = session.camera(1 / 60);
+          const vp = TerrainRenderer.viewProj(cam, w / hgt, { reversed: true, near: 0.01 });
+          pool.setViewport(hgt, FOV_Y);
+          pool.beginFrame();
+          const enc = device.createCommandEncoder();
+          selectLods(scene, cam.pos, vp, lodOut, lodCounts, { lodScale: q.lodScale, distanceScale: q.distanceScale });
+          lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
+          models.setCamera(vp, cam.pos);
+          const p = enc.beginRenderPass({ colorAttachments: [msaa ? { view: msaa.createView(), resolveTarget: target.createView(), loadOp: "clear", storeOp: "discard" } : { view: target.createView(), loadOp: "clear", storeOp: "store" }], depthStencilAttachment: { view: depth.createView(), depthClearValue: depthClear(pass), depthLoadOp: "clear", depthStoreOp: "discard" } });
+          models.draw(p);
+          p.end();
+          device.queue.submit([enc.finish()]);
+          await device.queue.onSubmittedWorkDone();
+          quiet = pool.idle ? quiet + 1 : 0;
+          if (!pool.idle) await new Promise((r) => setTimeout(r, 0));
+        }
+        ms = performance.now() - t;
+      }
+      // PROFILE_RUN=file: a CPU profile of this run's measured frames (first scene only)
+      const prof = process.env.PROFILE_RUN && sc === SCENES[0] ? new (await import("node:inspector/promises")).Session() : null;
+      if (prof) { prof.connect(); await prof.post("Profiler.enable"); await prof.post("Profiler.start"); }
       for (let f = 0; f < FRAMES + 30; f++) {
         const t0 = performance.now();
         tp = t0;
@@ -128,6 +165,8 @@ for (const pp of gpus) {
         session.avatar.upload(playerR);
         const cam = session.camera(dt);
         const vp = TerrainRenderer.viewProj(cam, w / hgt, { reversed: true, near: 0.01 });
+        pool?.setViewport(hgt, FOV_Y);
+        pool?.beginFrame();
         const state = skyAt(profile, 12);
         models.lighting = npcR.lighting = playerR.lighting = grassR.lighting = state.lighting;
         sky.update(invert(vp), cam.pos, state);
@@ -179,6 +218,11 @@ for (const pp of gpus) {
           calls += models.stats.drawCalls + npcR.stats.drawCalls + playerR.stats.drawCalls;
         }
       }
+      if (prof) {
+        const { profile } = await prof.post("Profiler.stop");
+        (await import("node:fs")).writeFileSync(`${process.env.PROFILE_RUN}-${name}.cpuprofile`, JSON.stringify(profile));
+        prof.disconnect();
+      }
       times.sort((a, b) => a - b);
       const mean = times.reduce((a, b) => a + b, 0) / times.length;
       const p95 = times[Math.floor(times.length * 0.95)];
@@ -186,8 +230,10 @@ for (const pp of gpus) {
       console.log(line);
       results.push(line);
       console.log(`     per frame: ${Object.entries(phase).map(([k, v]) => `${k} ${(v / (FRAMES + 30)).toFixed(2)} ms`).join(", ")}`);
+      if (pool) console.log(`     ${pool.summary()}; settled in ${ramp} frames (${(ms / 1000).toFixed(1)} s); ${pool.stats.loads} loads, ${pool.stats.shrinks} shrinks, ${pool.stats.evicted} evicted`);
     }
     for (const r of [terrainR, models, water, playerR, npcR, grassR, farTrees, sky]) r.destroy();
+    pool?.destroy();
     shadowMap?.destroy();
     for (const t of [target, msaa, depth]) t?.destroy();
   }
@@ -195,3 +241,4 @@ for (const pp of gpus) {
 }
 console.log("\nGPU | preset | scene | resolution | fps (mean) | frame (mean) | frame (p95) | triangles | instances drawn | draw calls | NPCs | models streamed");
 console.log(results.join("\n"));
+lvl.vfs.workers?.terminate();

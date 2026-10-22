@@ -2,12 +2,12 @@
 
 ## Quality presets (`web/src/quality.ts`)
 
-| Preset | Render scale | MSAA | Streaming radius | View distance × | LOD distance × | Terrain full detail | NPCs | Texture size |
-|---|---|---|---|---|---|---|---|---|
-| Potato | 0.5 | off | 200 m | 0.45 | 0.5 | 100 m | 8 | 128 |
-| Low | 0.75 | off | 300 m | 0.65 | 0.7 | 160 m | 16 | 256 |
-| Medium | 1 | 4× | 500 m | 1 | 1 | 250 m | 40 | 256 |
-| High | 1 | 4× | 700 m | 1.4 | 1.3 | 350 m | 60 | 512 |
+| Preset | Render scale | MSAA | Streaming radius | View distance × | LOD distance × | Terrain full detail | NPCs | Textures: first load → streamed up to | Texture memory |
+|---|---|---|---|---|---|---|---|---|---|
+| Potato | 0.5 | off | 200 m | 0.45 | 0.5 | 100 m | 8 | 128 → 512 | 256 MiB |
+| Low | 0.75 | off | 300 m | 0.65 | 0.7 | 160 m | 16 | 256 → 1024 | 640 MiB |
+| Medium | 1 | 4× | 500 m | 1 | 1 | 250 m | 40 | 256 → 1024 | 1 GiB |
+| High | 1 | 4× | 700 m | 1.4 | 1.3 | 350 m | 60 | 512 → 2048 | 2 GiB |
 
 **Shadows and terrain detail by preset:**
 
@@ -113,7 +113,65 @@ same code measured 61 fps in one session and 47 in a later one. Compare
 changes only by A/B in the same session. Normal maps measured this way cost
 nothing visible: 47 fps with them and without, Medium, market.
 
+## Texture streaming (2026-10-21)
+
+Before this, every object texture was capped at the preset's size (128 px on Potato, 256 on
+Medium, 512 on High), whatever its distance: close-up walls and barrels were smeared. Each
+streaming rebuild also uploaded every texture again (each `ModelRenderer.setModels` made its own
+copies, 418 MiB in the market on Medium).
+
+`web/src/texturePool.ts` now holds one GPU texture per texture file, shared by the object, grass,
+NPC, player and far-field renderers and kept across rebuilds:
+
+- **First load small.** Models load their textures at the preset's first size, as before.
+- **Requests.** Every 8th frame each renderer works out, for each visible draw, the distance to
+  the nearest instance's bounding sphere. The texture size it asks for is screen pixels per metre
+  ÷ UV units per metre: the mesh's UV density, measured once per subset.
+  Sizes round to the nearest power of two.
+- **Growing.** Only the new top mips are read (with the header the first load opened); the lower
+  ones are copied on the GPU.
+- **Shrinking.** Only under memory pressure, and only textures held at 4× or more what they need,
+  each in one GPU copy. Unused textures are evicted first.
+- **Budget.** Loads reserve their bytes when they start. Without that, eight loads at a time each
+  fit the budget on their own, most were thrown away when they finished, and the market kept
+  loading forever.
+- **Applying.** Finished loads go in at the start of a frame, about four times a second together.
+  The renderers rebuild the bind groups of the draws using a replaced texture and re-record those
+  items' bundles before anything is drawn.
+- **CPU copies dropped.** Once a texture is on the GPU, the cached chain's data is freed (about
+  400 MB at Medium). A texture evicted and then used again (a preset change brings the model
+  cache back without texture data) starts as a 1×1 stand-in. Stand-ins load up to 64 at a time;
+  at the normal rate, thousands of them took over 9 s.
+- **Off the main thread.** Pak reads of 32 KB or more (models and textures) inflate on worker
+  threads (`readWorkers.ts`): 1 to 4 in the browser, one per spare core.
+
+**Measured** (RTX 5070 Ti, headless; the textures settle before the run, which then keeps
+streaming as Henry runs):
+
+| Preset | Scene | Without the pool | With it | Textures held |
+|---|---|---:|---:|---|
+| Medium | fields | 184–204 fps | 164 fps | 514 at 1024, 831 MiB of 1 GiB, no shrinks |
+| Medium | market | 48–56 fps | 41 fps | 505 at 1024, 801 MiB of 1 GiB, no shrinks |
+| Medium with a 2048 cap (dropped) | market | 56 fps | 43 fps | at its 1 GiB budget, shrinking as it ran |
+| High | fields | 114 fps | 114 fps | 140 at 2048, 438 at 1024 |
+| High | market | 41 fps | 36 fps | 1.6 of 2 GiB |
+| Potato | market | 225–277 fps | 207–256 fps | 139 of 256 MiB, 376 at 512 |
+
+- **Settling:** textures settle within 0.3–1.1 s of arriving somewhere.
+- **The remaining cost is streaming activity,** not the pool. With the pool settled and no
+  loads, Medium in the market ran at 55 fps against 48–52 without it. Each swap re-records the
+  bundles of every item using that texture.
+- **Medium's cap is 1024 px,** down from 2048: at 2048 it sat at its budget in the market and
+  churned as Henry ran.
+- `NO_POOL=1 node scripts/bench-presets.ts` compares; `scripts/test-texture-pool.ts` checks
+  growing, shrinking (read back from the GPU) and the worker reads.
+
 ## Next
+
+- **Terrain detail layers** are still 256–512 px and blurry up close (the ground under Henry's
+  feet); they aren't streamed.
+- **Swap cost:** shared textures make one swap re-record hundreds of bundles; grouping draws by
+  texture, or a texture array per format, would cut it.
 
 - **The iGPU in the market is now GPU-bound:** 3M triangles even on Potato.
   - Shorter LOD distances on Potato and Low.

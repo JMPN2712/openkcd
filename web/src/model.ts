@@ -3,7 +3,7 @@
 import { parseCgf, type Cgf, type CgfMesh } from "./cgf.ts";
 import { parseSkeleton, type Skeleton } from "./skeleton.ts";
 import { parseMtl, mtlPath, textureFile, type Material } from "./mtl.ts";
-import { decodeMip, mipData, openTexture } from "./texture.ts";
+import { decodeMip, mipData, openTexture, type Texture } from "./texture.ts";
 import { mipDims } from "./dds.ts";
 import type { Vfs, VfsHit } from "./vfs.ts";
 
@@ -17,6 +17,14 @@ export interface MipChain {
   levels: { w: number; h: number; data: Uint8ClampedArray | Uint8Array }[];
   /** raw block-compressed levels: the WebGPU format family (e.g. "bc1-rgba-unorm") and bytes per 4×4 block */
   bc?: { format: string; blockBytes: number };
+  /** largest side the texture has (its top complete mip), and whether it was loaded as a normal map:
+   *  what texturePool.ts needs to load it again at another size */
+  full: number;
+  normalMap: boolean;
+  /** the opened texture (header and part list), to load more of it without opening it again */
+  texture: Texture;
+  /** the level data went to a TexturePool's GPU texture and was dropped here (the sizes stay) */
+  released?: boolean;
 }
 
 /** Raw BC upload (no CPU decode) when the GPU supports texture-compression-bc: set by the renderer's owner. */
@@ -46,11 +54,17 @@ export interface LoadedModel {
   notes: string[];
 }
 
-/** Decode a texture's mip chain from the largest level <= maxDim down to 1×1-ish. */
-export async function loadMipChain(vfs: Vfs, stem: string, maxDim: number, opts: { rgba?: boolean; normalMap?: boolean } = {}): Promise<MipChain> {
-  const t = await openTexture(vfs, stem);
+/**
+ * Decode a texture's mip chain from the largest level <= maxDim down to 1×1-ish, or with `above`
+ * only the levels larger than that (the top of a chain whose lower levels are already loaded).
+ */
+export async function loadMipChain(vfs: Vfs, stem: string, maxDim: number, opts: { rgba?: boolean; normalMap?: boolean; texture?: Texture; above?: number } = {}): Promise<MipChain> {
+  const t = opts.texture ?? await openTexture(vfs, stem);
+  const above = opts.above ?? 0;
   if (!t.header.format) throw new Error(`unsupported format ${t.header.formatLabel}`);
   let level = t.firstLevel;
+  const full = Math.max(...mipDims(t.header, level));
+  const normalMap = !!opts.normalMap;
   while (level < t.header.mipCount - 1 && Math.max(...mipDims(t.header, level)) > maxDim) level++;
   const levels: MipChain["levels"] = [];
   let bcFormat = BC_FORMATS[t.header.format.name];
@@ -66,16 +80,18 @@ export async function loadMipChain(vfs: Vfs, stem: string, maxDim: number, opts:
     // the GPU decodes BCn itself: keep the blocks (4–8× smaller than RGBA, no CPU decode)
     for (let l = level; l < t.header.mipCount; l++) {
       const [w, h] = mipDims(t.header, l);
+      if (Math.max(w, h) <= above) break;
       levels.push({ w, h, data: await mipData(vfs, t, l) });
     }
-    return { stem, srgb: t.header.srgb, levels, bc: { format: bcFormat, blockBytes: t.header.format.bytes } };
+    return { stem, srgb: t.header.srgb, levels, bc: { format: bcFormat, blockBytes: t.header.format.bytes }, full, normalMap, texture: t };
   }
   for (let l = level; l < t.header.mipCount; l++) {
+    if (Math.max(...mipDims(t.header, l)) <= above) break;
     const { w, h, pixels } = await decodeMip(vfs, t, l);
     if (pixels.kind !== "ldr") throw new Error("HDR textures are not used as diffuse maps");
     levels.push({ w, h, data: pixels.data });
   }
-  return { stem, srgb: t.header.srgb, levels };
+  return { stem, srgb: t.header.srgb, levels, full, normalMap, texture: t };
 }
 
 interface LoadOptions {

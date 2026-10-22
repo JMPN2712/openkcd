@@ -21,6 +21,8 @@ import { setGpuBlockCompression } from "../src/model.ts";
 import { parseTimeOfDay, type TimeOfDay } from "../src/tod.ts";
 import { parseSurfaceTypes } from "../src/terrainDetail.ts";
 import { MergedMeshes } from "../src/mergedMeshes.ts";
+import { Worker } from "node:worker_threads";
+import { ReadWorkers, type ReadReply } from "../src/readWorkers.ts";
 
 Object.assign(globalThis, globals);
 
@@ -82,6 +84,18 @@ export async function openRataje(root: string, opts: { cover?: boolean; hd?: boo
   const missionEnv = await read("mission_mission0.xml");
   const tod = missionEnv ? parseTimeOfDay(new TextDecoder().decode(missionEnv)) : null;
   return { sources, vfs, terrain, objects, cover, props, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(lb, entries), roads: new Roads(lb, dataStart(lb, entries.find((x) => x.name.toLowerCase() === "terrain/terrain.dat")!), objects.roads), decals: new Decals(objects.decalIndex, terrain) };
+}
+
+/**
+ * Pak reads on `n` worker threads (scripts/readWorker-node.ts), like the browser's: set as
+ * `vfs.workers`. Unreferenced, so they don't keep a finished script alive.
+ */
+export function nodeReadWorkers(root: string, n = 4): ReadWorkers {
+  return new ReadWorkers(Array.from({ length: n }, () => {
+    const w = new Worker(new URL("./readWorker-node.ts", import.meta.url));
+    w.unref();
+    return { postMessage: (m) => w.postMessage(m), onReply: (fn) => w.on("message", (r: ReadReply) => fn(r)), terminate: () => void w.terminate() };
+  }), (pak) => join(root, pak.path));
 }
 
 /** The Dawn instance must outlive its devices (collected, it aborts the process on the next map). */

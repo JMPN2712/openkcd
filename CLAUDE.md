@@ -84,9 +84,9 @@ questlines whole and never cuts anything the main quest depends on.
 
 | Area | Files | State |
 |---|---|---|
-| Paks, VFS | `zip.ts`, `paks.ts`, `vfs.ts`, `tree.ts` | Reads all paks in place (Blob.slice) |
+| Paks, VFS | `zip.ts`, `paks.ts`, `vfs.ts`, `tree.ts`, `readWorkers.ts` | Reads all paks in place (Blob.slice); large reads inflate on worker threads |
 | Installer | `inno.ts`, `lzma.ts`, `install.ts`, `installView.ts`, `repack.ts` | Reads GOG's Inno Setup installers in place (base game and DLC), installs their paks into OPFS and repacks them without files later patches replace (52.5 → 38.2 GiB); the engine opens that copy |
-| Textures | `dds.ts`, `texture.ts`, `bcn.ts` | Split DDS assembly, BC1–7 (GPU and CPU) |
+| Textures | `dds.ts`, `texture.ts`, `bcn.ts`, `texturePool.ts` | Split DDS assembly, BC1–7 (GPU and CPU); streamed by distance within a budget per preset |
 | Models, materials | `cgf.ts`, `mtl.ts`, `model.ts`, `renderer.ts` | .cgf/.cga/.skin/.chr, WebGPU renderer |
 | Characters | `character.ts`, `skeleton.ts`, `characterView.ts`, `tables.ts` | Souls and clothing presets from the database |
 | Animation | `anim.ts` (.caf), `dba.ts`, `clips.ts`, `pose.ts`, `mannequin.ts` | Clips decode and skin; no blending or locomotion controller yet |

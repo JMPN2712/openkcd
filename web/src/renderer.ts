@@ -10,6 +10,7 @@
 // authored normals, and a front_facing flip makes those z-fight visibly.
 
 import type { LoadedModel, MipChain } from "./model.ts";
+import { uploadChain, type PooledTexture, type TexturePool } from "./texturePool.ts";
 import { colorizeOf } from "./mtl.ts";
 import { ShadowMap, SHADOW_FORMAT, SHADOW_WGSL } from "./shadow.ts";
 import { DEFAULT_LIGHTING, depthCompare, depthFormat, lookAt, multiply, perspective, transformPoint, type Lighting, type PassSetup, type Vec3 } from "./mat4.ts";
@@ -218,6 +219,33 @@ interface DrawItem {
   blend: boolean;
   /** decals and roads (%DECAL): blended onto the ground right after the terrain (drawGround), before other objects */
   ground: boolean;
+  /** pooled diffuse, specular and normal textures (null: not pooled), the palette bound, and UV units per metre */
+  pooled: (PooledTexture | null)[];
+  palette: GPUBuffer;
+  uvDensity: number;
+}
+
+/** Translations (xyz) of 4×4 instance matrices. */
+function positionsOf(m: Float32Array): Float32Array {
+  const out = new Float32Array((m.length / 16) * 3);
+  for (let i = 0; i < m.length / 16; i++) out.set(m.subarray(i * 16 + 12, i * 16 + 15), i * 3);
+  return out;
+}
+
+/** A subset's texture coordinates per metre: sqrt(UV area / surface area) over its triangles (0 without UVs). */
+function uvDensity(mesh: LoadedModel["cgf"]["meshes"][number], first: number, count: number): number {
+  const P = mesh.positions, T = mesh.uvs, I = mesh.indices;
+  if (!T) return 0;
+  let area = 0, uvArea = 0;
+  for (let t = first; t + 2 < first + count; t += 3) {
+    const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
+    const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2];
+    const vx = P[c] - P[a], vy = P[c + 1] - P[a + 1], vz = P[c + 2] - P[a + 2];
+    area += Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+    const ta = I[t] * 2, tb = I[t + 1] * 2, tc = I[t + 2] * 2;
+    uvArea += Math.abs((T[tb] - T[ta]) * (T[tc + 1] - T[ta + 1]) - (T[tc] - T[ta]) * (T[tb + 1] - T[ta + 1]));
+  }
+  return area > 0 && uvArea > 0 ? Math.sqrt(uvArea / area) : 0;
 }
 
 /** Shaders whose surfaces are see-through: drawn in the blended pass. */
@@ -319,8 +347,20 @@ export class ModelRenderer {
   bboxMin: Vec3 = [-1, -1, -1];
   bboxMax: Vec3 = [1, 1, 1];
   stats = { meshes: 0, triangles: 0, vertices: 0, draws: 0, textured: 0, drawCalls: 0 };
+  /** shared streamed textures (texturePool.ts); without one, each renderer uploads its own */
+  private pool: TexturePool | null;
+  private unlisten: (() => void) | null = null;
+  /** draws by pooled texture, for rebuilding their bind groups when it changes size */
+  private drawsByTexture = new Map<PooledTexture, DrawItem[]>();
+  /** per item: model-space bounding radius, and the position of fixed items (transform or instances) */
+  private itemRadius: number[] = [];
+  private itemFixed: (Float32Array | null)[] = [];
+  private eye: Vec3 = [0, 0, 0];
+  private requestFrame = 0;
 
-  constructor(device: GPUDevice, format: GPUTextureFormat, sampleCount = 4, opts: { reversedZ?: boolean } = {}) {
+  constructor(device: GPUDevice, format: GPUTextureFormat, sampleCount = 4, opts: { reversedZ?: boolean; pool?: TexturePool } = {}) {
+    this.pool = opts.pool ?? null;
+    if (this.pool) this.unlisten = this.pool.onChange((changed) => this.texturesChanged(changed));
     this.device = device;
     this.format = format;
     this.sampleCount = sampleCount;
@@ -456,33 +496,7 @@ export class ModelRenderer {
   }
 
   private upload(chain: MipChain, linear = false): GPUTexture {
-    const top = chain.levels[0];
-    if (chain.bc) {
-      // raw BCn blocks: the GPU decodes them (sizes rounded up to whole 4×4 blocks for small mips)
-      const format = (!linear && /^(bc1|bc2|bc3|bc7)-rgba-unorm$/.test(chain.bc.format) ? `${chain.bc.format}-srgb` : chain.bc.format) as GPUTextureFormat;
-      const t = this.device.createTexture({
-        size: [Math.ceil(top.w / 4) * 4, Math.ceil(top.h / 4) * 4],
-        mipLevelCount: chain.levels.length,
-        format,
-        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-      });
-      chain.levels.forEach((l, i) => {
-        const bw = Math.ceil(l.w / 4), bh = Math.ceil(l.h / 4);
-        this.device.queue.writeTexture({ texture: t, mipLevel: i }, l.data as Uint8Array<ArrayBuffer>, { bytesPerRow: bw * chain.bc!.blockBytes, rowsPerImage: bh }, [bw * 4, bh * 4]);
-      });
-      this.owned.push(t);
-      return t;
-    }
-    // diffuse maps are colour data: sample as sRGB even if the DDS says UNORM (normal maps: linear)
-    const t = this.device.createTexture({
-      size: [top.w, top.h],
-      mipLevelCount: chain.levels.length,
-      format: linear ? "rgba8unorm" : "rgba8unorm-srgb",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-    });
-    chain.levels.forEach((l, i) => {
-      this.device.queue.writeTexture({ texture: t, mipLevel: i }, l.data as Uint8ClampedArray<ArrayBuffer>, { bytesPerRow: l.w * 4 }, [l.w, l.h]);
-    });
+    const t = uploadChain(this.device, chain, linear);
     this.owned.push(t);
     return t;
   }
@@ -506,6 +520,8 @@ export class ModelRenderer {
     capacity?: number;
   }[]): void {
     this.clear();
+    this.itemRadius = items.map(() => 0);
+    this.itemFixed = items.map(({ transform, instances, capacity }) => (capacity !== undefined ? null : transform ? transform.slice(12, 15) : instances?.length ? positionsOf(instances) : new Float32Array(3)));
     this.palettes = items.map(({ model }) => {
       const n = model.skeleton && model.cgf.meshes.some((m) => m.boneIds) ? model.skeleton.bones.length : 0;
       if (!n) return null;
@@ -564,6 +580,8 @@ export class ModelRenderer {
         }
         const p = transformPoint(meshTm, [mesh.positions[i * 3], mesh.positions[i * 3 + 1], mesh.positions[i * 3 + 2]]);
         for (let c = 0; c < 3; c++) { min[c] = Math.min(min[c], p[c]); max[c] = Math.max(max[c], p[c]); }
+        const r = Math.hypot(p[0], p[1], p[2]);
+        if (r > this.itemRadius[itemIndex]) this.itemRadius[itemIndex] = r;
       }
       const vb = this.device.createBuffer({ size: verts.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
       this.device.queue.writeBuffer(vb, 0, verts);
@@ -582,15 +600,20 @@ export class ModelRenderer {
         const chain = model.diffuse[mi] ?? null;
         const specChain = model.specular[mi] ?? null;
         const normChain = mesh.tangents ? model.normal?.[mi] ?? null : null;
-        const gpu = (c: MipChain | null, linear = false) => {
-          if (!c) return this.white;
+        const pooled: (PooledTexture | null)[] = [null, null, null];
+        const gpu = (c: MipChain | null, slot: number, linear = false): GPUTextureView => {
+          if (!c) return (slot === 2 ? this.flatNormal : this.white).createView();
+          if (this.pool) {
+            const e = (pooled[slot] = this.pool.acquire(c, linear));
+            return e.view;
+          }
           let t = textures.get(c);
           if (!t) textures.set(c, (t = this.upload(c, linear)));
-          return t;
+          return t.createView();
         };
-        const normTex = normChain ? gpu(normChain, true) : this.flatNormal;
-        const gpuTex = gpu(chain);
-        const specTex = gpu(specChain);
+        const normTex = gpu(normChain, 2, true);
+        const gpuTex = gpu(chain, 0);
+        const specTex = gpu(specChain, 1);
         if (chain) this.stats.textured++;
         const ubuf = this.device.createBuffer({ size: 208, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         const u = new Float32Array(52);
@@ -622,15 +645,20 @@ export class ModelRenderer {
           layout: this.drawLayout,
           entries: [
             { binding: 0, resource: { buffer: ubuf } },
-            { binding: 1, resource: gpuTex.createView() },
+            { binding: 1, resource: gpuTex },
             { binding: 2, resource: this.sampler },
-            { binding: 3, resource: specTex.createView() },
+            { binding: 3, resource: specTex },
             { binding: 4, resource: { buffer: palette ? palette.buf : this.identityPalette } },
-            { binding: 5, resource: normTex.createView() },
+            { binding: 5, resource: normTex },
           ],
         });
         const ib2 = instBufs[itemIndex];
-        this.draws.push({ vb, ib, firstIndex: s.firstIndex, count: s.numIndices, bind, item: itemIndex, ubuf, meshTm: mesh.transform, inst: ib2.buf, instCount: ib2.count, blend: blend && !decal, ground: decal });
+        const d: DrawItem = {
+          vb, ib, firstIndex: s.firstIndex, count: s.numIndices, bind, item: itemIndex, ubuf, meshTm: mesh.transform, inst: ib2.buf, instCount: ib2.count, blend: blend && !decal, ground: decal,
+          pooled, palette: palette ? palette.buf : this.identityPalette, uvDensity: pooled.some(Boolean) ? uvDensity(mesh, s.firstIndex, s.numIndices) : 0,
+        };
+        this.draws.push(d);
+        for (const e of pooled) if (e) { const l = this.drawsByTexture.get(e); if (l) l.push(d); else this.drawsByTexture.set(e, [d]); }
       }
     }
     this.stats.draws = this.draws.length;
@@ -692,6 +720,7 @@ export class ModelRenderer {
   /** Camera for the next draw(): view-projection, eye position, sun direction (lighting's own when omitted). */
   setCamera(viewProj: Float32Array, eye: Vec3, sun?: Vec3, flat = false): void {
     const L = this.lighting;
+    this.eye = eye;
     const cu = new Float32Array(40);
     cu.set(viewProj, 0);
     cu.set([...eye, this.reversedZ ? -1 : 1], 16);
@@ -849,6 +878,7 @@ export class ModelRenderer {
     if (this.draws.length) this.device.queue.writeBuffer(v.argsBuf!, 0, a, 0, this.draws.length * 5);
     v.triangles = tris;
     v.calls = calls;
+    if (this.pool && v === this.views[0] && ++this.requestFrame % 8 === 0) this.requestTextures(v.counts, v.pending);
     v.live.length = 0;
     v.liveBlend.length = 0;
     v.liveGround.length = 0;
@@ -900,6 +930,64 @@ export class ModelRenderer {
     return enc.finish();
   }
 
+  /**
+   * Ask the pool for the texture sizes the visible draws need: the screen size of a texel at the
+   * nearest instance of each item (distance to its bounding sphere), from the mesh's UV density.
+   */
+  private requestTextures(counts: Uint32Array, pending: (Float32Array | null)[]): void {
+    const pool = this.pool!, [ex, ey, ez] = this.eye;
+    const nearest = new Float32Array(counts.length).fill(Infinity);
+    for (let k = 0; k < counts.length; k++) {
+      const n = counts[k];
+      if (!n) continue;
+      const m = pending[k], fixed = this.itemFixed[k];
+      let best = Infinity;
+      if (m && !fixed) {
+        for (let i = 0; i < n; i++) {
+          const o = i * 16, s = Math.hypot(m[o], m[o + 1], m[o + 2]);
+          const d = Math.hypot(m[o + 12] - ex, m[o + 13] - ey, m[o + 14] - ez) - this.itemRadius[k] * s;
+          if (d < best) best = d;
+        }
+      } else if (fixed) {
+        for (let i = 0; i < fixed.length; i += 3) {
+          const d = Math.hypot(fixed[i] - ex, fixed[i + 1] - ey, fixed[i + 2] - ez) - this.itemRadius[k];
+          if (d < best) best = d;
+        }
+      }
+      nearest[k] = Math.max(0.5, best);
+    }
+    for (const d of this.draws) {
+      const dist = nearest[d.item];
+      if (dist === Infinity || !d.uvDensity) continue;
+      // texels across the texture for one texel per pixel: pixels per metre / UV units per metre
+      const dim = pool.pixelScale / (dist * d.uvDensity);
+      for (const e of d.pooled) if (e) pool.request(e, dim);
+    }
+  }
+
+  /** Pooled textures were replaced: rebuild the bind groups that used them, re-record their items' bundles. */
+  private texturesChanged(changed: Set<PooledTexture>): void {
+    const items = new Set<number>();
+    for (const e of changed) {
+      for (const d of this.drawsByTexture.get(e) ?? []) {
+        const [dt, st, nt] = d.pooled;
+        d.bind = this.device.createBindGroup({
+          layout: this.drawLayout,
+          entries: [
+            { binding: 0, resource: { buffer: d.ubuf } },
+            { binding: 1, resource: dt ? dt.view : this.white.createView() },
+            { binding: 2, resource: this.sampler },
+            { binding: 3, resource: st ? st.view : this.white.createView() },
+            { binding: 4, resource: { buffer: d.palette } },
+            { binding: 5, resource: nt ? nt.view : this.flatNormal.createView() },
+          ],
+        });
+        items.add(d.item);
+      }
+    }
+    for (const v of this.views) for (const k of items) { v.bundles[k] = null; v.blendBundles[k] = null; v.groundBundles[k] = null; }
+  }
+
   /** Number of bones in item `index`'s palette (0 = not skinned). */
   paletteSize(index: number): number {
     return this.palettes[index]?.count ?? 0;
@@ -907,6 +995,7 @@ export class ModelRenderer {
 
   /** Replace item `index`'s extra transform (e.g. a prop following an animated bone). */
   setItemTransform(index: number, transform: Float32Array): void {
+    this.itemFixed[index]?.set(transform.subarray(12, 15));
     // draws of this item (indexed lazily: scanning every draw per item was O(items × draws) per frame)
     if (!this.drawsByItem) {
       this.drawsByItem = new Map();
@@ -926,6 +1015,8 @@ export class ModelRenderer {
   }
 
   clear(): void {
+    if (this.pool) for (const d of this.draws) for (const e of d.pooled) if (e) this.pool.release(e);
+    this.drawsByTexture.clear();
     for (const o of this.owned) o.destroy();
     this.owned = [];
     this.draws = [];
@@ -940,6 +1031,7 @@ export class ModelRenderer {
 
   destroy(): void {
     this.clear();
+    this.unlisten?.();
     this.depth?.destroy();
     this.msaa?.destroy();
     this.white.destroy();
