@@ -121,6 +121,14 @@ fn adjust(lin: vec3f, hsb: vec3f) -> vec3f {
   return shade(i);
 }
 
+// eye shadow shells (%EYE_AO_OVERLAY): the texture is a darkening mask (white in the middle of
+// the eye, black at the lids and corners, alpha its coverage), multiplied over the eyeball; at
+// full strength the lids got a hard black line, so 70%
+@fragment fn fsOverlay(i: VOut) -> @location(0) vec4f {
+  let t = textureSample(tex, samp, i.uv);
+  return vec4f(mix(vec3f(1.0), t.rgb, t.a * 0.7), 1.0);
+}
+
 fn shade(i: VOut) -> vec4f {
   let t = textureSample(tex, samp, i.uv);
   let st = textureSample(specTex, samp, i.uv);
@@ -219,6 +227,8 @@ interface DrawItem {
   blend: boolean;
   /** decals and roads (%DECAL): blended onto the ground right after the terrain (drawGround), before other objects */
   ground: boolean;
+  /** an eye shadow shell (%EYE_AO_OVERLAY): multiplied over what is behind it, in the blended pass (blend is set too) */
+  overlay: boolean;
   /** pooled diffuse, specular and normal textures (null: not pooled), the palette bound, and UV units per metre */
   pooled: (PooledTexture | null)[];
   palette: GPUBuffer;
@@ -310,6 +320,7 @@ export class ModelRenderer {
   private pipeline: GPURenderPipeline;
   private shadowPipeline: GPURenderPipeline | null = null;
   private blendPipeline: GPURenderPipeline;
+  private overlayPipeline: GPURenderPipeline;
   private module: GPUShaderModule;
   private camLayout: GPUBindGroupLayout;
   private drawLayout: GPUBindGroupLayout;
@@ -403,6 +414,17 @@ export class ModelRenderer {
       fragment: {
         module: this.module, entryPoint: "fsBlend",
         targets: [{ format, blend: { color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" }, alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha" } } }],
+      },
+      primitive: { topology: "triangle-list", cullMode: "none", frontFace: "ccw" },
+      depthStencil: { format: depthFormat(pass), depthWriteEnabled: false, depthCompare: depthCompare(pass) },
+      multisample: { count: sampleCount },
+    });
+    this.overlayPipeline = device.createRenderPipeline({
+      layout: this.pipelineLayout,
+      vertex: { module: this.module, entryPoint: "vs", buffers: VERTEX_LAYOUT },
+      fragment: {
+        module: this.module, entryPoint: "fsOverlay",
+        targets: [{ format, blend: { color: { srcFactor: "dst", dstFactor: "zero" }, alpha: { srcFactor: "zero", dstFactor: "one" } } }],
       },
       primitive: { topology: "triangle-list", cullMode: "none", frontFace: "ccw" },
       depthStencil: { format: depthFormat(pass), depthWriteEnabled: false, depthCompare: depthCompare(pass) },
@@ -618,9 +640,11 @@ export class ModelRenderer {
         const ubuf = this.device.createBuffer({ size: 208, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         const u = new Float32Array(52);
         const decal = !!mat?.genMask.includes("%DECAL");
+        const overlay = !!mat?.genMask.includes("%EYE_AO_OVERLAY");
         const blend = decal || BLENDED_SHADER.test(mat?.shader ?? "");
-        // (on Vegetation materials the vertex colours are bending and wind weights, not colour)
-        const vertColors = !!mesh.colors && !!mat?.genMask.includes("%VERTCOLORS") && !/^vegetation$/i.test(mat.shader);
+        // (on Vegetation materials the vertex colours are bending and wind weights, not colour; on
+        // character skins they are masks: every eye vertex is 255,255,0, which made eyes yellow)
+        const vertColors = !!mesh.colors && !mesh.boneIds && !!mat?.genMask.includes("%VERTCOLORS") && !/^vegetation$/i.test(mat.shader);
         u.set([normChain ? 1 : 0, decal ? 3 : blend ? (/glass/i.test(mat!.shader) ? 2 : 1) : 0, vertColors ? 1 : 0, 0], 44);
         u.set(meshTm, 0);
         const col = mat?.diffuse ?? [0.8, 0.8, 0.8];
@@ -654,7 +678,7 @@ export class ModelRenderer {
         });
         const ib2 = instBufs[itemIndex];
         const d: DrawItem = {
-          vb, ib, firstIndex: s.firstIndex, count: s.numIndices, bind, item: itemIndex, ubuf, meshTm: mesh.transform, inst: ib2.buf, instCount: ib2.count, blend: blend && !decal, ground: decal,
+          vb, ib, firstIndex: s.firstIndex, count: s.numIndices, bind, item: itemIndex, ubuf, meshTm: mesh.transform, inst: ib2.buf, instCount: ib2.count, blend: (blend && !decal) || overlay, ground: decal, overlay,
           pooled, palette: palette ? palette.buf : this.identityPalette, uvDensity: pooled.some(Boolean) ? uvDensity(mesh, s.firstIndex, s.numIndices) : 0,
         };
         this.draws.push(d);
@@ -709,7 +733,9 @@ export class ModelRenderer {
       }],
       depthStencilAttachment: { view: this.depth.createView(), depthClearValue: 1, depthLoadOp: "clear", depthStoreOp: "discard" },
     });
+    this.drawGround(pass);
     this.draw(pass);
+    this.drawBlended(pass);
     pass.end();
     this.device.queue.submit([enc.finish()]);
   }
@@ -784,11 +810,11 @@ export class ModelRenderer {
       if (live.length) pass.executeBundles(live);
       return;
     }
-    pass.setPipeline(this.blendPipeline);
     pass.setBindGroup(0, this.camBind);
     for (const d of this.draws) {
       const n = this.itemInst[d.item]?.count ?? d.instCount;
       if (!n || !d.count || !d[kind]) continue;
+      pass.setPipeline(d.overlay ? this.overlayPipeline : this.blendPipeline);
       pass.setVertexBuffer(0, d.vb);
       pass.setVertexBuffer(1, d.inst);
       pass.setIndexBuffer(d.ib, "uint32");
@@ -914,13 +940,15 @@ export class ModelRenderer {
     const list = this.drawIndex.get(item)?.filter((i) => kindOf(this.draws[i]) === kind);
     if (!list?.length) return undefined;
     const enc = this.device.createRenderBundleEncoder({ colorFormats: v.colorFormats, depthStencilFormat: v.depthFormat, sampleCount: v.sampleCount });
-    enc.setPipeline(kind === "opaque" ? v.pipeline : this.blendPipeline);
+    let pipeline: GPURenderPipeline | null = null;
     enc.setBindGroup(0, v === this.views[0] ? this.camBind : v.camBind);
     const dynamic = this.dynamicItems.includes(item);
     let vb: GPUBuffer | null = null, ib: GPUBuffer | null = null, inst: GPUBuffer | null = null;
     for (const i of list) {
       const d = this.draws[i];
       const ibuf = dynamic ? v.packed! : d.inst;
+      const p = kind === "opaque" ? v.pipeline : d.overlay ? this.overlayPipeline : this.blendPipeline;
+      if (p !== pipeline) enc.setPipeline((pipeline = p));
       if (d.vb !== vb) enc.setVertexBuffer(0, (vb = d.vb));
       if (ibuf !== inst) enc.setVertexBuffer(1, (inst = ibuf));
       if (d.ib !== ib) enc.setIndexBuffer((ib = d.ib), "uint32");

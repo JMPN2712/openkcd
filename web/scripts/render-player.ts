@@ -44,7 +44,9 @@ const clock = opt("--clock", "12:00").split(":").map(Number);
 // a free camera instead of Henry's view: x,y,z,yawDeg,pitchDeg (z 0 = 2 m above the ground)
 const fly = opt("--fly", "");
 const grassRadius = Number(opt("--grass", "55")); // 0: no grass
-const atNpc = opt("--at-npc", ""); // with --npcs: the camera 3 m in front of this NPC (by name), facing them
+const atNpc = opt("--at-npc", ""); // with --npcs: the camera in front of this NPC (by name), facing them
+const npcDist = Number(opt("--npc-dist", "3")); // metres from that NPC; --npc-yaw turns the camera around them (degrees)
+const npcYaw = (Number(opt("--npc-yaw", "0")) * Math.PI) / 180;
 const withNpcs = args.includes("--npcs") ? (args.splice(args.indexOf("--npcs"), 1), true) : false; // NPCs within 120 m, by their schedules
 const [outDir] = args;
 if (!outDir) throw new Error("usage: render-player.ts OUT_DIR [options]");
@@ -166,9 +168,9 @@ async function render(name: string): Promise<void> {
     const p = target && npcWorld.drawn(target.entity.id);
     if (p) {
       // the model faces +Y turned by its rotation (a yaw quaternion)
-      const yaw = 2 * Math.atan2(p.rot[3], p.rot[0]) + Math.PI / 2;
-      const ex = p.pos[0] + Math.cos(yaw) * 3, ey = p.pos[1] + Math.sin(yaw) * 3;
-      cam = { pos: [ex, ey, p.pos[2] + 1.5], yaw: yaw + Math.PI, pitch: -0.12 };
+      const yaw = 2 * Math.atan2(p.rot[3], p.rot[0]) + Math.PI / 2 + npcYaw;
+      const ex = p.pos[0] + Math.cos(yaw) * npcDist, ey = p.pos[1] + Math.sin(yaw) * npcDist;
+      cam = { pos: [ex, ey, p.pos[2] + Number(process.env.NPC_EYE ?? 1.5)], yaw: yaw + Math.PI, pitch: Number(process.env.NPC_PITCH ?? -0.12) };
       console.log(`framing ${atNpc}: ${p.activity} at ${p.where}, ${p.pose}, feet at z ${p.pos[2].toFixed(2)} (terrain ${heightAt(lvl.terrain, p.pos[0], p.pos[1]).toFixed(2)})`);
     }
   }
@@ -234,6 +236,8 @@ async function render(name: string): Promise<void> {
   playerR.draw(pass);
   models.drawBlended(pass);
   grassR.drawBlended(pass);
+  if (npcWorld) npcR.drawBlended(pass);
+  playerR.drawBlended(pass);
   water.draw(pass);
   pass.end();
   device.queue.submit([enc.finish()]);

@@ -563,6 +563,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     // see-through materials (waterfalls, weirs, glass) over everything opaque
     farR.drawBlended(pass);
     models.drawBlended(pass);
+    // (eye shadow shells)
+    npcR.drawBlended(pass);
+    if (player && mode === "player") playerR.drawBlended(pass);
     water.draw(pass);
     pass.end();
     device.queue.submit([enc.finish()]);
