@@ -116,6 +116,9 @@ export interface FlyCamera {
 const LODS = [1, 4, 16]; // sample steps
 const PATCH = 64; // samples per patch side
 
+/** The world view's vertical field of view (radians). */
+export const FOV_Y = Math.PI / 3.2;
+
 export class TerrainRenderer {
   readonly device: GPUDevice;
   readonly terrain: Terrain;
@@ -329,7 +332,7 @@ export class TerrainRenderer {
   static viewProj(cam: FlyCamera, aspect: number, opts: { reversed?: boolean; near?: number; fovY?: number } = {}): Float32Array {
     const dir: Vec3 = [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)];
     const at: Vec3 = [cam.pos[0] + dir[0], cam.pos[1] + dir[1], cam.pos[2] + dir[2]];
-    const fov = opts.fovY ?? Math.PI / 3.2;
+    const fov = opts.fovY ?? FOV_Y;
     const proj = opts.reversed ? perspectiveReversed(fov, aspect, opts.near ?? 0.01) : perspective(fov, aspect, opts.near ?? 0.5, 12000);
     return multiply(proj, lookAt(cam.pos, at, [0, 0, 1]));
   }

@@ -29,6 +29,11 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
   map cell for the Vega 7; NPCs in Rattay are mostly indoors at noon
   (schedules); hiding body parts under clothes (needs a research note on how
   the game maps `item/body_subpart` to the body mesh).
+- **Texture streaming (2026-10-21, done this session):** one shared, streamed GPU texture per
+  file (`texturePool.ts`): near objects get up to 512 (Potato) to 2048 px (High) within a memory
+  budget per preset; reads inflate on worker threads (`readWorkers.ts`). See
+  `docs/PERFORMANCE.md`. Next on the same track: sharper terrain detail layers, cheaper swaps,
+  then the low-end work (small-object culling, far-tree culling per cell).
 - **Debugging renders:** `node scripts/render-player.ts OUT --at x,y,yaw`
   with `--fly x,y,z,yaw,pitch` (z 0 = 2 m above ground; keep `--at` near the
   camera so the scene streams there, but not on it, or Henry blocks the
@@ -136,6 +141,9 @@ playable frame rates on the Potato preset.
 ### Follow-ups from milestone 1
 
 - [ ] Measure Potato on the Vega 7 laptop in Chrome.
+- [x] Texture streaming: textures sized by distance within a memory budget per preset, shared
+      across renderers and rebuilds, reads on worker threads.
+- [ ] Terrain detail layers sharper up close.
 - [ ] Terrain normal maps; terrain casting shadows (hills at dusk).
 - [ ] Turning on the spot (`1d_relaxed_idle_bigturns_nw`), look IK.
 - [ ] Doors that open (they don't block the player yet).

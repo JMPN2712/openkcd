@@ -2,13 +2,15 @@
 // the view at the end of each input segment.
 // usage: node scripts/render-player.ts OUT_DIR [--at x,y,yawDeg] [--walk "SECONDS:KEYS;…"]
 //          [--view third|first] [--pitch DEG] [--radius R] [--clock HH:MM] [--root GAME_ROOT]
+//          [--textures MAXDIM,BUDGET_MIB | --no-pool] (streamed textures; default 2048,768 like Medium)
 // KEYS: w a s d, shift (sprint), walk (walk gait), jump; e.g. --walk "1:;2:w;1.5:w+shift;1:"
 
 import { writeFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { heightAt } from "../src/terrain.ts";
-import { TerrainRenderer, type FlyCamera } from "../src/terrainRenderer.ts";
+import { FOV_Y, TerrainRenderer, type FlyCamera } from "../src/terrainRenderer.ts";
+import { TexturePool } from "../src/texturePool.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 import { WaterRenderer } from "../src/waterRenderer.ts";
 import { buildGrassScene, buildWorldScene, isUberLod, lodItems, newWorldCaches, selectLods, type WorldScene } from "../src/world.ts";
@@ -48,19 +50,23 @@ const [outDir] = args;
 if (!outDir) throw new Error("usage: render-player.ts OUT_DIR [options]");
 await mkdir(outDir, { recursive: true });
 const W = 1280, H = 720;
+const [poolDim, poolMiB] = opt("--textures", "2048,768").split(",").map(Number);
+const noPool = args.includes("--no-pool") ? (args.splice(args.indexOf("--no-pool"), 1), true) : false;
 
 const lvl = await openRataje(root);
 const device = await gpuDevice();
+// streamed textures: each view renders until they have loaded (--no-pool: the first-load sizes only)
+const pool = noPool ? undefined : new TexturePool(device, lvl.vfs, { budget: poolMiB * 2 ** 20, maxDim: poolDim });
 const format: GPUTextureFormat = "rgba8unorm";
 const passSetup: PassSetup = { sampleCount: 4, reversedZ: true };
 const detail = args.includes("--no-detail") ? undefined : await loadDetailLayers(lvl.vfs, lvl.surfaceTypes, 512);
 if (detail) console.log(`terrain detail: ${detail.layers.length} layers (${detail.names.map((n) => n.split("/").pop()).join(", ")})`);
 const terrainR = new TerrainRenderer(device, format, lvl.terrain, lvl.cover, passSetup, detail);
-const models = new ModelRenderer(device, format, 4, passSetup);
+const models = new ModelRenderer(device, format, 4, { ...passSetup, pool });
 const shadowMap = args.includes("--no-shadows") ? null : new ShadowMap(device, 2048, 2, [20, 120]);
 const casters = new ShadowCasters();
 const water = new WaterRenderer(device, format, lvl.objects.water, passSetup);
-const playerR = new ModelRenderer(device, format, 4, passSetup);
+const playerR = new ModelRenderer(device, format, 4, { ...passSetup, pool });
 const sky = new SkyRenderer(device, format, passSetup);
 const off = new Offscreen(device, W, H, format);
 const msaa = device.createTexture({ size: [W, H], format, sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
@@ -79,7 +85,7 @@ const lodCounts = items.map(() => 0);
 console.log(`world: ${scene.models.length} models, ${scene.instances} instances within ${radius} m (${((performance.now() - t0) / 1000).toFixed(1)} s)`);
 
 // the far field: every uber-LOD, drawn beyond the streamed radius
-const farR = new ModelRenderer(device, format, 4, passSetup);
+const farR = new ModelRenderer(device, format, 4, { ...passSetup, pool });
 const farScene = args.includes("--no-far") ? null : await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, [lvl.terrain.size / 2, lvl.terrain.size / 2], lvl.terrain.size, { maxModels: 1000, caches: newWorldCaches(), hiddenLayers: lvl.hiddenLayers, normalMaps: false, onlyBrushes: isUberLod });
 const farItems = farScene ? lodItems(farScene) : [];
 farR.setModels(farItems);
@@ -96,7 +102,7 @@ playerR.setShadow(shadowMap);
 terrainR.setShadow(shadowMap);
 
 // grass around the camera, rebuilt when it has moved
-const grassR = new ModelRenderer(device, format, 4, passSetup);
+const grassR = new ModelRenderer(device, format, 4, { ...passSetup, pool });
 const grassCaches = newWorldCaches();
 let grass: { at: [number, number]; scene: WorldScene; out: Float32Array[]; counts: number[] } | null = null;
 async function updateGrass(at: [number, number]): Promise<void> {
@@ -112,7 +118,7 @@ async function updateGrass(at: [number, number]): Promise<void> {
 
 // NPCs as in the world view: placed by their schedules (navmesh routes), stepped by the crowd, standing
 // on the collision surfaces
-const npcR = new ModelRenderer(device, format, 4, passSetup);
+const npcR = new ModelRenderer(device, format, 4, { ...passSetup, pool });
 let npcWorld: NpcWorld | null = null;
 let npcs: WorldNpc[] = [];
 if (withNpcs) {
@@ -195,6 +201,19 @@ async function render(name: string): Promise<void> {
   farTrees.setCamera(vp, cam.pos, state?.lighting ?? DEFAULT_LIGHTING, { center: [ax, ay], radius, distanceScale: 1 });
   water.time = simSeconds;
   water.setCamera(vp, cam.pos, [0.45, 0.25, 0.85], undefined, state?.lighting, state?.horizon);
+  // until the streamed textures settle (idle for a few frames), then once more for the picture
+  pool?.setViewport(H, FOV_Y);
+  for (let f = 0, quiet = 0; pool && f < 600 && quiet < 6; f++) {
+    pool.beginFrame();
+    drawFrame();
+    await device.queue.onSubmittedWorkDone();
+    quiet = pool.idle ? quiet + 1 : 0;
+    await new Promise((r) => setTimeout(r, 1));
+  }
+  pool?.beginFrame();
+  drawFrame();
+  if (pool) console.log(`  ${pool.summary()}`);
+  function drawFrame(): void {
   const enc = device.createCommandEncoder();
   if (shadowMap && state) {
     const f = [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)] as [number, number, number];
@@ -218,6 +237,7 @@ async function render(name: string): Promise<void> {
   water.draw(pass);
   pass.end();
   device.queue.submit([enc.finish()]);
+  }
   const file = join(outDir, `${name}.png`);
   await writeFile(file, await off.png());
   const c = session.controller;

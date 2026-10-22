@@ -7,6 +7,7 @@
 
 import { readCentralDirectory, readEntry, type PakEntry } from "./zip.ts";
 import type { PakSource } from "./paks.ts";
+import { READ_IN_WORKER, type ReadWorkers } from "./readWorkers.ts";
 
 export interface VfsHit {
   pak: PakSource;
@@ -37,6 +38,8 @@ export class Vfs {
   /** every version of each file, ascending rank: the last one wins */
   private files = new Map<string, VfsHit[]>();
   private blobs = new Map<PakSource, Promise<Blob>>();
+  /** worker threads for large reads (readWorkers.ts); shared by the copies extend() makes */
+  workers: ReadWorkers | null = null;
 
   get size(): number {
     return this.files.size;
@@ -74,6 +77,7 @@ export class Vfs {
     const v = new Vfs();
     for (const [k, list] of this.files) v.files.set(k, list);
     v.blobs = this.blobs;
+    v.workers = this.workers;
     for (const entry of await readCentralDirectory(await v.blob(pak))) {
       const key = entry.name.toLowerCase();
       if (!filter(key)) continue;
@@ -103,6 +107,8 @@ export class Vfs {
 
   async read(hit: VfsHit, limit?: number): Promise<Uint8Array> {
     // asset reads skip the CRC check (the pak tests verify the files)
-    return readEntry(await this.blob(hit.pak), hit.entry, limit, false);
+    const blob = await this.blob(hit.pak);
+    if (this.workers && limit === undefined && hit.entry.csize >= READ_IN_WORKER) return this.workers.read(hit.pak, blob, hit.entry);
+    return readEntry(blob, hit.entry, limit, false);
   }
 }
