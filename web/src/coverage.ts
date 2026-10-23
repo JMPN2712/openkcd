@@ -1,5 +1,6 @@
-// Skin hidden under clothing. Garments sit a centimetre or two over the body, and where the body
-// is fuller than the garment (toes and insteps in shoes, knees in hose) the skin pokes through.
+// Skin hidden under clothing (and inner garments under outer ones). Garments sit a centimetre or
+// two over the body, and where the body is fuller than the garment (toes and insteps in shoes,
+// knees in hose) the skin pokes through.
 // Every part of a character is stored in the bind pose in model space, so this is decided once
 // per character, geometrically: a body vertex is covered when a short ray along its normal, out
 // to just above the skin or in to just under it, meets a garment's surface. Body triangles with
@@ -7,14 +8,37 @@
 // does it.)
 
 import type { CgfMesh } from "./cgf.ts";
-import type { LoadedModel } from "./model.ts";
+import type { LoadedModel, MipChain } from "./model.ts";
+import { decodeBC1, decodeBC2, decodeBC3, decodeBC7 } from "./bcn.ts";
 
 /** Garment surface counts within this far outside the skin, and this far inside it (poking through). */
 const OUT = 0.04;
 const IN = 0.03;
 const CELL = 0.05;
 
-interface Tri { a: number; b: number; c: number; p: Float32Array }
+/** A garment mesh, with its model when its alpha-tested materials should count only where opaque. */
+export interface Garment { mesh: CgfMesh; model?: LoadedModel }
+
+/** An alpha-tested material's coverage: its diffuse alpha (one level, nearest texel) and threshold. */
+interface AlphaMap { w: number; h: number; a: Uint8Array; test: number }
+
+interface Tri { a: number; b: number; c: number; p: Float32Array; uv: Float32Array | null; alpha: AlphaMap | null }
+
+/** Garment sleeves are often cut short by the texture's alpha: the geometry beyond covers nothing. */
+function alphaMap(chain: MipChain | null, test: number): AlphaMap | null {
+  if (!chain || chain.released || !chain.levels.length) return null;
+  const l = chain.levels.find((v) => v.w <= 256) ?? chain.levels[chain.levels.length - 1];
+  let rgba: Uint8Array | Uint8ClampedArray = l.data;
+  if (chain.bc) {
+    const f = chain.bc.format;
+    const dec = f.startsWith("bc1") ? decodeBC1 : f.startsWith("bc2") ? decodeBC2 : f.startsWith("bc3") ? decodeBC3 : f.startsWith("bc7") ? decodeBC7 : null;
+    if (!dec) return null;
+    rgba = dec(l.data as Uint8Array, l.w, l.h);
+  }
+  const a = new Uint8Array(l.w * l.h);
+  for (let i = 0; i < a.length; i++) a[i] = rgba[i * 4 + 3];
+  return { w: l.w, h: l.h, a, test };
+}
 
 /** World (model-space) positions of a mesh: its node transform applied. */
 function positionsOf(m: CgfMesh): Float32Array {
@@ -36,20 +60,27 @@ class TriGrid {
     return ((Math.floor(x / CELL) + 512) * 1024 + (Math.floor(y / CELL) + 512)) * 1024 + (Math.floor(z / CELL) + 512);
   }
 
-  add(m: CgfMesh): void {
-    const p = positionsOf(m), I = m.indices;
-    for (let t = 0; t + 2 < I.length; t += 3) {
-      const tri = { a: I[t] * 3, b: I[t + 1] * 3, c: I[t + 2] * 3, p };
-      const id = this.tris.push(tri) - 1;
-      const lo = [0, 1, 2].map((k) => Math.min(p[tri.a + k], p[tri.b + k], p[tri.c + k]));
-      const hi = [0, 1, 2].map((k) => Math.max(p[tri.a + k], p[tri.b + k], p[tri.c + k]));
-      for (let x = Math.floor(lo[0] / CELL); x <= Math.floor(hi[0] / CELL); x++)
-        for (let y = Math.floor(lo[1] / CELL); y <= Math.floor(hi[1] / CELL); y++)
-          for (let z = Math.floor(lo[2] / CELL); z <= Math.floor(hi[2] / CELL); z++) {
-            const k = this.key(x * CELL, y * CELL, z * CELL);
-            const l = this.cells.get(k);
-            if (l) l.push(id); else this.cells.set(k, [id]);
-          }
+  add(g: Garment): void {
+    const m = g.mesh, p = positionsOf(m), I = m.indices;
+    const alphaOf = new Map<number, AlphaMap | null>();
+    for (const s of m.subsets) {
+      const mat = g.model?.materials[s.matId];
+      if (mat?.nodraw) continue;
+      let alpha = alphaOf.get(s.matId);
+      if (alpha === undefined) alphaOf.set(s.matId, (alpha = mat && mat.alphaTest > 0 && m.uvs ? alphaMap(g.model!.diffuse[s.matId], mat.alphaTest) : null));
+      for (let t = s.firstIndex; t + 2 < s.firstIndex + s.numIndices; t += 3) {
+        const tri: Tri = { a: I[t] * 3, b: I[t + 1] * 3, c: I[t + 2] * 3, p, uv: m.uvs, alpha };
+        const id = this.tris.push(tri) - 1;
+        const lo = [0, 1, 2].map((k) => Math.min(p[tri.a + k], p[tri.b + k], p[tri.c + k]));
+        const hi = [0, 1, 2].map((k) => Math.max(p[tri.a + k], p[tri.b + k], p[tri.c + k]));
+        for (let x = Math.floor(lo[0] / CELL); x <= Math.floor(hi[0] / CELL); x++)
+          for (let y = Math.floor(lo[1] / CELL); y <= Math.floor(hi[1] / CELL); y++)
+            for (let z = Math.floor(lo[2] / CELL); z <= Math.floor(hi[2] / CELL); z++) {
+              const k = this.key(x * CELL, y * CELL, z * CELL);
+              const l = this.cells.get(k);
+              if (l) l.push(id); else this.cells.set(k, [id]);
+            }
+      }
     }
   }
 
@@ -74,7 +105,7 @@ class TriGrid {
   }
 }
 
-/** Möller–Trumbore, both faces, within [0, len]. */
+/** Möller–Trumbore, both faces, within [0, len]; an alpha-tested triangle only where it is opaque. */
 function rayTri(o: [number, number, number], d: [number, number, number], len: number, t: Tri): boolean {
   const P = t.p;
   const e1x = P[t.b] - P[t.a], e1y = P[t.b + 1] - P[t.a + 1], e1z = P[t.b + 2] - P[t.a + 2];
@@ -90,14 +121,20 @@ function rayTri(o: [number, number, number], d: [number, number, number], len: n
   const v = (d[0] * qx + d[1] * qy + d[2] * qz) * inv;
   if (v < 0 || u + v > 1) return false;
   const dist = (e2x * qx + e2y * qy + e2z * qz) * inv;
-  return dist >= 0 && dist <= len;
+  if (dist < 0 || dist > len) return false;
+  const A = t.alpha;
+  if (!A || !t.uv) return true;
+  const ia = t.a / 3 * 2, ib = t.b / 3 * 2, ic = t.c / 3 * 2, w = 1 - u - v;
+  const tu = t.uv[ia] * w + t.uv[ib] * u + t.uv[ic] * v, tv = t.uv[ia + 1] * w + t.uv[ib + 1] * u + t.uv[ic + 1] * v;
+  const x = Math.min(A.w - 1, Math.floor((tu - Math.floor(tu)) * A.w)), y = Math.min(A.h - 1, Math.floor((tv - Math.floor(tv)) * A.h));
+  return A.a[y * A.w + x] >= A.test * 255;
 }
 
 /**
  * The body model without its covered triangles (a copy: models can be shared), or the model
  * itself when nothing is covered. `garments` are the clothing meshes worn over it.
  */
-export function hideCoveredSkin(body: LoadedModel, garments: CgfMesh[], opts: { from?: [number, number, number] } = {}): { model: LoadedModel; hidden: number } {
+export function hideCoveredSkin(body: LoadedModel, garments: Garment[], opts: { from?: [number, number, number] } = {}): { model: LoadedModel; hidden: number } {
   if (!garments.length) return { model: body, hidden: 0 };
   const grid = new TriGrid();
   for (const g of garments) grid.add(g);

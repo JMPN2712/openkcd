@@ -33,6 +33,11 @@ export interface WorldModel {
   matrices: Float32Array; // 16 per instance
   /** per instance: world-space sphere centre (xyz) and radius */
   spheres: Float32Array; // 4 per instance
+  /**
+   * Instances are sorted along a Morton curve, so each run of CLUSTER of them lies close
+   * together: per run, the centre and radius around their centres, and their largest radius.
+   */
+  clusters: Float32Array; // 5 per run
   /** an uber-LOD (town-block stand-in), drawn only from afar */
   uber: boolean;
 }
@@ -320,8 +325,17 @@ async function sceneFromGroups(
       continue;
     }
     const { center: c, radius: r } = boundingSphere(lods[0]);
-    const matrices = new Float32Array(g.matrices);
-    const count = matrices.length / 16;
+    const count = g.matrices.length / 16;
+    // nearby instances next to each other (8 m cells along a Morton curve), for the clusters
+    const morton = (x: number, y: number) => {
+      const cx = Math.max(0, Math.min(1023, Math.floor(x / 8))), cy = Math.max(0, Math.min(1023, Math.floor(y / 8)));
+      let k = 0;
+      for (let b = 0; b < 10; b++) k |= (((cx >> b) & 1) << (2 * b)) | (((cy >> b) & 1) << (2 * b + 1));
+      return k;
+    };
+    const order = Array.from({ length: count }, (_, i) => [morton(g.matrices[i * 16 + 12], g.matrices[i * 16 + 13]), i]).sort((a, b) => a[0] - b[0]);
+    const matrices = new Float32Array(count * 16);
+    order.forEach(([, i], j) => { for (let k = 0; k < 16; k++) matrices[j * 16 + k] = g.matrices[i * 16 + k]; });
     const spheres = new Float32Array(count * 4);
     for (let i = 0; i < count; i++) {
       const m = matrices.subarray(i * 16, i * 16 + 16);
@@ -330,10 +344,32 @@ async function sceneFromGroups(
       spheres[i * 4 + 2] = m[2] * c[0] + m[6] * c[1] + m[10] * c[2] + m[14];
       spheres[i * 4 + 3] = r * Math.max(Math.hypot(m[0], m[1], m[2]), Math.hypot(m[4], m[5], m[6]), Math.hypot(m[8], m[9], m[10]));
     }
-    models.push({ path: g.path, kind: g.kind, lods, center: c, radius: r, count, matrices, spheres, uber: g.path.startsWith("objects/uberlods/") });
+    models.push({ path: g.path, kind: g.kind, lods, center: c, radius: r, count, matrices, spheres, clusters: clustersOf(spheres, count), uber: g.path.startsWith("objects/uberlods/") });
     instances += count;
   }
   return { models, instances, modelsSkipped: Math.max(0, ordered.length - max), failed };
+}
+
+/** Instances per culling cluster (WorldModel.clusters). */
+const CLUSTER = 16;
+
+function clustersOf(S: Float32Array, count: number): Float32Array {
+  const out = new Float32Array(Math.ceil(count / CLUSTER) * 5);
+  for (let j = 0, o = 0; j < count; j += CLUSTER, o += 5) {
+    const end = Math.min(count, j + CLUSTER);
+    let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity, rmax = 0;
+    for (let i = j; i < end; i++) {
+      const x = S[i * 4], y = S[i * 4 + 1], z = S[i * 4 + 2];
+      x0 = Math.min(x0, x); y0 = Math.min(y0, y); z0 = Math.min(z0, z);
+      x1 = Math.max(x1, x); y1 = Math.max(y1, y); z1 = Math.max(z1, z);
+      rmax = Math.max(rmax, S[i * 4 + 3]);
+    }
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, cz = (z0 + z1) / 2;
+    let R = 0;
+    for (let i = j; i < end; i++) R = Math.max(R, Math.hypot(S[i * 4] - cx, S[i * 4 + 1] - cy, S[i * 4 + 2] - cz));
+    out[o] = cx; out[o + 1] = cy; out[o + 2] = cz; out[o + 3] = R; out[o + 4] = rmax;
+  }
+  return out;
 }
 
 /** Uber-LODs: simplified stand-ins for whole town blocks (objects/uberlods/<town>/…). */
@@ -391,30 +427,45 @@ export function selectLods(
   for (const wm of scene.models) {
     const base = item;
     for (let l = 0; l < wm.lods.length; l++) counts[base + l] = 0;
-    const S = wm.spheres, M = wm.matrices, nl = wm.lods.length - 1;
-    for (let i = 0; i < wm.count; i++) {
-      const x = S[i * 4], y = S[i * 4 + 1], z = S[i * 4 + 2], r = S[i * 4 + 3];
-      const d = Math.sqrt((x - ex) * (x - ex) + (y - ey) * (y - ey) + (z - ez) * (z - ez));
-      if (r < minR || (!wm.uber && d - r > (80 + 70 * r) * distScale) || d - r > maxD) { stats.culledDistance++; continue; }
-      // uber-LODs are simplified stand-ins for whole town blocks: far views only, else they
-      // overlap the detailed buildings they replace
-      if (wm.uber && d - r < (opts.uberNear ?? UBER_NEAR * distScale)) { stats.culledDistance++; continue; }
-      let inside = true;
-      for (let k = 0; k < 24; k += 4) if (P[k] * x + P[k + 1] * y + P[k + 2] * z + P[k + 3] < -r) { inside = false; break; }
-      if (!inside) { stats.culledFrustum++; continue; }
-      const lod = Math.min(nl, Math.floor(Math.max(0, d - r) / ((8 * r + 10) * lodScale)));
-      const dst = base + lod;
-      // copy the 16 floats by hand (a subarray per instance kept the garbage collector busy)
-      const o = out[dst], to = counts[dst] * 16, from = i * 16;
-      for (let c = 0; c < 16; c++) o[to + c] = M[from + c];
-      if (fade && d > fade[0]) {
-        const f = Math.max(0, 1 - (d - fade[0]) / (fade[1] - fade[0]));
-        if (f === 0) { stats.culledDistance++; continue; }
-        for (let c = 0; c < 12; c++) if ((c & 3) !== 3) o[to + c] *= f;
+    const S = wm.spheres, M = wm.matrices, C = wm.clusters, nl = wm.lods.length - 1;
+    for (let j = 0, co = 0; j < wm.count; j += CLUSTER, co += 5) {
+      const end = Math.min(wm.count, j + CLUSTER);
+      // a whole cluster out of reach (every instance is at least D − R away and at most rmax in
+      // radius) or outside a frustum plane is skipped; one inside every plane skips the planes
+      const cx = C[co], cy = C[co + 1], cz = C[co + 2], R = C[co + 3], rmax = C[co + 4];
+      const near = Math.sqrt((cx - ex) * (cx - ex) + (cy - ey) * (cy - ey) + (cz - ez) * (cz - ez)) - R - rmax;
+      if (rmax < minR || (!wm.uber && near > (80 + 70 * rmax) * distScale) || near > maxD) { stats.culledDistance += end - j; continue; }
+      let allInside = true, outside = false;
+      for (let k = 0; k < 24; k += 4) {
+        const s = P[k] * cx + P[k + 1] * cy + P[k + 2] * cz + P[k + 3];
+        if (s < -(R + rmax)) { outside = true; break; }
+        if (s < R + rmax) allInside = false;
       }
-      counts[dst]++;
-      stats.perLod[lod] = (stats.perLod[lod] ?? 0) + 1;
-      stats.drawn++;
+      if (outside) { stats.culledFrustum += end - j; continue; }
+      for (let i = j; i < end; i++) {
+        const x = S[i * 4], y = S[i * 4 + 1], z = S[i * 4 + 2], r = S[i * 4 + 3];
+        const d = Math.sqrt((x - ex) * (x - ex) + (y - ey) * (y - ey) + (z - ez) * (z - ez));
+        if (r < minR || (!wm.uber && d - r > (80 + 70 * r) * distScale) || d - r > maxD) { stats.culledDistance++; continue; }
+        // uber-LODs are simplified stand-ins for whole town blocks: far views only, else they
+        // overlap the detailed buildings they replace
+        if (wm.uber && d - r < (opts.uberNear ?? UBER_NEAR * distScale)) { stats.culledDistance++; continue; }
+        let inside = true;
+        if (!allInside) for (let k = 0; k < 24; k += 4) if (P[k] * x + P[k + 1] * y + P[k + 2] * z + P[k + 3] < -r) { inside = false; break; }
+        if (!inside) { stats.culledFrustum++; continue; }
+        const lod = Math.min(nl, Math.floor(Math.max(0, d - r) / ((8 * r + 10) * lodScale)));
+        const dst = base + lod;
+        // copy the 16 floats by hand (a subarray per instance kept the garbage collector busy)
+        const o = out[dst], to = counts[dst] * 16, from = i * 16;
+        for (let c = 0; c < 16; c++) o[to + c] = M[from + c];
+        if (fade && d > fade[0]) {
+          const f = Math.max(0, 1 - (d - fade[0]) / (fade[1] - fade[0]));
+          if (f === 0) { stats.culledDistance++; continue; }
+          for (let c = 0; c < 12; c++) if ((c & 3) !== 3) o[to + c] *= f;
+        }
+        counts[dst]++;
+        stats.perLod[lod] = (stats.perLod[lod] ?? 0) + 1;
+        stats.drawn++;
+      }
     }
     item += wm.lods.length;
   }

@@ -12,6 +12,8 @@ export interface Material {
   specular: [number, number, number];
   opacity: number;
   alphaTest: number;
+  /** SurfaceType, e.g. "mat_water" */
+  surfaceType: string;
   nodraw: boolean;
   /** shader feature flags, e.g. "%COLORIZING%NORMAL_MAP" */
   genMask: string;
@@ -54,6 +56,7 @@ function toMaterial(n: XmlNode): Material {
     opacity: Number(n.attrs.Opacity ?? 1),
     // (%DECAL sub-materials are drawn blended by the renderer, not alpha-tested)
     alphaTest: Number(n.attrs.AlphaTest ?? 0),
+    surfaceType: n.attrs.SurfaceType ?? "",
     // hidden: Nodraw shader, the NODRAW flag (0x400), helper textures, physics/shadow proxy
     // sub-materials (proxy_mat_*, shadowproxy: present in render meshes, never
     // drawn), and volumetric

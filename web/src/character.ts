@@ -337,7 +337,7 @@ export async function loadCharacter(
     }
   }
   // the body's skin under the clothes is left out, so it can't poke through (coverage.ts)
-  const garments = parts.filter((p) => (p.part.kind === "cloth" || p.part.kind === "attachment") && !p.transform).flatMap((p) => p.model.cgf.meshes);
+  const garments = parts.filter((p) => (p.part.kind === "cloth" || p.part.kind === "attachment") && !p.transform).flatMap((p) => p.model.cgf.meshes.map((mesh) => ({ mesh, model: p.model })));
   // and hair strands just under or over headwear (rays outward from the middle of the head)
   const head = parts.find((p) => p.part.kind === "head")?.model.cgf.meshes[0];
   const headCentre = head ? ([0, 1, 2].map((k) => (head.bboxMin[k] + head.bboxMax[k]) / 2 + head.transform[12 + k]) as [number, number, number]) : undefined;
@@ -346,6 +346,17 @@ export async function loadCharacter(
     const { model, hidden } = hideCoveredSkin(p.model, garments, p.part.kind === "hair" ? { from: headCentre } : {});
     p.model = model;
     if (hidden) notes.push(`${p.part.label}: ${hidden} triangles under clothing left out`);
+  }
+  // likewise a garment under one worn over it (a higher body layer: a shirt under a gambeson, a
+  // gambeson under mail), where it pokes through the outer one; garments on the same layer (shirt
+  // and hose) never hide each other
+  const worn = parts.filter((p) => (p.part.kind === "cloth" || p.part.kind === "attachment") && !p.transform);
+  for (const p of worn) {
+    if (p.part.kind !== "cloth") continue;
+    const outer = worn.filter((o) => o.part.layer > p.part.layer).flatMap((o) => o.model.cgf.meshes.map((mesh) => ({ mesh, model: o.model })));
+    const { model, hidden } = hideCoveredSkin(p.model, outer);
+    p.model = model;
+    if (hidden) notes.push(`${p.part.label}: ${hidden} triangles under outer clothing left out`);
   }
   return { spec, parts, notes };
 }

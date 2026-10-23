@@ -182,6 +182,10 @@ playable frame rates on the Potato preset.
   - [x] Models with Water, Waterfall and Glass materials (dam overflows,
         weirs, mill races, tubs, buckets, windows) are drawn blended after
         the opaque scene; they had rendered as opaque glitchy surfaces.
+  - [x] How opaque they are: the Waterfall shader's `AlphaBlendMul` (0.09
+        on the thin film over the Rattay mill weir, which had drawn as a
+        white sheet of waves) and, for Illum water sheets (`mat_water`), the
+        material's `Opacity` (they had drawn opaque).
   - [x] Ripples (six small wave trains with drifting phase, fading with
         distance) and reflections: the banks' dark band near the horizon,
         then haze, then sky; sun glitter.

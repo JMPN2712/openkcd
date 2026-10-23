@@ -166,6 +166,18 @@ streaming as Henry runs):
 - `NO_POOL=1 node scripts/bench-presets.ts` compares; `scripts/test-texture-pool.ts` checks
   growing, shrinking (read back from the GPU) and the worker reads.
 
+## Instance clusters (2026-10-23)
+
+Each model's instances are sorted along a Morton curve (8 m cells) when the scene is built, and
+every run of 16 keeps a bounding sphere and its largest instance radius (`WorldModel.clusters`).
+`selectLods` skips a whole run when it is out of reach or outside a frustum plane, and skips the
+per-instance plane tests for a run inside every plane. The drawn set is unchanged (the market:
+11,013 instances, same LODs). Medium, market, 107k instances in the scene: camera selection 0.92 →
+0.68 ms, a shadow cascade's (120 m, radius ≥ 1 m) 0.60 → 0.32 ms.
+
+The world view's HUD shows the main thread's time per frame next to the fps (`cpu … ms`): fps well
+below 1000 / cpu means the GPU, not JavaScript, sets the frame rate.
+
 ## Next
 
 - **Terrain detail layers** are still 256–512 px and blurry up close (the ground under Henry's
