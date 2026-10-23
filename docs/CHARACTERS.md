@@ -62,9 +62,19 @@ viewer (`web/src/character.ts`, `characterView.ts`). Verified with
   test, not the game's method, which is undocumented: a body vertex is covered when a ray along
   its normal, from 3 cm inside the skin to 4 cm outside, meets a garment. Triangles with all three
   vertices covered are dropped. Hair gets the same test with rays outward from the middle of the
-  head, so strands no longer poke through hat bands. The NPC body skins carry no region data
-  that would do this (no vertex colours, one subset); a research note on how the game hides body
-  parts (`item/armor_archetype2body_subpart`, `is_exclusive`) could replace it later.
+  head, so strands no longer poke through hat bands.
+- **Inner garments under outer ones.** The same test hides a garment's triangles under any
+  garment on a higher body layer (`item/body_layer.layer_order`: cloth inner 1, chainmail 2,
+  plate 3, cloth outer 4, …) and under skinned attachments. A surcotte no longer shows through an
+  apron at the waist. Garments on the same layer (shirt and hose) never hide each other.
+- **Alpha counts.** Many garments are one mesh with full-length sleeves cut short by the
+  texture's alpha (a jupon, a coat). A ray only counts as covered where the hit garment's
+  diffuse alpha passes its material's alpha test. Without this, shirt sleeves under a
+  short-sleeved jupon vanished, leaving the arms see-through, and one guard's hair was hidden by
+  his coat's alpha-cut geometry.
+- **The game's own method is unknown.** The NPC body skins carry no region data that would do
+  this (no vertex colours, one subset); a research note on how the game hides body parts
+  (`item/armor_archetype2body_subpart`, `is_exclusive`) could replace the test later.
 
 ## Materials
 

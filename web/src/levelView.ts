@@ -458,7 +458,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let raf = 0;
   let last = 0;
   let fpsAvg = 16.7; // smoothed frame time, ms
+  let cpuAvg = 0; // smoothed main-thread time per frame, ms (fps well below 1000 / cpu: the GPU is the limit)
   const frame = (now: number) => {
+    const t0 = performance.now();
     raf = requestAnimationFrame(frame);
     const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
     if (last) fpsAvg += ((now - last) - fpsAvg) * 0.05;
@@ -579,9 +581,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     water.draw(blend);
     blend.end();
     device.queue.submit([enc.finish()]);
+    cpuAvg += (performance.now() - t0 - cpuAvg) * 0.05;
     const pc = player?.controller;
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
-    hud.textContent = `${(1000 / fpsAvg).toFixed(0)} fps (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
+    hud.textContent = `${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();

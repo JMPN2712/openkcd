@@ -26,7 +26,7 @@ struct Camera { viewProj: mat4x4f, eye: vec4f, light: vec4f, sunColor: vec4f, sk
 // colorize: KCD %COLORIZING shader, x/y/z = hue (deg) / saturation / brightness, w = 0 off, 1 global, 2 with mask
 //   (the "Specular" slot then holds the region mask: R/G/B select mask1/2/3)
 // flags: x = 1 with a normal map; y = 1 water (Water, Waterfall shaders), 2 glass, 3 decal: blended;
-//   z = 1 vertex colours shade the surface (%VERTCOLORS)
+//   z = 1 vertex colours shade the surface (%VERTCOLORS); w scales a blended surface's alpha
 // foliage (%LEAVES materials: grass, plants, tree leaves): rgb transmittance colour, w how much
 //   light comes through from behind (BackDiffuseMultiplier); w = 0 not foliage
 struct Draw { model: mat4x4f, color: vec4f, spec: vec4f, params: vec4f, colorize: vec4f, mask1: vec4f, mask2: vec4f, mask3: vec4f, flags: vec4f, foliage: vec4f };
@@ -195,6 +195,7 @@ fn shade(i: VOut) -> vec4f {
       lin = base.rgb * (hemi + cam.sunColor.rgb * ndl * sh) + spec * mix(0.3, 1.0, sh);
       alpha = base.a * i.col.a;
     }
+    alpha *= drw.flags.w;
   }
   lin = mix(lin, cam.fog.rgb, clamp(1.0 - exp(-fd * cam.fog.w), 0.0, 1.0));
   // target is a non-sRGB format: encode manually
@@ -641,11 +642,17 @@ export class ModelRenderer {
         const u = new Float32Array(52);
         const decal = !!mat?.genMask.includes("%DECAL");
         const overlay = !!mat?.genMask.includes("%EYE_AO_OVERLAY");
-        const blend = decal || BLENDED_SHADER.test(mat?.shader ?? "");
+        // water sheets on Illum (waterfalls, weirs: Opacity below 1) are see-through like decals,
+        // but drawn with the blended surfaces rather than on the ground
+        const sheet = !!mat && !decal && /^illum$/i.test(mat.shader) && mat.surfaceType === "mat_water" && mat.opacity < 1 && !mat.alphaTest;
+        const blend = decal || sheet || BLENDED_SHADER.test(mat?.shader ?? "");
+        // how opaque a blended surface is: the Waterfall shader's AlphaBlendMul (0.09 on the thin
+        // film over a weir's stones), a sheet's Opacity
+        const alphaScale = sheet ? mat.opacity : /^waterfall$/i.test(mat?.shader ?? "") ? Math.min(1, Number(mat!.params.AlphaBlendMul ?? 1)) * Math.min(1, mat!.opacity) : 1;
         // (on Vegetation materials the vertex colours are bending and wind weights, not colour; on
         // character skins they are masks: every eye vertex is 255,255,0, which made eyes yellow)
         const vertColors = !!mesh.colors && !mesh.boneIds && !!mat?.genMask.includes("%VERTCOLORS") && !/^vegetation$/i.test(mat.shader);
-        u.set([normChain ? 1 : 0, decal ? 3 : blend ? (/glass/i.test(mat!.shader) ? 2 : 1) : 0, vertColors ? 1 : 0, 0], 44);
+        u.set([normChain ? 1 : 0, decal || sheet ? 3 : blend ? (/glass/i.test(mat!.shader) ? 2 : 1) : 0, vertColors ? 1 : 0, alphaScale], 44);
         u.set(meshTm, 0);
         const col = mat?.diffuse ?? [0.8, 0.8, 0.8];
         u.set([col[0], col[1], col[2], 1], 16);
