@@ -259,6 +259,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     }
   };
   const water = new WaterRenderer(device, format, objects.water, passSetup);
+  void water.loadMaterials(vfs, terrain.materials).catch((err) => console.warn("water:", err));
   const npcR = new ModelRenderer(device, format, passSetup.sampleCount, { ...passSetup, pool });
   const playerR = new ModelRenderer(device, format, passSetup.sampleCount, { ...passSetup, pool });
   // the far field: every town's uber-LOD (94 in Rataje), drawn beyond the streamed objects
@@ -347,6 +348,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     }
   };
   let depth: GPUTexture | null = null;
+  // (one view for the texture's life: the water's bind group holds it)
+  let depthView: GPUTextureView | null = null;
   let msaa: GPUTexture | null = null;
   let streamedAt: [number, number] | null = null;
   let streaming = false;
@@ -500,7 +503,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (!depth || depth.width !== target.width || depth.height !== target.height) {
       depth?.destroy();
       msaa?.destroy();
-      depth = device.createTexture({ size: [target.width, target.height], format: depthFormat(passSetup), sampleCount: passSetup.sampleCount, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+      depth = device.createTexture({ size: [target.width, target.height], format: depthFormat(passSetup), sampleCount: passSetup.sampleCount, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+      depthView = depth.createView();
       msaa = passSetup.sampleCount > 1 ? device.createTexture({ size: [target.width, target.height], format, sampleCount: passSetup.sampleCount, usage: GPUTextureUsage.RENDER_ATTACHMENT }) : null;
     }
     const vp = TerrainRenderer.viewProj(cam, target.width / target.height, { reversed: true, near: mode === "player" && player?.viewMode === "first" ? 0.01 : 0.1 });
@@ -544,11 +548,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       const f: [number, number, number] = [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)];
       casters.render(enc, shadowMap, cam.pos, f, skyState.lighting.sunDir, models, player && mode === "player" ? [npcR, playerR] : [npcR], { lodScale: q.lodScale });
     }
+    const colour = (msaa ?? target).createView();
     const pass = enc.beginRenderPass({
-      colorAttachments: [msaa
-        ? { view: msaa.createView(), resolveTarget: target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.70, a: 1 }, loadOp: "clear", storeOp: "discard" }
-        : { view: target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.70, a: 1 }, loadOp: "clear", storeOp: "store" }],
-      depthStencilAttachment: { view: depth.createView(), depthClearValue: depthClear(passSetup), depthLoadOp: "clear", depthStoreOp: "discard" },
+      colorAttachments: [{ view: colour, clearValue: { r: 0.55, g: 0.62, b: 0.70, a: 1 }, loadOp: "clear", storeOp: "store" }],
+      depthStencilAttachment: { view: depthView!, depthClearValue: depthClear(passSetup), depthLoadOp: "clear", depthStoreOp: "store" },
     });
     if (skyState) sky.draw(pass);
     renderer.draw(pass);
@@ -560,14 +563,21 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     farTrees.draw(pass);
     npcR.draw(pass);
     if (player && mode === "player") playerR.draw(pass);
-    // see-through materials (waterfalls, weirs, glass) over everything opaque
-    farR.drawBlended(pass);
-    models.drawBlended(pass);
-    // (eye shadow shells)
-    npcR.drawBlended(pass);
-    if (player && mode === "player") playerR.drawBlended(pass);
-    water.draw(pass);
     pass.end();
+    // see-through materials (waterfalls, weirs, glass, water) over everything opaque, in a second
+    // pass that holds the depth read-only: the water reads it (how deep it is under each pixel)
+    const blend = enc.beginRenderPass({
+      colorAttachments: [{ view: colour, resolveTarget: msaa ? target.createView() : undefined, loadOp: "load", storeOp: msaa ? "discard" : "store" }],
+      depthStencilAttachment: { view: depthView!, depthReadOnly: true },
+    });
+    farR.drawBlended(blend);
+    models.drawBlended(blend);
+    // (eye shadow shells)
+    npcR.drawBlended(blend);
+    if (player && mode === "player") playerR.drawBlended(blend);
+    water.setDepth(depthView, mode === "player" && player?.viewMode === "first" ? 0.01 : 0.1);
+    water.draw(blend);
+    blend.end();
     device.queue.submit([enc.finish()]);
     const pc = player?.controller;
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";

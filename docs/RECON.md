@@ -450,6 +450,14 @@ files (86.7M triangles), and visually via headless WebGPU renders from
   data read as unsigned, so a flat normal's 0 lands at 0 or 255.
 - **Upload.** OpenKCD uploads them as `bc5-rg-snorm` and rebuilds Z. That
   removed the speckle seen with the UNORM upload.
+- **Exceptions.** 100 of 4,476 BC5 normal maps really are unsigned: the
+  water's `oceanwaves_ddn`, dogs, some beards and the crowd riders. Read as
+  signed, their near-flat small mips (around 128) wrap between −1 and +1, so
+  they show as noise in the distance. The smallest mip tells them apart (flat:
+  endpoints near 128 unsigned rather than near 0 signed). Those blocks get the
+  top bit of each endpoint byte flipped, which turns them into the same
+  values as signed blocks and keeps the endpoint order that picks the block
+  mode.
 - **Gloss.** The `_ddna` attached alpha (gloss) is not used yet.
 - **Tangents.** Every mesh checked carries the Tangents stream (type 6,
   16 bytes: int16 tangent with handedness in w, int16 bitangent).
