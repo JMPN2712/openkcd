@@ -141,8 +141,13 @@ The octree follows the terrain tree and runs exactly to the end of
     caustic and texture parameters, `u32 nVertices` (+124), `u32 nContour`
     (+136), physics parameters, then `Vec3 vertices[nVertices]` from +208,
     then `Vec3 contour[nContour]`. Size = 208 + 12·(nVertices + nContour).
-  - The vertices are an absolute outline at the water height, and rivers
-    slope, so each vertex keeps its own z.
+  - **The surface is the fog plane** (+72, `n·p + d = 0`), flat or tilted
+    (111 of 282 tilt, for rivers that slope). The AABB's top is the plane's
+    highest point + 0.5 m for 229 volumes. The vertices are an absolute
+    outline whose own z are editor points: 82 volumes have one more than
+    0.3 m off the plane, up to 14 m. Drawn at those heights, the Sázava by
+    the Rattay tannery floated 1.7 m above the bank and the tannery, so the
+    parser puts every vertex on the plane.
   - Rataje has 282 volumes of 4–67 vertices, all inside their AABBs. With
     decal and water sizes known, 190,389 blocks parse to their exact end.
 - **Type order is not strict.** 123 blocks break ascending type order.
@@ -158,8 +163,9 @@ The octree follows the terrain tree and runs exactly to the end of
     wave normal map with a base and a detail layer: `Tilling`,
     `NormalsScale`, `DetailTilling` and `DetailNormalsScale`. It also gives
     the shore softness (`SoftIntersectionFactor`).
-  - **Flow.** Both layers flow downhill, since a river's outline slopes. Two
-    phases cross-fade so the texture never stretches.
+  - **Flow.** Both layers flow down the surface plane's tilt; flat volumes
+    are still apart from a slow drift. Two phases cross-fade so the texture
+    never stretches.
   - **Grain.** Each layer calms down once a pixel spans more than a few of
     its texels. Otherwise, at grazing angles, every wave flips the reflection
     between bank and sky.

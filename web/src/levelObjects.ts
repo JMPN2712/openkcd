@@ -68,8 +68,10 @@ export interface RoadIndex {
 export interface WaterVolume {
   /** index into the terrain's material table */
   material: number;
-  /** outline polygon, xyz per vertex */
+  /** outline polygon, xyz per vertex, with z on the surface plane */
   vertices: Float32Array;
+  /** the surface (and fog) plane: normal xyz, d (n·p + d = 0) */
+  plane: [number, number, number, number];
   fogColor: [number, number, number];
   fogDensity: number;
 }
@@ -145,9 +147,13 @@ export function parseLevelObjects(bytes: Uint8Array, offset: number): LevelObjec
       const n = dv.getUint32(p + 124, true);
       const vertices = new Float32Array(n * 3);
       for (let k = 0; k < n * 3; k++) vertices[k] = dv.getFloat32(p + 208 + k * 4, true);
+      // the surface is the fog plane; the outline's own heights are editor points, up to 14 m off
+      const plane: [number, number, number, number] = [dv.getFloat32(p + 72, true), dv.getFloat32(p + 76, true), dv.getFloat32(p + 80, true), dv.getFloat32(p + 84, true)];
+      for (let k = 0; k < n; k++) vertices[k * 3 + 2] = -(plane[3] + plane[0] * vertices[k * 3] + plane[1] * vertices[k * 3 + 1]) / plane[2];
       water.push({
         material: dv.getInt32(p + 52, true),
         vertices,
+        plane,
         fogDensity: dv.getFloat32(p + 56, true),
         fogColor: [dv.getFloat32(p + 60, true), dv.getFloat32(p + 64, true), dv.getFloat32(p + 68, true)],
       });

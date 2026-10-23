@@ -29,6 +29,11 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
   depth (blended surfaces now draw in a second, depth-read-only pass). See
   `docs/LEVELS.md`. The unsigned-BC5 fix (`docs/RECON.md`) also cleaned up
   dogs, some beards and crowd riders.
+- **Water heights (2026-10-23, fixed):** the surface is each volume's fog
+  plane, not its outline's heights. The river by the Rattay tannery had
+  floated 1.7 m up and flooded the tannery, and flow appeared in random
+  patches. Rivers whose plane is flat no longer flow (only drift); a flow
+  direction for them would need a research note or the river's neighbours.
 - **Candidates next:** waterfalls; road/decal normal maps (the
   8-byte-per-vertex road block is probably tangents); far-tree culling per
   map cell for the Vega 7; NPCs in Rattay are mostly indoors at noon
