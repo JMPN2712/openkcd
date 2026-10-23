@@ -151,12 +151,26 @@ The octree follows the terrain tree and runs exactly to the end of
 - **Not decoded yet:** type 23, variable-length; parsing a block stops at
   it. (Roads, type 11, are decoded: see below.)
 - **Water rendering** (`web/src/waterRenderer.ts`): outlines are ear-clipped
-  in XY and drawn in a blended pass after the opaque geometry, with a
-  fog-colour tint, Fresnel reflection and a sun glint. That's 2,109
-  triangles for the whole level. The surface ripples (six small wave trains
-  whose phase drifts across the surface, fading out by 160 m), and it
-  reflects a dark bank colour near the horizon, then haze, then sky: a
-  river mostly mirrors its banks' trees.
+  in XY and drawn after the opaque geometry, in a second pass that holds the
+  depth read-only so the water can sample it. That's 2,109 triangles for the
+  whole level.
+  - **Material.** Each volume's material (`WaterVolume` shader) supplies the
+    wave normal map with a base and a detail layer: `Tilling`,
+    `NormalsScale`, `DetailTilling` and `DetailNormalsScale`. It also gives
+    the shore softness (`SoftIntersectionFactor`).
+  - **Flow.** Both layers flow downhill, since a river's outline slopes. Two
+    phases cross-fade so the texture never stretches.
+  - **Grain.** Each layer calms down once a pixel spans more than a few of
+    its texels. Otherwise, at grazing angles, every wave flips the reflection
+    between bank and sky.
+  - **Depth.** The scene depth behind the surface gives the water depth under
+    each pixel. Shallows are see-through (opaque by about 1.5 m) and take the
+    volume's fog colour as they deepen. Banks get a soft edge with a little
+    foam.
+  - **Reflection.** A dark bank colour near the horizon, then haze, then sky,
+    plus a sun glint. A river mostly mirrors its banks' trees.
+  - **Without depth or BC textures,** the old procedural ripples stand in
+    (six small wave trains, fading out by 160 m).
 
 **Rataje totals:** 212,879 brushes (12,436 distinct meshes), 1,483,225
 vegetation instances, 20,212 decals and 282 water volumes. The most common are soil stones, modular rocks,

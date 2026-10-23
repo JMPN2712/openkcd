@@ -939,7 +939,9 @@ export class ModelRenderer {
     const kindOf = (d: DrawItem) => (d.ground ? "ground" : d.blend ? "blend" : "opaque");
     const list = this.drawIndex.get(item)?.filter((i) => kindOf(this.draws[i]) === kind);
     if (!list?.length) return undefined;
-    const enc = this.device.createRenderBundleEncoder({ colorFormats: v.colorFormats, depthStencilFormat: v.depthFormat, sampleCount: v.sampleCount });
+    // (blended draws never write depth: their bundles also run in a pass that holds the depth
+    // read-only, so the water can sample it)
+    const enc = this.device.createRenderBundleEncoder({ colorFormats: v.colorFormats, depthStencilFormat: v.depthFormat, sampleCount: v.sampleCount, depthReadOnly: kind === "blend", stencilReadOnly: kind === "blend" });
     let pipeline: GPURenderPipeline | null = null;
     enc.setBindGroup(0, v === this.views[0] ? this.camBind : v.camBind);
     const dynamic = this.dynamicItems.includes(item);

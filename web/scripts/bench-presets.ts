@@ -59,6 +59,8 @@ const SCENES = [
   { name: "market", at: [2577.8, 574] as [number, number], yaw: -Math.PI / 2 - 0.6, pitch: -0.05, turn: 0.35 },
   // the fields south of the town, running north with the town ahead
   { name: "fields", at: [2192, 1000] as [number, number], yaw: Math.PI / 2, pitch: 0.02, turn: 0.05 },
+  // the river by the bridge west of the town, looking across the water
+  { name: "river", at: [2352, 668] as [number, number], yaw: (20 * Math.PI) / 180, pitch: -0.12, turn: 0.1 },
 ];
 
 const results: string[] = [];
@@ -80,6 +82,9 @@ for (const pp of gpus) {
     const pool = process.env.NO_POOL ? undefined : new TexturePool(device, lvl.vfs, { budget: Number(process.env.POOL_MIB ?? q.textures.budgetMiB) * 2 ** 20, maxDim: q.textures.maxDim });
     const models = new ModelRenderer(device, format, q.msaa, { ...pass, pool });
     const water = new WaterRenderer(device, format, lvl.objects.water, pass);
+    // OLD_WATER=1: the water as it was, in the opaque pass (no material, no scene depth)
+    const oldWater = !!process.env.OLD_WATER;
+    if (!oldWater) await water.loadMaterials(lvl.vfs, lvl.terrain.materials);
     const playerR = new ModelRenderer(device, format, q.msaa, { ...pass, pool });
     const npcR = new ModelRenderer(device, format, q.msaa, { ...pass, pool });
     const grassR = new ModelRenderer(device, format, q.msaa, { ...pass, pool });
@@ -91,7 +96,9 @@ for (const pp of gpus) {
     terrainR.setShadow(shadowMap);
     const target = device.createTexture({ size: [w, hgt], format, usage: GPUTextureUsage.RENDER_ATTACHMENT });
     const msaa = q.msaa > 1 ? device.createTexture({ size: [w, hgt], format, sampleCount: q.msaa, usage: GPUTextureUsage.RENDER_ATTACHMENT }) : null;
-    const depth = device.createTexture({ size: [w, hgt], format: depthFormat(pass), sampleCount: q.msaa, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+    const depth = device.createTexture({ size: [w, hgt], format: depthFormat(pass), sampleCount: q.msaa, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+    const depthView = depth.createView();
+    if (!oldWater) water.setDepth(depthView, 0.1);
     // per preset: the pool drops the cached models' texture data once it is on the GPU, so a cache
     // shared with an earlier preset's run comes back with stand-ins (a preset switch, not a start)
     let caches = cachesByDim.get(`${name}:${q.maxTextureDim}`);
@@ -190,11 +197,12 @@ for (const pp of gpus) {
         water.setCamera(vp, cam.pos, state.lighting.sunDir, undefined, state.lighting, state.horizon);
         const enc = device.createCommandEncoder();
         if (shadowMap) casters.render(enc, shadowMap, cam.pos, [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)], state.lighting.sunDir, models, [npcR, playerR], { lodScale: q.lodScale });
+        // (as the level view: blended surfaces and water in a second pass, unless OLD_WATER)
+        const colour = (msaa ?? target).createView();
+        const resolve = msaa ? target.createView() : undefined;
         const p = enc.beginRenderPass({
-          colorAttachments: [msaa
-            ? { view: msaa.createView(), resolveTarget: target.createView(), loadOp: "clear", storeOp: "discard", clearValue: [0, 0, 0, 1] }
-            : { view: target.createView(), loadOp: "clear", storeOp: "store", clearValue: [0, 0, 0, 1] }],
-          depthStencilAttachment: { view: depth.createView(), depthClearValue: depthClear(pass), depthLoadOp: "clear", depthStoreOp: "discard" },
+          colorAttachments: [{ view: colour, resolveTarget: oldWater ? resolve : undefined, loadOp: "clear", storeOp: oldWater && msaa ? "discard" : "store", clearValue: [0, 0, 0, 1] }],
+          depthStencilAttachment: { view: depthView, depthClearValue: depthClear(pass), depthLoadOp: "clear", depthStoreOp: oldWater ? "discard" : "store" },
         });
         sky.draw(p);
         terrainR.draw(p);
@@ -204,11 +212,19 @@ for (const pp of gpus) {
         farTrees.draw(p);
         npcR.draw(p);
         playerR.draw(p);
-        models.drawBlended(p);
-        npcR.drawBlended(p);
-        playerR.drawBlended(p);
-        water.draw(p);
-        p.end();
+        let b = p;
+        if (!oldWater) {
+          p.end();
+          b = enc.beginRenderPass({
+            colorAttachments: [{ view: colour, resolveTarget: resolve, loadOp: "load", storeOp: msaa ? "discard" : "store" }],
+            depthStencilAttachment: { view: depthView, depthReadOnly: true },
+          });
+        }
+        models.drawBlended(b);
+        npcR.drawBlended(b);
+        playerR.drawBlended(b);
+        water.draw(b);
+        b.end();
         device.queue.submit([enc.finish()]);
         mark("encode");
         await device.queue.onSubmittedWorkDone();

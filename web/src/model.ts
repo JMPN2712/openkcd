@@ -58,6 +58,27 @@ export interface LoadedModel {
  * Decode a texture's mip chain from the largest level <= maxDim down to 1×1-ish, or with `above`
  * only the levels larger than that (the top of a chain whose lower levels are already loaded).
  */
+/**
+ * Whether a BC5 normal map's blocks hold unsigned values after all, judged by its smallest mip
+ * (nearly flat in any normal map): flat is 128 unsigned, 0 signed. Read as signed, an unsigned
+ * map's near-flat small mips wrap between -1 and +1: noise at a distance.
+ */
+function bc5Unsigned(smallest: Uint8Array): boolean {
+  let s = 0, n = 0;
+  for (let b = 0; b + 16 <= smallest.length; b += 8, n++) s += Math.abs((smallest[b] << 24) >> 24) + Math.abs((smallest[b + 1] << 24) >> 24);
+  return n > 0 && s / (2 * n) > 64;
+}
+
+/**
+ * Unsigned BC5 blocks as signed ones: each channel's two endpoint bytes shifted by 128 (the top bit
+ * flipped). The order of the endpoints, which picks the block's mode, is kept.
+ */
+function toSigned(data: Uint8Array): Uint8Array {
+  const out = data.slice();
+  for (let b = 0; b + 8 <= out.length; b += 8) { out[b] ^= 0x80; out[b + 1] ^= 0x80; }
+  return out;
+}
+
 export async function loadMipChain(vfs: Vfs, stem: string, maxDim: number, opts: { rgba?: boolean; normalMap?: boolean; texture?: Texture; above?: number } = {}): Promise<MipChain> {
   const t = opts.texture ?? await openTexture(vfs, stem);
   const above = opts.above ?? 0;
@@ -76,12 +97,15 @@ export async function loadMipChain(vfs: Vfs, stem: string, maxDim: number, opts:
     if (t.header.format.name !== "BC5" || !gpuBc) throw new Error(`normal map ${stem}: ${t.header.formatLabel} not supported`);
     bcFormat = "bc5-rg-snorm";
   }
+  // a few (the water's wave map) really are unsigned: see bc5Unsigned
+  const flipSign = normalMap && bcFormat === "bc5-rg-snorm" && bc5Unsigned(await mipData(vfs, t, t.header.mipCount - 1));
   if (gpuBc && bcFormat && (!t.attached || opts.normalMap) && !opts.rgba) {
     // the GPU decodes BCn itself: keep the blocks (4–8× smaller than RGBA, no CPU decode)
     for (let l = level; l < t.header.mipCount; l++) {
       const [w, h] = mipDims(t.header, l);
       if (Math.max(w, h) <= above) break;
-      levels.push({ w, h, data: await mipData(vfs, t, l) });
+      const data = await mipData(vfs, t, l);
+      levels.push({ w, h, data: flipSign ? toSigned(data) : data });
     }
     return { stem, srgb: t.header.srgb, levels, bc: { format: bcFormat, blockBytes: t.header.format.bytes }, full, normalMap, texture: t };
   }

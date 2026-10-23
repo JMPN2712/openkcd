@@ -53,6 +53,8 @@ if (!outDir) throw new Error("usage: render-player.ts OUT_DIR [options]");
 await mkdir(outDir, { recursive: true });
 const W = 1280, H = 720;
 const [poolDim, poolMiB] = opt("--textures", "2048,768").split(",").map(Number);
+// --old-water: the water as it was (no material, no scene depth)
+const oldWater = args.includes("--old-water") ? (args.splice(args.indexOf("--old-water"), 1), true) : false;
 const noPool = args.includes("--no-pool") ? (args.splice(args.indexOf("--no-pool"), 1), true) : false;
 
 const lvl = await openRataje(root);
@@ -68,11 +70,12 @@ const models = new ModelRenderer(device, format, 4, { ...passSetup, pool });
 const shadowMap = args.includes("--no-shadows") ? null : new ShadowMap(device, 2048, 2, [20, 120]);
 const casters = new ShadowCasters();
 const water = new WaterRenderer(device, format, lvl.objects.water, passSetup);
+if (!oldWater) await water.loadMaterials(lvl.vfs, lvl.terrain.materials);
 const playerR = new ModelRenderer(device, format, 4, { ...passSetup, pool });
 const sky = new SkyRenderer(device, format, passSetup);
 const off = new Offscreen(device, W, H, format);
 const msaa = device.createTexture({ size: [W, H], format, sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
-const depth = device.createTexture({ size: [W, H], format: depthFormat(passSetup), sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+const depth = device.createTexture({ size: [W, H], format: depthFormat(passSetup), sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
 
 const t0 = performance.now();
 const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, [ax, ay], radius, { maxModels: 20000, caches: newWorldCaches(), props: lvl.props, hiddenLayers: lvl.hiddenLayers, normalMaps: !args.includes("--no-normal"), ground: args.includes("--no-roads") ? undefined : [lvl.roads, lvl.decals] });
@@ -222,8 +225,8 @@ async function render(name: string): Promise<void> {
     casters.render(enc, shadowMap, cam.pos, f, state.lighting.sunDir, models, npcWorld ? [playerR, npcR] : [playerR]);
   }
   const pass = enc.beginRenderPass({
-    colorAttachments: [{ view: msaa.createView(), resolveTarget: off.target.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.7, a: 1 }, loadOp: "clear", storeOp: "discard" }],
-    depthStencilAttachment: { view: depth.createView(), depthClearValue: depthClear(passSetup), depthLoadOp: "clear", depthStoreOp: "discard" },
+    colorAttachments: [{ view: msaa.createView(), clearValue: { r: 0.55, g: 0.62, b: 0.7, a: 1 }, loadOp: "clear", storeOp: "store" }],
+    depthStencilAttachment: { view: depth.createView(), depthClearValue: depthClear(passSetup), depthLoadOp: "clear", depthStoreOp: "store" },
   });
   if (state) sky.draw(pass);
   terrainR.draw(pass);
@@ -234,12 +237,19 @@ async function render(name: string): Promise<void> {
   farTrees.draw(pass);
   if (npcWorld) npcR.draw(pass);
   playerR.draw(pass);
-  models.drawBlended(pass);
-  grassR.drawBlended(pass);
-  if (npcWorld) npcR.drawBlended(pass);
-  playerR.drawBlended(pass);
-  water.draw(pass);
   pass.end();
+  // see-through surfaces in a second pass that holds the depth read-only: the water reads it
+  const blend = enc.beginRenderPass({
+    colorAttachments: [{ view: msaa.createView(), resolveTarget: off.target.createView(), loadOp: "load", storeOp: "discard" }],
+    depthStencilAttachment: { view: depth.createView(), depthReadOnly: true },
+  });
+  water.setDepth(oldWater ? null : depth.createView(), session.viewMode === "first" ? 0.01 : 0.1);
+  models.drawBlended(blend);
+  grassR.drawBlended(blend);
+  if (npcWorld) npcR.drawBlended(blend);
+  playerR.drawBlended(blend);
+  water.draw(blend);
+  blend.end();
   device.queue.submit([enc.finish()]);
   }
   const file = join(outDir, `${name}.png`);
