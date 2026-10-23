@@ -24,7 +24,12 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
 - **Not yet checked in the user's Chrome:** everything since the installer
   commit was verified headless only (`scripts/render-player.ts`,
   `bench-presets.ts`, the tests). Ask the user to walk around and report.
-- **Candidates next:** waterfalls and shore foam; road/decal normal maps (the
+- **Water (2026-10-23, done):** wave maps from the volumes' materials,
+  flowing downhill; see-through shallows, soft banks and foam from the scene
+  depth (blended surfaces now draw in a second, depth-read-only pass). See
+  `docs/LEVELS.md`. The unsigned-BC5 fix (`docs/RECON.md`) also cleaned up
+  dogs, some beards and crowd riders.
+- **Candidates next:** waterfalls; road/decal normal maps (the
   8-byte-per-vertex road block is probably tangents); far-tree culling per
   map cell for the Vega 7; NPCs in Rattay are mostly indoors at noon
   (schedules); hiding body parts under clothes (needs a research note on how
