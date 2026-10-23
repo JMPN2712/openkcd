@@ -1,12 +1,12 @@
 // Water surfaces from the level's water volumes (octree type 9): each volume
-// is an outline polygon at the water height (rivers slope, so every vertex
-// keeps its own z). Polygons are ear-clipped in XY and drawn in a blended pass
+// is an outline polygon on its surface plane (flat, or tilted for a river that
+// slopes). Polygons are ear-clipped in XY and drawn in a blended pass
 // after the opaque geometry: depth-tested, not depth-writing.
 //
 // The look, with the scene's depth bound (setDepth; the pass must hold depth read-only):
 // - the volume's material (WaterVolume shader: a wave normal map, its tiling and strength for a
 //   base and a detail layer, the shore softness) drives the surface; the two layers flow
-//   downhill (a river's outline slopes), cross-fading two phases so the texture never stretches;
+//   downhill where the surface plane tilts (flat volumes stay still), cross-fading two phases so the texture never stretches;
 // - how much water is under each pixel (scene depth behind the surface) sets the transparency,
 //   the colour (clear over the bed in the shallows, the volume's fog colour when deep) and a
 //   soft, foamy edge at the banks;
@@ -165,7 +165,7 @@ export function triangulate(xy: number[]): number[] {
 interface WaterLook { tiling: number; normals: number; detailTiling: number; detailNormals: number; soft: number; specular: number; opacity: number; waves: string | null }
 const DEFAULT_LOOK: WaterLook = { tiling: 0.125, normals: 0.3, detailTiling: 1.2, detailNormals: 2, soft: 1, specular: 0.08, opacity: 1, waves: null };
 
-/** Per-vertex downhill flow (m/s) of an outline whose vertices keep their own heights. */
+/** Per-vertex downhill flow (m/s) of an outline on its surface plane: uniform, zero where it is flat. */
 function flowOf(v: Float32Array, tris: number[]): Float32Array {
   const n = v.length / 3, out = new Float32Array(n * 2), w = new Float32Array(n);
   for (let k = 0; k < tris.length; k += 3) {
