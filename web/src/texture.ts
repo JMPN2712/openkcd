@@ -58,7 +58,7 @@ interface Candidate {
 
 /** K = number of mips NOT stored in the header file: count tail mips from the
  *  smallest up while they fit (CryEngine may append a few trailer bytes). */
-function splitCount(header: DdsHeader, bytes: Uint8Array): number {
+export function splitCount(header: DdsHeader, bytes: Uint8Array): number {
   if (!header.format) return 0;
   const have = bytes.byteLength - header.headerSize;
   let used = 0;

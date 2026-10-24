@@ -8,9 +8,9 @@
 // With --compact=full|potato it installs the compact package instead (compactInstall.ts) and
 // checks that only the package and its store are left, and that the page opens them.
 // With --part=N as well it goes part by part, as a player short of disk space would: a work folder
-// holds the base game's installer with only N of its .bin slices (copies, under ~/.cache), and
-// after each stop the slices the page says are done with are deleted and the next ones copied in,
-// until the package is built.
+// holds the installers with only the base game's last N .bin slices (copies, under ~/.cache), and
+// after each stop the slices the page says are done with are deleted and the one it asks for
+// copied in, until the package is built; browser storage is sampled throughout for its peak.
 // --interrupt also presses Cancel while the file store is being written, then picks the folder
 // again: the build carries on from the saved store plan, asking for no slice already deleted.
 // usage: node scripts/test-install-browser.ts INSTALLER_DIR [--root=GAME_ROOT] [--keep] [--compact=full|potato] [--part=N] [--interrupt]
@@ -36,25 +36,28 @@ let interrupt = process.argv.includes("--interrupt");
 const chrome = process.env.CHROME ?? "google-chrome";
 // a throwaway profile on disk (not tmpdir(): /tmp is often a small tmpfs); with --keep it stays for a later run
 const profile = join(process.env.PROFILE_DIR ?? join(homedir(), ".cache"), "openkcd-test-profile");
-// part by part: a work folder with the DLC installers (not the HD packs, which the package leaves
-// out) and the base game's installer with its first slices
+// part by part: a work folder with the installers (not the HD packs, which the package leaves
+// out) and only the base game's last slices; then the slices the page asks for, one at a time
 const dir = part ? join(homedir(), ".cache", "openkcd-part-work") : srcDir;
 const baseExe = part ? (await readdir(srcDir)).find((n) => n.startsWith("setup_") && n.endsWith(".exe"))! : "";
-let nextSlice = 0;
-async function addSlices(upTo: number): Promise<void> {
-  for (; nextSlice < upTo; nextSlice++) {
-    const name = sliceName(baseExe, nextSlice);
-    if (!(await stat(join(srcDir, name)).catch(() => null))) break;
-    await copyFile(join(srcDir, name), join(dir, name));
-    console.log(`  + ${name}`);
-  }
+const where = new Map<string, string>(); // slice name -> its folder ("" or "DLC")
+async function addSlice(name: string): Promise<void> {
+  await copyFile(join(srcDir, where.get(name)!, name), join(dir, where.get(name)!, name));
+  console.log(`  + ${name}`);
 }
 if (part) {
   await rm(dir, { recursive: true, force: true });
   await mkdir(join(dir, "DLC"), { recursive: true });
   await copyFile(join(srcDir, baseExe), join(dir, baseExe));
-  for (const n of await readdir(join(srcDir, "DLC"))) if (!/hd_(texture|voice|sound)/.test(n)) await copyFile(join(srcDir, "DLC", n), join(dir, "DLC", n));
-  await addSlices(part);
+  for (const n of await readdir(srcDir)) if (n.endsWith(".bin")) where.set(n, "");
+  for (const n of await readdir(join(srcDir, "DLC"))) {
+    if (/hd_(texture|voice|sound)/.test(n)) continue;
+    if (n.endsWith(".exe")) await copyFile(join(srcDir, "DLC", n), join(dir, "DLC", n));
+    else where.set(n, "DLC");
+  }
+  let last = 0;
+  while (where.has(sliceName(baseExe, last + 1))) last++;
+  for (let i = 0; i < part; i++) await addSlice(sliceName(baseExe, last - i));
 }
 const PORT = 5199;
 const DEBUG = 9339;
@@ -124,6 +127,8 @@ await waitFor("the page", () => evaluate<boolean>(`document.readyState === "comp
 // hand the folder to the input, as picking it would; Install; wait for it to stop
 const { root: doc } = await page("DOM.getDocument");
 const { nodeId } = await page("DOM.querySelector", { nodeId: doc.nodeId, selector: "#install-input" });
+let peak = 0;
+const opfsUsage = () => evaluate<number>(`navigator.storage.estimate().then((e) => e.usage ?? 0)`);
 async function pickAndInstall(): Promise<{ result: string; cls: string }> {
   // (picking the same folder again: an emptied input and preview, so the page reacts as to a new pick)
   await evaluate(`(() => { document.getElementById("install-input").value = ""; document.getElementById("preview").replaceChildren(); })()`);
@@ -148,7 +153,7 @@ async function pickAndInstall(): Promise<{ result: string; cls: string }> {
   }
   const t0 = Date.now();
   await evaluate(`document.querySelector(".install-go").click()`);
-  let lastLine = "";
+  let lastLine = "", lastSample = 0;
   const outcome = await waitFor(
     "the install",
     async () => {
@@ -162,6 +167,8 @@ async function pickAndInstall(): Promise<{ result: string; cls: string }> {
         await evaluate(`[...document.querySelectorAll(".tex-controls button")].find((b) => b.textContent === "Cancel").click()`);
       }
       lastLine = s.line;
+      // browser storage while it works (the peak comes while the package is built beside the staged copy)
+      if (Date.now() - lastSample > 5000) { lastSample = Date.now(); peak = Math.max(peak, await opfsUsage()); }
       return s.busy ? undefined : s;
     },
     4 * 3600 * 1000,
@@ -173,8 +180,7 @@ async function pickAndInstall(): Promise<{ result: string; cls: string }> {
 }
 const tAll = Date.now();
 let outcome = await pickAndInstall();
-let peak = 0;
-const opfsUsage = () => evaluate<number>(`navigator.storage.estimate().then((e) => e.usage)`);
+const deleted = new Set<string>();
 for (let round = 1; part && /part-next|cancelled/.test(outcome.cls); round++) {
   if (outcome.cls === "cancelled") {
     // picked again with the same slices: the store carries on
@@ -183,29 +189,24 @@ for (let round = 1; part && /part-next|cancelled/.test(outcome.cls); round++) {
     if (!/Carrying on|ready/i.test(outcome.result + (await evaluate<string>(`document.querySelector(".install-line")?.textContent ?? ""`)))) console.log("note: no resume line seen");
     continue;
   }
-  // as the player would: delete the slices it is done with, add the next one(s)
-  peak = Math.max(peak, await opfsUsage());
+  // as the player would: delete the slices it is done with, add the one asked for
   const next = /Next, add (\S+\.bin)/.exec(outcome.result)?.[1];
   const done = /safe to delete: (.*)\.$/.exec(outcome.result)?.[1].split(", ") ?? [];
   if (!next || round > 40) throw new Error(`round ${round}: no next slice in "${outcome.result}"`);
   for (const n of done) {
-    const at = [join(dir, n), join(dir, "DLC", n)];
-    for (const f of at) await rm(f, { force: true });
+    if (!where.has(n)) continue;
+    await rm(join(dir, where.get(n)!, n), { force: true });
+    deleted.add(n);
     console.log(`  - ${n}`);
   }
-  // (slices holding nothing wanted, e.g. only videos, are skipped)
-  const asked = Array.from({ length: 64 }, (_, i) => i).find((i) => sliceName(baseExe, i) === next);
-  if (asked === undefined || asked < nextSlice) throw new Error(`round ${round}: asked for ${next}, which was here before`);
-  if (asked > nextSlice) console.log(`  (skipping ${sliceName(baseExe, nextSlice)}${asked > nextSlice + 1 ? ` to ${sliceName(baseExe, asked - 1)}` : ""}: nothing wanted in it)`);
-  nextSlice = Math.max(nextSlice, asked);
-  const present = (await readdir(dir)).filter((n) => n.endsWith(".bin")).length;
-  await addSlices(nextSlice + Math.max(1, part - present));
+  if (deleted.has(next)) throw new Error(`round ${round}: asked for ${next} after it was done with`);
+  await addSlice(next);
   console.log(`round ${round + 1} (${((Date.now() - tAll) / 1000).toFixed(0)} s so far, browser storage ${(peak / 2 ** 30).toFixed(1)} GiB peak)`);
   outcome = await pickAndInstall();
 }
 if (part) {
   peak = Math.max(peak, await opfsUsage());
-  console.log(`part by part: ${((Date.now() - tAll) / 1000).toFixed(0)} s in all, browser storage peak at the stops ${(peak / 2 ** 30).toFixed(1)} GiB`);
+  console.log(`part by part: ${((Date.now() - tAll) / 1000).toFixed(0)} s in all, browser storage peak ${(peak / 2 ** 30).toFixed(1)} GiB`);
   await rm(dir, { recursive: true, force: true });
 }
 const quit = async (code: number) => {

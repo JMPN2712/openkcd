@@ -69,6 +69,8 @@ export interface InstallOptions {
   repack: boolean;
   /** the cutscene videos (about 15 GiB; left out of the compact package) */
   videos?: boolean;
+  /** only the paks this accepts (the videos added to a compact package later) */
+  only?: (path: string) => boolean;
 }
 
 export const DEFAULT_OPTIONS: InstallOptions = { language: "english", hdTextures: false, hdVoice: false, hdSound: false, repack: true };
@@ -78,6 +80,7 @@ export const isVideoPak = (path: string) => /(^|\/)(ipl_)?videos/i.test(path);
 
 export function wanted(f: InstallerFile, o: InstallOptions): boolean {
   if (!isPak(f)) return false;
+  if (o.only && !o.only(f.path)) return false;
   if (o.videos === false && isVideoPak(f.path)) return false;
   const { kind, language } = pakKind(f.path);
   switch (kind) {

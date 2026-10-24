@@ -11,6 +11,7 @@ import {
   install,
   installSize,
   isPak,
+  isVideoPak,
   opfsTarget,
   pakKind,
   voiceLanguages,
@@ -21,8 +22,8 @@ import {
   SliceNeeded,
   sliceListing,
 } from "./install.ts";
-import { compactInstall } from "./compactInstall.ts";
-import type { SlimVariant } from "./slimView.ts";
+import { addVideos, compactInstall } from "./compactInstall.ts";
+import { builtSlims, packageStore, type SlimVariant } from "./slimView.ts";
 import { formatSize } from "./format.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -100,9 +101,18 @@ export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHa
     o.value = v;
     mode.append(o);
   }
+  // the cutscene videos, into a compact package built before (it is made without them)
+  const videoSize = found.reduce((a, ins) => a + ins.installer.files.filter((f) => isPak(f) && isVideoPak(f.path)).reduce((b, f) => b + f.size, 0), 0);
+  for (const v of await builtSlims()) {
+    if (!videoSize || !(await packageStore(v))) continue;
+    const o = el("option", undefined, `the cutscene videos, into the compact package (${v === "full" ? "Full" : "Potato"}) built here (${formatSize(videoSize)})`);
+    o.value = `videos:${v}`;
+    mode.append(o);
+  }
   modeLabel.append(mode);
   opts.append(modeLabel);
-  const compact = () => (mode.value === "game" ? null : (mode.value as SlimVariant));
+  const videosFor = () => (mode.value.startsWith("videos:") ? (mode.value.slice(7) as SlimVariant) : null);
+  const compact = () => (mode.value === "game" || videosFor() ? null : (mode.value as SlimVariant));
   const langLabel = el("label", "ctl", "Voice-over");
   const lang = el("select");
   for (const l of languages) {
@@ -178,22 +188,23 @@ export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHa
     }
     found.forEach((f, i) => (sizes[i].textContent = formatSize(installSize(f, options))));
     const variant = compact();
-    for (const o of optBoxes) o.box.closest("label")!.hidden = !!variant;
-    repackLabel.hidden = !!variant;
-    const need = selected().reduce((a, f) => a + installSize(f, variant ? { ...options, videos: false, hdTextures: false, hdVoice: false, hdSound: false } : options), 0);
+    for (const o of optBoxes) o.box.closest("label")!.hidden = !!variant || !!videosFor();
+    repackLabel.hidden = !!variant || !!videosFor();
+    const need = selected().reduce((a, f) => a + installSize(f, videosFor() ? { ...options, videos: true, only: isVideoPak } : variant ? { ...options, videos: false, hdTextures: false, hdVoice: false, hdSound: false } : options), 0);
     const est = await navigator.storage.estimate().catch(() => ({ quota: undefined, usage: undefined }));
     const free = est.quota !== undefined ? est.quota - (est.usage ?? 0) : undefined;
     // the compact package and its store, measured at 0.60 (Full) and 0.36 (Potato) of the
     // archives they are made from (docs/SLIM.md). With every slice here they are read in place;
-    // part by part, the archives are copied first (and deleted as the store is written).
+    // part by part, what they need of the archives is staged first, then the package is built
+    // beside it: peaks measured at 0.79 (Full) and 0.43 (Potato: without mips above 512 px).
     const after = variant ? need * (variant === "full" ? 0.6 : 0.36) : need;
     const inPlace = selected().every((f) => f.missing.length === 0);
-    const peak = variant && !inPlace ? need + after * 0.3 : after;
+    const peak = variant && !inPlace ? need * (variant === "full" ? 0.79 : 0.43) : after;
     storage.textContent =
       (variant
         ? inPlace
           ? `Needs about ${formatSize(after)} of browser storage (read from the installer in place, nothing else is copied)`
-          : `Part by part: needs up to ${formatSize(peak)} of browser storage while it is built, about ${formatSize(after)} when done`
+          : `Part by part: start with the base game's last two slices; the page then asks for the others, last to first. Needs up to ${formatSize(peak)} of browser storage while it is built, about ${formatSize(after)} when done`
         : `Needs up to ${formatSize(need)} of browser storage (less if some files are already installed)`) +
       (free !== undefined ? `; ${formatSize(free)} available to this site.` : ".");
     const need2 = peak;
@@ -264,6 +275,15 @@ export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHa
       line.textContent = `${formatSize(p.done)} of ${formatSize(p.total)} · ${p.filesDone}/${p.files} files · ${formatSize(rate)}/s · ${duration((p.total - p.done) / rate)} left · ${p.file}`;
     };
     try {
+      const videos = videosFor();
+      if (videos) {
+        const p = await addVideos(chosen, videos, paint, ac.signal);
+        paint(p, true);
+        result.className = "note ok";
+        result.textContent = `Added the cutscene videos to the compact package: ${p.files - p.skipped} archives${p.skipped ? ` (${p.skipped} were already there)` : ""}. You can delete the installer files now.`;
+        onInstalled("package");
+        return;
+      }
       const variant = compact();
       if (variant) {
         const msg = await compactInstall(chosen, { ...options }, variant, (c) => {
@@ -287,7 +307,9 @@ export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHa
       if (e instanceof SliceNeeded) {
         // part by part: as far as the slices here go
         result.className = "note ok part-next";
-        result.textContent = `Installed as far as the slices here go. Next, add ${e.slice} (and any after it you have) to the folder, then pick the folder again to continue.` +
+        result.textContent = (compact()
+          ? `Converted as far as the slices here go. Next, add ${e.slice} to the folder (the slices are asked for last to first), then pick the folder again to continue.`
+          : `Installed as far as the slices here go. Next, add ${e.slice} (and any after it you have) to the folder, then pick the folder again to continue.`) +
           (e.progress.doneSlices.length ? ` Done with, and safe to delete: ${e.progress.doneSlices.join(", ")}.` : "");
         return;
       }

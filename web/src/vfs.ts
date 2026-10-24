@@ -34,6 +34,21 @@ export function pakRank(path: string): number {
   return hd;
 }
 
+/** Where a pak's phantom entries are listed: the same path (so the same rank), never readable. */
+const phantomOf = new WeakMap<PakSource, PakSource>();
+const phantomPaks = new WeakSet<PakSource>();
+export function phantomPak(pak: PakSource): PakSource {
+  let p = phantomOf.get(pak);
+  if (!p) {
+    p = { path: pak.path, size: 0, open: () => Promise.reject(new Error(`${pak.path}: a left-out entry was read`)) };
+    phantomOf.set(pak, p);
+    phantomPaks.add(p);
+  }
+  return p;
+}
+/** Whether a hit is a phantom entry (listed by size only). */
+export const isPhantom = (h: VfsHit) => phantomPaks.has(h.pak);
+
 export class Vfs {
   /** every version of each file, ascending rank: the last one wins */
   private files = new Map<string, VfsHit[]>();
@@ -56,16 +71,23 @@ export class Vfs {
     let done = 0;
     for (const pak of ordered) {
       const entries = await readCentralDirectory(await vfs.blob(pak));
-      for (const entry of entries) {
-        const key = entry.name.toLowerCase();
-        if (!opts.filter(key)) continue;
-        const list = vfs.files.get(key);
-        if (list) list.push({ pak, entry });
-        else vfs.files.set(key, [{ pak, entry }]);
+      for (const entry of entries) vfs.add(pak, entry, opts.filter);
+      // (listed at the pak's own rank, not readable: phantomPak)
+      if (pak.phantoms?.length) {
+        const ph = phantomPak(pak);
+        for (const entry of pak.phantoms) vfs.add(ph, entry, opts.filter);
       }
       opts.onProgress?.(++done, ordered.length);
     }
     return vfs;
+  }
+
+  private add(pak: PakSource, entry: PakEntry, filter: (lowerName: string) => boolean): void {
+    const key = entry.name.toLowerCase();
+    if (!filter(key)) return;
+    const list = this.files.get(key);
+    if (list) list.push({ pak, entry });
+    else this.files.set(key, [{ pak, entry }]);
   }
 
   /**

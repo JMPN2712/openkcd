@@ -1,5 +1,7 @@
 // Discovery and classification of .pak files under a KCD game root.
 
+import type { PakEntry } from "./zip.ts";
+
 export type Owner =
   | "Base"
   | "Base patch"
@@ -24,6 +26,12 @@ export interface PakSource {
   path: string; // relative to game root, '/'-separated, original case
   size: number;
   open(): Promise<Blob>;
+  /**
+   * Entries left out of this copy that still count as present, by size only (a Potato staging
+   * copy's texture mips above 512 px, compactInstall.ts): the VFS lists them so that choosing a
+   * texture version gives what the whole pak would, but they can't be read.
+   */
+  phantoms?: PakEntry[];
 }
 
 export function classify(path: string): Owner {
