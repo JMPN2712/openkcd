@@ -5,7 +5,7 @@
 
 import type { EntityInfo } from "./levelEntities.ts";
 import { parseCdf, poseMatrix, type CharacterSpec } from "./character.ts";
-import { loadModel, meshModel, type LoadedModel, type MipChain } from "./model.ts";
+import { loadModel, meshModel, modelExists, type LoadedModel, type MipChain } from "./model.ts";
 import type { CgfMesh } from "./cgf.ts";
 
 /** Meshes laid on the ground, streamed by distance and merged per (priority, material): roads, decals. */
@@ -146,7 +146,7 @@ async function loadLods(vfs: Vfs, path: string, caches: WorldCaches, maxTextureD
   const lods = [base];
   for (let k = 1; k < 6; k++) {
     const p = path.replace(/\.(cgf|cga)$/, `_lod${k}.$1`);
-    if (p === path || !(caches.slim?.hasModel(p) || vfs.lookup(p))) break;
+    if (p === path || !(caches.slim?.hasModel(p) || modelExists(vfs, p))) break;
     const m = await load(p);
     if (!m) break;
     // the last LOD of trees is a ~10-triangle billboard card for the engine's

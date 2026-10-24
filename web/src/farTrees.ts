@@ -13,7 +13,7 @@
 import type { LevelObjects } from "./levelObjects.ts";
 import type { Terrain } from "./terrain.ts";
 import type { Vfs } from "./vfs.ts";
-import { loadModel, type LoadedModel } from "./model.ts";
+import { loadModel, modelExists, type LoadedModel } from "./model.ts";
 import { ModelRenderer } from "./renderer.ts";
 import { lookAt, multiply, depthCompare, depthFormat, type Lighting, type Mat4, type PassSetup, type Vec3 } from "./mat4.ts";
 
@@ -161,7 +161,7 @@ export class FarTrees {
       const b = bounds(base);
       if (b.max[2] - b.min[2] < MIN_HEIGHT) continue;
       const lodPath = path.replace(/\.cgf$/, "_lod1.cgf");
-      const lod = vfs.lookup(lodPath) ? await loadModel(vfs, lodPath, { maxTextureDim: opts.maxTextureDim ?? 256, normalMaps: false }).catch(() => null) : null;
+      const lod = modelExists(vfs, lodPath) ? await loadModel(vfs, lodPath, { maxTextureDim: opts.maxTextureDim ?? 256, normalMaps: false }).catch(() => null) : null;
       models.push({ group: g, model: lod ?? base, base });
     }
     if (!models.length) return;

@@ -9,6 +9,8 @@ import { levelData, levelVfs } from "./levelData.ts";
 import type { SlimSink } from "./slimBuild.ts";
 import { SlimPackage, type SlimFiles } from "./slim.ts";
 import type { ReadWorkers } from "./readWorkers.ts";
+import { planFileStore } from "./slimStore.ts";
+import { repackedPak } from "./repack.ts";
 
 export type SlimVariant = "full" | "potato";
 const dirName = (v: SlimVariant) => `slim-${v}`;
@@ -101,8 +103,23 @@ async function deflate(bytes: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await new Response(cs.readable).arrayBuffer());
 }
 
-/** Build a package into OPFS from the opened game's paks. */
-export async function buildSlimInBrowser(paks: PakSource[], variant: SlimVariant, onProgress: (s: string) => void): Promise<string> {
+/**
+ * The file store of a built package (slim-<variant>/store/: the game's paks without what the
+ * package holds): with it the engine needs no original files. Null when it has none.
+ */
+export async function packageStore(variant: SlimVariant): Promise<FileSystemDirectoryHandle | null> {
+  try {
+    const dir = await (await opfs()).getDirectoryHandle(dirName(variant));
+    const store = await dir.getDirectoryHandle("store");
+    await store.getFileHandle("done");
+    return store;
+  } catch {
+    return null;
+  }
+}
+
+/** Build a package into OPFS from the opened game's paks (`store`: and its file store). */
+export async function buildSlimInBrowser(paks: PakSource[], variant: SlimVariant, onProgress: (s: string) => void, store = true): Promise<string> {
   const t0 = performance.now();
   const data = await levelData(paks, "rataje", onProgress);
   const vfs = await levelVfs(paks, "rataje", onProgress);
@@ -112,7 +129,9 @@ export async function buildSlimInBrowser(paks: PakSource[], variant: SlimVariant
   let lastShown = 0;
   // (loaded when building: the meshoptimizer encoder stays out of the start-up bundle)
   const { buildSlim } = await import("./slimBuild.ts");
-  const { index, sizes } = await buildSlim({ vfs, terrain: data.terrain, objects: data.objects, props: data.props, hiddenLayers: data.hiddenLayers }, opfsSink(dir), {
+  const { characterParts } = await import("./slimBuild.ts");
+  const characters = await characterParts(vfs);
+  const { index, sizes } = await buildSlim({ vfs, terrain: data.terrain, objects: data.objects, props: data.props, hiddenLayers: data.hiddenLayers, characters }, opfsSink(dir), {
     potato: variant === "potato",
     deflate,
     onProgress: (what, done, total) => {
@@ -123,7 +142,27 @@ export async function buildSlimInBrowser(paks: PakSource[], variant: SlimVariant
     },
   });
   const G = (n: number) => `${(n / 2 ** 30).toFixed(2)} GiB`;
-  return `${variant} package: ${Object.keys(index.models).length} models, ${Object.keys(index.textures).length} textures, ${G(sizes.models + sizes.inline + sizes.packs)} in ${((performance.now() - t0) / 1000).toFixed(0)} s`;
+  let storeLine = "";
+  if (store) {
+    // the file store: every other file the engine reads, in paks with the original paths (the
+    // "done" file last: a store without it is incomplete)
+    const plan = await planFileStore(paks, index, { textureCap: variant === "potato" ? 512 : undefined }, (what, done, total) => onProgress(`${what}: ${done}/${total}`));
+    const sdir = await dir.getDirectoryHandle("store", { create: true });
+    let written = 0;
+    for (const [i, p] of plan.plans.entries()) {
+      const { dir: d, name } = await dirOf(sdir, p.pak.path, true);
+      const w = await (await d.getFileHandle(name, { create: true })).createWritable();
+      for await (const chunk of repackedPak(await p.pak.open(), p)) {
+        await w.write(chunk as Uint8Array<ArrayBuffer>);
+        written += chunk.byteLength;
+      }
+      await w.close();
+      onProgress(`Writing the file store: ${i + 1}/${plan.plans.length} paks, ${G(written)}`);
+    }
+    await (await sdir.getFileHandle("done", { create: true })).createWritable().then((w) => w.close());
+    storeLine = `; file store ${G(plan.keptBytes)} in ${plan.plans.length} paks`;
+  }
+  return `${variant} package: ${Object.keys(index.models).length} models, ${Object.keys(index.textures).length} textures, ${G(sizes.models + sizes.inline + sizes.packs)}${storeLine}, in ${((performance.now() - t0) / 1000).toFixed(0)} s`;
 }
 
 /** The builder's view: pick a variant, build, see the result. */

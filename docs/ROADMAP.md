@@ -234,8 +234,10 @@ playable frame rates on the Potato preset.
       engine reading the package from OPFS (read, inflate and decode on the
       read workers). Chrome, High: the world is complete in 12 s instead of
       21 (Potato: 8 instead of 12); the NPCs take another ~35 s from the paks.
-- [ ] Phase 3: characters and NPC clothing into the package (the NPCs are
-      now the slowest part of loading), animations, audio.
+- [x] Phase 3: characters into the package; a hook so every loader takes
+      models and textures from it; textures compressed; a file store
+      (everything else, repacked) so the engine runs from the package alone
+      (pixel-identical renders). Full 21.7 GiB, Potato 13.1 GiB in all.
 - [ ] Phase 4: the package built straight from the GOG installer in one pass,
       needing no original files. **Key requirement:** the low-storage,
       part-by-part mode (convert one `.bin` slice at a time and delete it; the

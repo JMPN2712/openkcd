@@ -252,6 +252,48 @@ folder input; that copy has the HD texture paks, which the world view uses.
   assembled. High: NPCs complete at **18 s** from the package (46 before), 23 s from the paks
   (58 before).
 
+## Phase 3: characters, and no original files (2026-10-23)
+
+### What the package holds now
+
+- **Character parts:** the database's souls and clothing presets use 665 (skin, material) pairs.
+  Their models and textures (including those of the materials given instead of a model's own)
+  go in a `chars` chunk, read entry by entry as NPCs come.
+- **One hook for every loader:**
+  - `setAssetPackage` (`model.ts`): `loadModelParts` and `loadMipChain` take models and textures
+    from the package first, for the world, characters, props, the far field and the terrain's
+    detail layers.
+  - The detail layers ask for RGBA, so packaged BC data is decoded on the CPU for them.
+  - A part's override material is read from the store.
+- **Texture data is compressed too:** texture entries are deflated, and each large mip in the
+  packs on its own (the pool inflates the ones it grows into). Format 3.
+- **The file store** (`slimStore.ts`): every other file the engine reads, repacked into paks with
+  the original paths (the installer's `repackedPak`), so the paks' reader, asset index and read
+  workers open them unchanged. It covers animations, tables, scripts, level files, materials,
+  skeletons, audio and textures the package doesn't hold.
+  - **Left out:** files later patches replace; what the package holds converted; videos; voice in
+    other languages; HD paks.
+  - **Potato store:** split mip parts above 512 px are left out too. The texture reader starts at
+    the largest complete level.
+- **Package-only:** a game root that is only the store, plus the package, runs everything. Renders
+  of the market (world, 40 NPCs, Henry) and the fields are pixel-identical to the paks
+  (`render-player.ts --root DIR/store --slim DIR`).
+
+### Sizes (from `~/kcd1` without HD)
+
+| | Package | File store | **Total** |
+|---|---:|---:|---:|
+| Full | 6.25 GiB (models 1.14, texture packs 4.79) | 15.46 GiB | **21.7 GiB** |
+| Potato | 2.11 GiB (models 1.14, texture packs 0.66) | 10.98 GiB | **13.1 GiB** |
+
+For comparison, the default install is 38.2 GiB, or about 23 GiB without its videos.
+
+- **The store holds** textures the package doesn't (5.3 GiB in Full), English voice (3.4 GiB),
+  grass sectors and voxel lighting (`.dat`, 1.8 GiB), animations (2.6 GiB) and the rest
+  (2.3 GiB).
+- **Texture compression** took the Full package from 9.16 to 6.25 GiB. Node deflates at level 9
+  (a 600 s build); the browser's `CompressionStream` uses its default level.
+
 ## Not decided yet
 
 - **Old packages:** whether a format change rebuilds them, or whether the engine reads older
