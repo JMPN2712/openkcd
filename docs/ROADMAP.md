@@ -12,10 +12,12 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
   Full; the packages end at 12.76 GiB (Potato) and 21.41 GiB (Full).
   Cutscene videos are left out and can be added later. Opus audio, converted
   animations and video transcoding moved to "Later" under milestone 2.
-- **Milestone 3 (release) prep:** GPL-3.0-or-later license; the clean-room
-  audit is done and the history rewritten (milestone 3 below). Next: the
-  user recreates the GitHub repository, then push; the user makes it
-  public.
+- **Milestone 3 (release) nearly done:** GPL-3.0-or-later license; the
+  clean-room audit is done and the history rewritten; the repository was
+  recreated (private); the release docs (BUILDING, PLAYING, COMPATIBILITY,
+  DEPLOY) and the README's "Current status" are written. Left: the Vega 7
+  measurement, the Cloudflare Pages deployment, and making the repository
+  public (the user).
 - **Fixed: furniture turned and moved in houses** (the user's "objects
   completely misarranged" report). A model's main root node transform is
   left out now (`docs/LEVELS.md`); beds had lain 90° across their bedding.
@@ -270,7 +272,7 @@ playable frame rates on the Potato preset.
 - [ ] Converted animations (2.6 GiB of `.caf`/`.dba` in the store).
 - [ ] Cutscene videos transcoded to a format browsers play (`.usm` today).
 
-## 3. Public GitHub release (in progress)
+## 3. Public GitHub release (nearly done)
 
 The repository is private (it had become public; set back to private on
 2026-10-23). The user makes it public.
@@ -296,10 +298,20 @@ The repository is private (it had become public; set back to private on
   - [x] Commit e-mail addresses are GitHub no-reply ones; `CLAUDE.md` has no
         home paths or user names (machine paths in the ignored
         `CLAUDE.local.md`).
-  - [ ] The user recreates the GitHub repository (it may still hold the
-        history from before the 2026-10-19 rewrite); then push.
-- [ ] Make the `openkcd` repo public (the user), with build and run docs and
-      a compatibility list.
+  - [x] The GitHub repository recreated (2026-10-24; it had come up public
+        and was made private before the first push), settings restored.
+- [x] Docs for the release (2026-10-24): `docs/BUILDING.md` (from source),
+      `docs/PLAYING.md` (requirements, the GOG installer, install modes and
+      space, presets, controls, known issues), `docs/COMPATIBILITY.md`
+      (tested and untested systems), a "Current status" section in the
+      README.
+- [x] Hosted player ready for Cloudflare Pages (`docs/DEPLOY.md`,
+      `web/public/_headers`, `web/.node-version`): builds from a clean clone
+      with `npm ci && npm run build`. Not deployed yet; choose the final
+      domain first (players' installs are per origin).
+- [ ] Measure on the Vega 7 laptop and fill in its row in
+      `docs/COMPATIBILITY.md` (the user).
+- [ ] Make the `openkcd` repo public (the user).
 
 ## 4. Living world (partly done)
 
