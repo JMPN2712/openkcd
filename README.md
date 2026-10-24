@@ -13,24 +13,31 @@ in your browser, from **your own copy of the game**, using WebGPU and WebAssembl
 > PC version from GOG). Like OpenMW or OpenRCT2, it is a reimplementation of
 > the engine that reads the original game's files on your machine.
 
-## Status
+## Current status
 
-Early development. What works today, inside an installed-folder viewer:
+Early development; the walking-simulator and installer milestones are done.
 
-- Browsing every pak, texture, model and character.
-- **Walking the whole map as Henry**, in first or third person:
-  - the game's locomotion animations;
-  - collision from the models' physics proxies;
-  - day and night from the level's time of day;
-  - sun shadows, normal maps and terrain detail;
-  - four quality presets, from Potato to High.
-- NPCs placed by their daily schedules, running their work routines from the
-  game's behaviour trees.
+**Works today:**
 
-There is no combat, dialogue or quest system yet. See
-[docs/ROADMAP.md](docs/ROADMAP.md). The current milestone is **1: walking
-simulator**. The game data will later be converted once, in the browser, from
-the GOG offline installer into a compact local package (OPFS).
+- **The world:** the whole map of the base game, streamed as you move, with
+  terrain, buildings, interiors, vegetation, grass, roads, water, a day and
+  night cycle, sun shadows and distant trees.
+- **Walking it as Henry**, in first or third person, with the game's
+  locomotion animations and collision.
+- **NPCs** placed by their daily schedules, walking the navmesh and running
+  their work routines from the game's behaviour trees.
+- **The installer:** your GOG offline installer is converted in the browser,
+  in one go or part by part when disk space is short.
+- **Packages:** a compact package (Full 21.4 GiB, Potato 12.8 GiB) runs the
+  game without the original files; four quality presets, Potato to High.
+
+**Not yet:** talking to NPCs, quests, combat, inventory, horses and saves;
+NPCs don't react to Henry, doors don't open, cutscenes don't play.
+
+To play, see [docs/PLAYING.md](docs/PLAYING.md). What has been tested is in
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md), building from source in
+[docs/BUILDING.md](docs/BUILDING.md), and the plan in
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Browser requirements
 
@@ -38,12 +45,13 @@ the GOG offline installer into a compact local package (OPFS).
   **File System Access API**. Firefox and Safari are not supported yet.
 - **On Linux, turn on Vulkan:** open `chrome://flags/#enable-vulkan`, set it
   to *Enabled* and relaunch (or start Chrome with
-  `--enable-features=Vulkan`). Without it, Chrome on Linux (156) finds no
+  `--enable-features=Vulkan`); on Wayland also start it with
+  `--ozone-platform=x11`. Without Vulkan, Chrome on Linux (156) finds no
   WebGPU adapter. `--enable-unsafe-webgpu` alone only gives the CPU
   fallback (SwiftShader), which is far too slow. Check that the page's GPU
   line names your real GPU.
 - A GPU with BC texture compression. Integrated GPUs such as AMD Vega 7 are
-  a target; a "Potato" preset is planned for every feature.
+  the target of the Potato preset.
 - 16 GB RAM recommended.
 
 ## License
@@ -57,6 +65,10 @@ OpenKCD contains none of it, and players use their own copy of the game.
 
 ## Repository layout
 
+- `docs/PLAYING.md`: for players: requirements, the GOG installer, install modes and space, presets, controls, known issues.
+- `docs/BUILDING.md`: building and running from source.
+- `docs/COMPATIBILITY.md`: browsers, systems and GPUs tried so far.
+- `docs/DEPLOY.md`: hosting the player on Cloudflare Pages.
 - `docs/RECON.md`: Phase 1 survey of the install (binaries, middleware, pak format quirks).
 - `docs/CHARACTERS.md`: how NPCs are assembled from the database, .cdf files and clothing materials.
 - `docs/ANIMATION.md`: animation clip format, quaternion decoding, skinning.

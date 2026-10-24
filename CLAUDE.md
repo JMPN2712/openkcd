@@ -102,7 +102,10 @@ questlines whole and never cuts anything the main quest depends on.
 | Game logic | `bt.ts`, `btRuntime.ts`, `btWorld.ts`, `luaHost.ts` (wasmoon Lua 5.1), `typeDefs.ts` | Behaviour-tree interpreter running work routines |
 
 - **Docs:** `docs/RECON.md`, `LEVELS.md`, `CHARACTERS.md`, `ANIMATION.md`,
-  `GAMELOGIC.md`, `INSTALLER.md`, `ROADMAP.md`.
+  `GAMELOGIC.md`, `INSTALLER.md`, `SLIM.md`, `PERFORMANCE.md`, `ROADMAP.md`;
+  for players and contributors `PLAYING.md`, `BUILDING.md`,
+  `COMPATIBILITY.md`, `DEPLOY.md` (keep them current when behaviour, sizes
+  or requirements change).
 - **Tests:** headless scripts in `web/scripts/` run with
   `node scripts/<name>.ts` against the extracted game folder (`--root`).
   Headless WebGPU renders go
