@@ -212,6 +212,20 @@ elder bushes and branch piles.
     proxies on level-designer `brush/designer_*.cgf`, placeholders);
   - `%DECAL` sub-materials are alpha-tested at 0.5 until there's a blend
     pass.
+- **Model space: the main root node's transform is left out** (`cgf.ts`).
+  A model is expressed in the frame of its main root node (the first
+  top-level node with a mesh); that node's own transform, its place in the
+  artist's scene, is ignored, and other top-level nodes keep their place
+  relative to it. Evidence: of the 171 placed models whose root node is
+  rotated or scaled and whose `_lod1` root is not, 142 match their LOD1 in
+  size and orientation only with the root left out, 12 either way (tilts of
+  a degree or two) and none only with it applied; the physics proxies are
+  stored without it too. Applied, it turned and rescaled 254 models (about
+  117,000 placements): `bed_cottage_01` 90° under its bedding, logs 1.58×
+  their LOD's size, the Skalice mill's length and width swapped. It was the
+  "furniture misarranged in houses" report. `scripts/test-interiors.ts`
+  checks beds against the bedding brushed on them and every model against
+  its LODs.
 - **Streaming.** The browser view streams objects within 250 m, up to 400
   models with 256 px textures, and rebuilds after the camera moves 120 m.
   Headless: `web/scripts/render-world.ts`.
@@ -222,9 +236,10 @@ elder bushes and branch piles.
     3,613 → 1,757 → 317 → 11 triangles.
   - **Node offsets:** LOD files keep the artist-scene node offset (the LODs
     sat side by side, e.g. `bridge_wooden_01_lod1` +5.4 m,
-    `talmberk_dam_nobridge_lod2` +25.6 m). The loader re-anchors each LOD's
-    root onto the base model's root; without that, bridges and dams vanish at
-    distance.
+    `talmberk_dam_nobridge_lod2` +25.6 m). That is the main root node's own
+    transform, which the loader leaves out (below); a LOD part named like one
+    of the base model's parts (a chest's lid, a cabinet's doors) takes that
+    part's transform. Without that, bridges and dams vanished at distance.
   - **Billboard LODs:** the last LOD of trees is a ~10-triangle card for the
     engine's sprite path. It renders nearly invisible with a generic shader,
     so LOD chains stop before any LOD under 32 triangles.

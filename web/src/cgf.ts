@@ -188,6 +188,17 @@ export function parseCgf(bytes: Uint8Array): Cgf {
       tm,
     });
   }
+  // The model is expressed in its main root node's frame: the first top-level node with a mesh.
+  // That node's own transform is its place in the artist's scene (rotated, scaled, or moved aside
+  // like LODs laid out side by side), which the game ignores: the vertices, the physics proxies
+  // and the model's LODs are all in its space. 142 of the 171 placed models whose root is rotated
+  // or scaled match their LOD1 only that way, and none only the other way (docs/LEVELS.md);
+  // applied, it turned beds 90° under their bedding. Other top-level nodes (a chest's lid in its
+  // LOD1) keep their place relative to the main root.
+  const isMesh = (n: NodeInfo) => !n.name.startsWith("$") && !!chunk(n.objectId, CHUNK.Mesh);
+  const tops = [...nodes.values()].filter((n) => !nodes.has(n.parentId));
+  const main = tops.find(isMesh) ?? tops[0];
+  const toMain = main ? invertAffine(main.tm) : IDENTITY;
   const worldTm = (n: NodeInfo): Float32Array => {
     // row-vector matrices compose as child * parent; stored as row-major == column-major of the transpose,
     // which is exactly what a column-vector GPU convention (WebGPU/WGSL) wants.
@@ -197,7 +208,7 @@ export function parseCgf(bytes: Uint8Array): Cgf {
       m = mul(m, p.tm);
       p = nodes.get(p.parentId);
     }
-    return m;
+    return mul(m, toMain);
   };
 
   let material: string | null = null;
@@ -262,6 +273,22 @@ export function parseCgf(bytes: Uint8Array): Cgf {
     });
   }
   return { chunks, meshes, material, skippedNodes, physics };
+}
+
+const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+
+/** Inverse of an affine row-vector transform (p' = p·A + t): A⁻¹ and -t·A⁻¹. */
+function invertAffine(m: Float32Array): Float32Array {
+  const [a, b, c, , d, e, f, , g, h, i] = m;
+  const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+  if (Math.abs(det) < 1e-12) return IDENTITY;
+  const r = new Float32Array(16);
+  r[0] = (e * i - f * h) / det; r[1] = (c * h - b * i) / det; r[2] = (b * f - c * e) / det;
+  r[4] = (f * g - d * i) / det; r[5] = (a * i - c * g) / det; r[6] = (c * d - a * f) / det;
+  r[8] = (d * h - e * g) / det; r[9] = (b * g - a * h) / det; r[10] = (a * e - b * d) / det;
+  for (let k = 0; k < 3; k++) r[12 + k] = -(m[12] * r[k] + m[13] * r[4 + k] + m[14] * r[8 + k]);
+  r[15] = 1;
+  return r;
 }
 
 function mul(a: Float32Array, b: Float32Array): Float32Array {
