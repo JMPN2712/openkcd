@@ -1,7 +1,13 @@
 # The compact web format (milestone 2): design
 
-Status: phase 1 built (2026-10-23): the Node converter, the reader, and the world view's
-streaming from a package in Node. See "Phase 1: measured" below.
+Status (2026-10-23):
+
+- **Phases 1 and 2 are built:** the converter in Node and in the browser, and the world view
+  loading from a package in OPFS.
+- **Phases 3–4 are planned:** characters, animations and audio; then building straight from the
+  installer, with the part-by-part mode for low storage.
+
+Measurements are under "Phase 1: measured" and "Phase 2: in the browser" below.
 
 ## Goal
 
@@ -200,6 +206,48 @@ On a 125 MiB sample of model entries (size against raw):
   the market takes 4.68 s compressed against 2.36 s uncompressed (1.25 s inflating, 1.54 s
   decoding). Phase 2 runs read, inflate and decode on the browser's read workers, off the main
   thread; whether that wins it back is measured there, in Chrome.
+
+## Phase 2: in the browser (2026-10-23)
+
+### What runs where
+
+- **Building** (`slimView.ts`, the sidebar's "Compact package" view):
+  - It builds from the opened game (the installed copy, or a picked folder) into OPFS:
+    `slim-full/` and `slim-potato/`. `index.json` is written last, so an interrupted build isn't
+    used.
+  - The core is shared with Node (`slimBuild.ts`). Deflating uses `CompressionStream`.
+  - The meshoptimizer encoder is loaded only when building.
+- **Loading:** the world view opens a built package (the Potato preset prefers the Potato
+  variant).
+  - The read workers read, inflate and decode the pieces and entries it needs (meshoptimizer
+    decoder in the worker), and transfer the arrays to the main thread.
+  - Models it doesn't hold, characters, terrain and everything else still come from the paks.
+- **Shared level loading:** `levelData.ts` loads the level once for both the world view and the
+  builder.
+
+### Measured in Chrome
+
+Chrome 156 on the RTX 5070 Ti (`profile-browser.ts`; `--build-slim=…` builds through the page,
+and `PROFILE_DIR` keeps the profile and its OPFS between runs). Opened from `~/kcd1` through the
+folder input; that copy has the HD texture paks, which the world view uses.
+
+| | Full | Potato |
+|---|---:|---:|
+| Build in the page | 227 s | 83 s |
+| Package (HD textures in the source) | 8.36 GiB | 2.20 GiB |
+| Package (no HD paks, the default install; Node build) | 3.56 GiB | 1.96 GiB |
+
+| Opening the world view, until… | Paks | Package |
+|---|---:|---:|
+| High: the world is complete | 21 s | **12 s** |
+| High: the NPCs are complete | 58 s | 46 s |
+| Potato: the world is complete | 12 s | **8 s** |
+
+- **Frame cap while loading:** both now cap frames at about 15 fps while the world loads
+  (`LOADING_FRAME`). Drawing the growing scene at full speed took about half the main thread.
+  Before the cap, High measured 96 s (paks) and 68 s (package) until the NPCs were complete.
+- **Next cost: the NPCs.** About 35 s on High after the world is complete, assembled from the
+  paks (characters, clothing, textures). Characters go into the package in phase 3.
 
 ## Not decided yet
 

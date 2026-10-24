@@ -8,6 +8,7 @@
 
 import type { PakEntry } from "./zip.ts";
 import type { PakSource } from "./paks.ts";
+import type { SlimRef } from "./slim.ts";
 
 /** Compressed bytes from which an entry is read on a worker. */
 export const READ_IN_WORKER = 32 * 1024;
@@ -17,9 +18,11 @@ export interface ReadRequest {
   /** the pak, and on its first request to this worker what to open it from */
   key: number;
   src?: Blob | string;
-  entry: PakEntry;
+  entry?: PakEntry;
+  /** instead of a pak entry: a compact package's piece, and the entries in it to decode (slim.ts decodePiece) */
+  slim?: { piece: { o: number; n: number }; entries: SlimRef[] };
 }
-export type ReadReply = { id: number; out: Uint8Array } | { id: number; error: string };
+export type ReadReply = { id: number; out: Uint8Array } | { id: number; values: unknown[] } | { id: number; error: string };
 
 /** The part of a Web Worker or a worker_threads Worker this needs. */
 export interface WorkerPort {
@@ -31,7 +34,9 @@ export interface WorkerPort {
 export class ReadWorkers {
   private workers: { port: WorkerPort; busy: number; sent: Set<number> }[];
   private keys = new Map<PakSource, number>();
-  private waiting = new Map<number, { resolve: (b: Uint8Array) => void; reject: (e: Error) => void }>();
+  private waiting = new Map<number, { resolve: (b: never) => void; reject: (e: Error) => void }>();
+  /** compact package files, keyed apart from the paks */
+  private slimKeys = new Map<string, number>();
   private nextId = 0;
   private handleOf: (pak: PakSource, blob: Blob) => Blob | string;
 
@@ -45,7 +50,7 @@ export class ReadWorkers {
         if (!p) return;
         this.waiting.delete(r.id);
         if ("error" in r) p.reject(new Error(r.error));
-        else p.resolve(r.out);
+        else p.resolve(("out" in r ? r.out : r.values) as never);
       });
     }
   }
@@ -62,13 +67,27 @@ export class ReadWorkers {
   read(pak: PakSource, blob: Blob, entry: PakEntry): Promise<Uint8Array> {
     let key = this.keys.get(pak);
     if (key === undefined) this.keys.set(pak, (key = this.keys.size));
+    return this.send<Uint8Array>(key, () => this.handleOf(pak, blob), { entry });
+  }
+
+  /**
+   * Read `piece` of a compact package file and decode `entries` in it on a worker (read,
+   * inflate, meshoptimizer decode, all off the main thread); their values come back transferred.
+   */
+  slimDecode(path: string, file: Blob, piece: { o: number; n: number }, entries: SlimRef[]): Promise<unknown[]> {
+    let key = this.slimKeys.get(path);
+    if (key === undefined) this.slimKeys.set(path, (key = 1_000_000 + this.slimKeys.size));
+    return this.send<unknown[]>(key, () => file, { slim: { piece, entries } });
+  }
+
+  private send<T>(key: number, src: () => Blob | string, what: Pick<ReadRequest, "entry" | "slim">): Promise<T> {
     // the least busy worker
     let w = this.workers[0];
     for (const x of this.workers) if (x.busy < w.busy) w = x;
     w.busy++;
     const id = this.nextId++;
-    const req: ReadRequest = { id, key, entry };
-    if (!w.sent.has(key)) { w.sent.add(key); req.src = this.handleOf(pak, blob); }
+    const req: ReadRequest = { id, key, ...what };
+    if (!w.sent.has(key)) { w.sent.add(key); req.src = src(); }
     return new Promise((resolve, reject) => {
       this.waiting.set(id, { resolve, reject });
       w.port.postMessage(req);

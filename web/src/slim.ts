@@ -152,8 +152,23 @@ async function decodeStored<T>(bytes: Uint8Array, ref: SlimRef, copy: boolean, f
 export interface SlimFiles {
   read(file: string, at: number, size: number): Promise<Uint8Array>;
   text(file: string): Promise<string>;
-  /** inflate a deflated entry (`size` once inflated): zlib in Node, the read workers in the browser; default: DecompressionStream here */
+  /** inflate a deflated entry (`size` once inflated): zlib in Node; default: DecompressionStream here */
   inflate?(bytes: Uint8Array, size: number): Promise<Uint8Array>;
+  /**
+   * Read `piece` of `file` and decode `entries` (inside it) elsewhere, e.g. on the read workers,
+   * returning their values (decodePiece does the same here).
+   */
+  decodeOnWorker?(file: string, piece: { o: number; n: number }, entries: SlimRef[]): Promise<unknown[]>;
+}
+
+/** Values of `entries` from the bytes of the piece starting at `pieceAt` (arrays copied out or freshly inflated). */
+export async function decodePiece(bytes: Uint8Array, pieceAt: number, entries: SlimRef[], inflateWith: (b: Uint8Array, n: number) => Promise<Uint8Array> = inflate): Promise<unknown[]> {
+  const out: unknown[] = [];
+  for (const ref of entries) {
+    const sub = bytes.subarray(ref.o - pieceAt, ref.o - pieceAt + ref.n);
+    out.push(ref.z ? decodeEntry(await inflateWith(sub, ref.z)) : decodeEntry(sub, true));
+  }
+  return out;
 }
 
 export const tileKey = (x: number, y: number) => `${Math.floor(x / TILE)}_${Math.floor(y / TILE)}`;
@@ -230,19 +245,25 @@ export class SlimPackage {
     const textures = new Set<string>();
     const decode = async ([k, n]: [string, { paths: string[] }]) => {
       const r = this.index.tiles[k];
-      const bytes = await this.files.read(r.f, r.o, r.n);
       this.stats.chunkReads++;
       this.stats.chunkBytes += r.n;
-      const at = (ref: SlimRef) => bytes.subarray(ref.o - r.o, ref.o - r.o + ref.n);
-      for (const p of n.paths) {
-        const parts = await decodeStored<ModelParts>(at(this.index.models[p]), this.index.models[p], true, this.files);
+      // the models, and the textures in this piece they use (known once the models are decoded):
+      // on a worker, the piece is read and decoded twice there; here, read once
+      const refs = n.paths.map((p) => this.index.models[p]);
+      const local = this.files.decodeOnWorker ? null : await this.files.read(r.f, r.o, r.n);
+      const t0 = performance.now();
+      const values = local ? await decodePiece(local, r.o, refs, this.files.inflate) : await this.files.decodeOnWorker!(r.f, r, refs);
+      timing.decodeMs += performance.now() - t0;
+      n.paths.forEach((p, i) => {
+        const parts = values[i] as ModelParts;
         this.ready.models.set(p, parts);
         for (const t of textureKeys(parts.materials)) textures.add(t);
-      }
-      for (const t of textures) {
-        const ref = this.index.textures[t];
-        if (ref?.t === k && !this.ready.textures.has(t)) this.ready.textures.set(t, await decodeStored<SlimTexture>(at(ref), ref, true, this.files));
-      }
+      });
+      const texKeys = [...textures].filter((t) => this.index.textures[t]?.t === k && !this.ready.textures.has(t));
+      if (!texKeys.length) return;
+      const texRefs = texKeys.map((t) => this.index.textures[t]);
+      const texValues = local ? await decodePiece(local, r.o, texRefs, this.files.inflate) : await this.files.decodeOnWorker!(r.f, { o: Math.min(...texRefs.map((x) => x.o)), n: Math.max(...texRefs.map((x) => x.o + x.n)) - Math.min(...texRefs.map((x) => x.o)) }, texRefs);
+      texKeys.forEach((t, i) => this.ready.textures.set(t, texValues[i] as SlimTexture));
     };
     let next = 0;
     await Promise.all([0, 1].map(async () => { while (next < pieces.length) await decode(pieces[next++]); }));
@@ -257,10 +278,11 @@ export class SlimPackage {
   /** Decoded by prefetch, waiting to be loaded. */
   private ready = { models: new Map<string, ModelParts>(), textures: new Map<string, SlimTexture>() };
 
-  /** An entry read on its own. */
+  /** An entry read on its own (and decoded on a worker when the files can). */
   private async entry<T>(ref: SlimRef): Promise<T> {
     this.stats.singleReads++;
     this.stats.singleBytes += ref.n;
+    if (this.files.decodeOnWorker) return (await this.files.decodeOnWorker(ref.f, ref, [ref]))[0] as T;
     return decodeStored<T>(await this.files.read(ref.f, ref.o, ref.n), ref, false, this.files);
   }
 

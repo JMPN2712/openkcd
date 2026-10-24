@@ -230,9 +230,12 @@ playable frame rates on the Potato preset.
       GiB) packages; the cold scene build at the market 4.83 → 2.36 s headless.
 - [x] Geometry compressed losslessly (meshoptimizer + deflate): Full 5.28 →
       3.56 GiB, Potato 3.68 → 1.96 GiB.
-- [ ] Phase 2: the converter in the browser after the install, the engine
-      reading the package from OPFS (read, inflate and decode on the read
-      workers), measured in Chrome.
+- [x] Phase 2: the converter in the browser (sidebar: Compact package), the
+      engine reading the package from OPFS (read, inflate and decode on the
+      read workers). Chrome, High: the world is complete in 12 s instead of
+      21 (Potato: 8 instead of 12); the NPCs take another ~35 s from the paks.
+- [ ] Phase 3: characters and NPC clothing into the package (the NPCs are
+      now the slowest part of loading), animations, audio.
 - [ ] Phases 3–4: characters, animations, audio; built straight from the
       installer with no original files (part by part on low storage).
 - [ ] One streaming pass into a slim package in OPFS:

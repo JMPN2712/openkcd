@@ -5,8 +5,8 @@
 // call crosses into the GPU process: this measures what a player gets.
 // Driven over the DevTools protocol (Node's built-in WebSocket); no npm deps.
 // usage: node scripts/profile-browser.ts [--root=GAME_ROOT] [--preset=high] [--settle=30]
-//          [--seconds=8] [--windowed] [--fly=SECONDS [--spikes]] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080]
-//   CHROME=… picks the browser binary, CHROME_FLAGS=… adds flags; --probe stops after naming the
+//          [--seconds=8] [--windowed] [--fly=SECONDS [--spikes]] [--build-slim=full|potato] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080]
+//   CHROME=… picks the browser binary, CHROME_FLAGS=… adds flags, PROFILE_DIR=… keeps the profile; --probe stops after naming the
 //   WebGPU adapter; --fly then flies north-west across the map (free-fly, 60 m/s: a streaming
 //   step every few seconds) printing the HUD every 10 s, then profiles there; with --spikes it
 //   lists the frames over 25 ms during the flight and what ran in them; --trace also records a Chrome trace over the same seconds and prints how busy
@@ -47,7 +47,10 @@ const build = spawn("node_modules/.bin/vite", ["build", "--outDir", dist, "--emp
 if ((await new Promise((r) => build.once("exit", r))) !== 0) throw new Error("vite build failed");
 children.push(spawn("node_modules/.bin/vite", ["preview", "--outDir", dist, "--port", String(PORT), "--strictPort"], { stdio: "ignore" }));
 await waitFor("Vite", async () => ((await fetch(`http://localhost:${PORT}/`)).ok ? true : undefined));
-const profile = await mkdtemp(join(tmpdir(), "openkcd-profile-"));
+// PROFILE_DIR=…: a browser profile kept between runs (its OPFS holds a compact package built by an
+// earlier run with --build-slim); otherwise a throwaway one
+const keepProfile = !!process.env.PROFILE_DIR;
+const profile = process.env.PROFILE_DIR ?? await mkdtemp(join(tmpdir(), "openkcd-profile-"));
 children.push(
   // Chrome on Linux has no WebGPU adapter without Vulkan, and headless falls back to SwiftShader
   // (software) unless ANGLE runs on Vulkan and the GPU blocklist is off; frames unthrottled
@@ -115,17 +118,40 @@ if (loadProfile) {
   await page("Profiler.setSamplingInterval", { interval: 1000 });
   await page("Profiler.start");
 }
+// --build-slim=full|potato: build the compact package into this profile's OPFS first, through the
+// page's builder (timed); the world view then loads from it
+const buildSlim = arg("build-slim", "");
+if (buildSlim) {
+  const tb = Date.now();
+  await evaluate(`document.getElementById("slim").click()`);
+  await waitFor("the builder", () => evaluate<boolean>(`!!document.querySelector(".slim-${buildSlim}")`).then((v) => v || undefined));
+  await evaluate(`document.querySelector(".slim-${buildSlim}").click()`);
+  let shown = "";
+  const result = await waitFor("the build", async () => {
+    const s = await evaluate<{ text: string; cls: string }>(`(() => { const l = document.querySelector(".slim-line"); return { text: l.textContent, cls: l.className }; })()`);
+    if (s.text !== shown && Date.now() % 20000 < 600) console.log(`  ${s.text}`);
+    shown = s.text;
+    return /ok|error/.test(s.cls) ? s : undefined;
+  }, 3600 * 1000);
+  console.log(`build: ${result.text} (${((Date.now() - tb) / 1000).toFixed(0)} s in the page)`);
+  if (/error/.test(result.cls)) process.exit(1);
+}
+const t0 = Date.now();
 await evaluate(`document.getElementById("world").click()`);
 const hud = () => evaluate<string>(`document.querySelector(".level-hud")?.textContent ?? ""`);
 await waitFor("Henry", () => hud().then((s) => (/Henry \(/.test(s) ? s : undefined)), 180000);
 // the view fills the window, as a player has it (--windowed: the page's own small canvas)
 if (!process.argv.includes("--windowed")) await evaluate(`[...document.querySelectorAll("button")].find((b) => /Full window/.test(b.textContent))?.click()`);
 // until the models within the streaming radius have loaded, then `settle` more seconds (textures)
-const t0 = Date.now();
 // (ten quiet seconds in a row: the scene complete and the NPCs assembled; they start once it is)
-let quiet = 0;
-await waitFor("the models", () => hud().then((s) => { quiet = /instances within/.test(s) && !/oading|Assembling|start once/.test(s) ? quiet + 1 : 0; return quiet >= 20 ? true : undefined; }), 900000);
-console.log(`world and NPCs loaded in ${((Date.now() - t0) / 1000).toFixed(0)} s; settling ${settle} s…`);
+let quiet = 0, worldAt = 0;
+await waitFor("the models", () => hud().then((s) => {
+  if (!worldAt && /instances within/.test(s) && !/oading|start once/.test(s)) worldAt = Date.now();
+  quiet = /instances within/.test(s) && !/oading|Assembling|start once/.test(s) ? quiet + 1 : 0;
+  return quiet >= 20 ? true : undefined;
+}), 900000);
+// (from the click: the NPCs are complete when ten quiet seconds began)
+console.log(`world complete ${((worldAt - t0) / 1000).toFixed(0)} s after opening the view, NPCs ${((Date.now() - 10000 - t0) / 1000).toFixed(0)} s; settling ${settle} s…`);
 if (loadProfile) {
   const { profile: lp } = await page("Profiler.stop");
   type N = { id: number; callFrame: { functionName: string; url: string }; children?: number[] };
@@ -301,5 +327,5 @@ for (const [k, v] of [...total].sort((a, b) => b[1] - a[1]).slice(0, 30)) consol
 
 ws.close();
 await Promise.all(children.map((c) => new Promise((r) => (c.exitCode !== null ? r(null) : (c.once("exit", r), c.kill())))));
-await rm(profile, { recursive: true, force: true });
+if (!keepProfile) await rm(profile, { recursive: true, force: true });
 process.exit(0);
