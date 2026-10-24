@@ -7,7 +7,7 @@
 import type { PakSource } from "./paks.ts";
 import { levelData, levelVfs } from "./levelData.ts";
 import type { SlimSink } from "./slimBuild.ts";
-import { SlimPackage, type SlimFiles } from "./slim.ts";
+import { SLIM_VERSION, SlimPackage, type SlimFiles } from "./slim.ts";
 import type { ReadWorkers } from "./readWorkers.ts";
 import { planFileStore } from "./slimStore.ts";
 import { repackedPak, type PakPlan } from "./repack.ts";
@@ -70,15 +70,20 @@ export function opfsSlimFiles(root: FileSystemDirectoryHandle, workers?: ReadWor
   };
 }
 
+/** Whether a package folder holds a complete package of this engine's format (an older one is converted again). */
+async function current(dir: FileSystemDirectoryHandle): Promise<boolean> {
+  // ("version" leads the index)
+  const head = await (await (await dir.getFileHandle("index.json")).getFile()).slice(0, 64).text();
+  return Number(/"version":(\d+)/.exec(head)?.[1]) === SLIM_VERSION;
+}
+
 /** The variants built (with their index), in OPFS. */
 export async function builtSlims(): Promise<SlimVariant[]> {
   const root = await opfs();
   const out: SlimVariant[] = [];
   for (const v of ["full", "potato"] as SlimVariant[]) {
     try {
-      const d = await root.getDirectoryHandle(dirName(v));
-      await d.getFileHandle("index.json");
-      out.push(v);
+      if (await current(await root.getDirectoryHandle(dirName(v)))) out.push(v);
     } catch {
       // not built (or interrupted)
     }
@@ -111,6 +116,7 @@ async function deflate(bytes: Uint8Array): Promise<Uint8Array> {
 export async function packageStore(variant: SlimVariant): Promise<FileSystemDirectoryHandle | null> {
   try {
     const dir = await (await opfs()).getDirectoryHandle(dirName(variant));
+    if (!(await current(dir))) return null;
     const store = await dir.getDirectoryHandle("store");
     await store.getFileHandle("done");
     return store;
@@ -127,7 +133,7 @@ export async function packageStore(variant: SlimVariant): Promise<FileSystemDire
 export async function storeInProgress(variant: SlimVariant): Promise<Map<string, number> | null> {
   try {
     const dir = await (await opfs()).getDirectoryHandle(dirName(variant));
-    await dir.getFileHandle("index.json");
+    if (!(await current(dir))) return null;
     const plan = JSON.parse(await (await (await dir.getFileHandle(STORE_PLAN)).getFile()).text()) as SavedStorePlan;
     return new Map(plan.sources.map((s) => [s.path.toLowerCase(), s.size]));
   } catch {

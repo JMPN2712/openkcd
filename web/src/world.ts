@@ -153,27 +153,21 @@ async function loadLods(vfs: Vfs, path: string, caches: WorldCaches, maxTextureD
     // sprite/impostor path; with a generic shader it renders nearly invisible,
     // so stop at the previous LOD
     if (m.cgf.meshes.reduce((t, x) => t + x.indices.length / 3, 0) < 32) break;
-    lods.push(anchorLod(m, base));
+    lods.push(alignLod(m, base));
   }
   return lods;
 }
 
 /**
- * LOD files keep the node offset from the artist's scene, where the LODs sat
- * side by side (bridge_wooden_01_lod1 at +5.4 m x, _lod2 at +10.8 m; the
- * engine ignores it). Shift the LOD's nodes so its root lines up with the
- * base model's root.
+ * A LOD's parts where the base model has them. LOD files keep the artist's scene, where the LODs
+ * sat side by side (bridge_wooden_01_lod1 at +5.4 m x; cgf.ts leaves the main root's place out),
+ * and an animated model's moving parts (a chest's lid, a cabinet's doors) may sit elsewhere in it:
+ * a part named as one of the base model's takes that part's transform.
  */
-function anchorLod(lod: LoadedModel, base: LoadedModel): LoadedModel {
-  const a = lod.cgf.meshes[0]?.transform, b = base.cgf.meshes[0]?.transform;
-  if (!a || !b) return lod;
-  const d = [b[12] - a[12], b[13] - a[13], b[14] - a[14]];
-  if (Math.hypot(d[0], d[1], d[2]) < 1e-4) return lod;
-  const meshes = lod.cgf.meshes.map((m) => {
-    const t = new Float32Array(m.transform);
-    t[12] += d[0]; t[13] += d[1]; t[14] += d[2];
-    return { ...m, transform: t };
-  });
+function alignLod(lod: LoadedModel, base: LoadedModel): LoadedModel {
+  const at = new Map(base.cgf.meshes.map((m) => [m.nodeName, m.transform]));
+  if (!lod.cgf.meshes.some((m) => at.has(m.nodeName) && at.get(m.nodeName) !== m.transform)) return lod;
+  const meshes = lod.cgf.meshes.map((m) => (at.has(m.nodeName) ? { ...m, transform: at.get(m.nodeName)! } : m));
   return { ...lod, cgf: { ...lod.cgf, meshes } };
 }
 

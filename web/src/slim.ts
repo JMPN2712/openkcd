@@ -16,7 +16,8 @@ import { MeshoptDecoder } from "meshoptimizer/decoder";
 import { textureFile } from "./mtl.ts";
 import { withTextures, type AssetPackage, type LoadedModel, type LoadOptions, type MipChain, type ModelParts, type TextureLoader } from "./model.ts";
 
-export const SLIM_VERSION = 3;
+/** 4: models' mesh transforms without the root node's (cgf.ts) */
+export const SLIM_VERSION = 4;
 /** Region chunk size (metres): chosen by measuring the reads per area, docs/SLIM.md. */
 export const TILE = 256;
 /** Texture levels up to this size are stored with the texture in its tile; larger ones in the tile's pack. */
