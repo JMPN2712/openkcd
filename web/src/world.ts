@@ -351,7 +351,7 @@ async function sceneFromGroups(
 }
 
 /** Instances per culling cluster (WorldModel.clusters). */
-const CLUSTER = 16;
+export const CLUSTER = 16;
 
 function clustersOf(S: Float32Array, count: number): Float32Array {
   const out = new Float32Array(Math.ceil(count / CLUSTER) * 5);

@@ -102,6 +102,7 @@ node scripts/test-collision.ts                   # collision sources by object t
 node --expose-gc scripts/test-streaming.ts       # two laps through the map's towns: scene rebuild times, memory levels off with cache trimming
 node scripts/test-sky.ts                         # time-of-day profiles, sunrise/sunset, the sun's path, light levels over the day
 node scripts/bench-presets.ts --gpu both         # frame rates per quality preset (Potato/Low/Medium/High), market and fields, each GPU Dawn finds (NO_POOL=1: without texture streaming)
+node scripts/bench-streaming.ts --back           # what a streaming step costs: scene build, geometry upload (in slices), the renderer rebuild and the frame after, kept geometry memory
 node scripts/profile-browser.ts --trace          # the world view in headless Chrome on the real GPU (opens ~/kcd1 through the folder input): HUD fps, a CPU profile, and with --trace how busy Chrome's GPU process is
 node scripts/test-texture-pool.ts                # texture streaming: grow, shrink under a budget (read back from the GPU), reads on worker threads
 node scripts/render-player.ts /tmp/p --walk "1:;2:w;1.5:w+shift;1:"   # headless walk as Henry with scripted input, a frame per segment (--textures 1024,1024 or --no-pool)

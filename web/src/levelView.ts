@@ -376,6 +376,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         });
         if (stopped) return;
         const items = lodItems(next);
+        // new meshes' geometry goes up a few milliseconds a frame first; setModels then reuses it
+        await models.prepare(items);
+        if (stopped) return;
         models.setModels(items, models.indexed ? sceneMatrices(next) : undefined);
         models.setShadow(shadowMap);
         if (shadowMap) casters.setScene(next, items.map((it) => it.capacity), shadowMap.cascades, models.indexed);
@@ -396,9 +399,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     }
   };
   let stopped = false;
-  // start just south of Rataje town (centre of its brushes is around 2190, 1300), looking north
-  const cx = 2192, cy = 1050;
-  const cam: FlyCamera = { pos: [cx, cy, heightAt(terrain, cx, cy) + 60], yaw: Math.PI / 2, pitch: -0.25 };
+  // start above Henry's spawn in Rattay's market, looking the way he will: the first streamed
+  // scene is the one he needs (starting 600 m away streamed a whole scene there first, about
+  // 100 s from the game folder before the market was complete)
+  const cam: FlyCamera = { pos: [SPAWN[0], SPAWN[1], heightAt(terrain, SPAWN[0], SPAWN[1]) + 30], yaw: SPAWN_YAW, pitch: -0.4 };
 
   const keys = new Set<string>();
   canvas.addEventListener("keydown", (e) => {
