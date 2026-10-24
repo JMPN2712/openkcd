@@ -275,6 +275,10 @@ the way (0.5 s idle in 80 s): about 36 s of it is the game running at full speed
   reads the header (with room for the name and an extra field) and the data in one, and feeds
   the bytes straight to the `DecompressionStream` (wrapping them in a Blob cost another 6 s).
 - **Market complete: 74 → 53 s.**
+- **NPCs wait for the world:** loading NPCs, their behaviour trees, crowd and animation start once
+  the first streamed scene is complete (they took about half the main thread while it loaded).
+  **Market complete: 53 → 38 s**; the NPCs then assemble over the next 10–20 s. The HUD says
+  so meanwhile. `profile-browser.ts` now waits for the NPCs too before measuring.
 - The rest of the read cost (a slice per entry, 6 s) is what the region chunks of the compact
   format (milestone 2) remove: one read per area instead of thousands.
 
