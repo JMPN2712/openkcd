@@ -12,10 +12,10 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
   Full; the packages end at 12.76 GiB (Potato) and 21.41 GiB (Full).
   Cutscene videos are left out and can be added later. Opus audio, converted
   animations and video transcoding moved to "Later" under milestone 2.
-- **Milestone 3 (release) prep has started:** GPL-3.0-or-later license added; the
-  clean-room and history audit's first pass is done, with history findings
-  waiting on the user's decision (milestone 3 below). The user makes the
-  repository public.
+- **Milestone 3 (release) prep:** GPL-3.0-or-later license; the clean-room
+  audit is done and the history rewritten (milestone 3 below). Next: the
+  user recreates the GitHub repository, then push; the user makes it
+  public.
 - **Fixed: furniture turned and moved in houses** (the user's "objects
   completely misarranged" report). A model's main root node transform is
   left out now (`docs/LEVELS.md`); beds had lain 90° across their bedding.
@@ -280,22 +280,24 @@ The repository is private (it had become public; set back to private on
 - [x] Clean-room rebuilds of code first written with decompiler output in view: collision
       avoidance (`crowd.ts`) and the navmesh decoder (`navmesh.ts`, `tools/navmesh.py`), now
       written from research notes (2026-10-19).
-- [ ] Final clean-room and history audit (no game data, no decompiled code,
-      no branding). First pass done (2026-10-24):
+- [x] Final clean-room and history audit (no game data, no decompiled code,
+      no branding), and the history rewritten (2026-10-24, backup bundles
+      kept outside the repository):
   - [x] No game files, assets, renders or large binaries anywhere in the
-        history (728 blobs, largest 80 KB of source; no path was ever
-        deleted); the only images are the original app icon.
-  - [x] No decompiler output in any version of any file (Ghidra/IDA names,
-        addresses), apart from the rules that forbid it; no secrets.
-  - [x] No long excerpts of the game's scripts or data in docs or code.
-  - [ ] **History, waiting on the user's decision:** early versions of two
-        files from before the clean-room process, one commit message, and
-        whether the GitHub repository is recreated before going public.
-  - [ ] Current tree, the user's call: personal paths (`.claude/settings.json`)
-        and hardware notes (`CLAUDE.md`); `docs/GAMELOGIC.md` and
-        `tools/rtti_survey.py` list RTTI class counts and namespace names read
-        from `WHGame.dll` (strings, not code); the commit author's e-mail
-        address becomes public with the history.
+        history; the only images are the original app icon.
+  - [x] No decompiler output in any version of any file, apart from the
+        rules that forbid it; no secrets.
+  - [x] The decoders and docs from before the clean-room process now appear
+        only in their clean-room form in every commit; commit messages that
+        described the game's internals reworded.
+  - [x] No class, namespace, export or source-path names read from the
+        game's DLL in any version (`docs/GAMELOGIC.md`, `docs/RECON.md`;
+        the RTTI survey script removed).
+  - [x] Commit e-mail addresses are GitHub no-reply ones; `CLAUDE.md` has no
+        home paths or user names (machine paths in the ignored
+        `CLAUDE.local.md`).
+  - [ ] The user recreates the GitHub repository (it may still hold the
+        history from before the 2026-10-19 rewrite); then push.
 - [ ] Make the `openkcd` repo public (the user), with build and run docs and
       a compatibility list.
 
