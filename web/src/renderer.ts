@@ -17,6 +17,15 @@ import { DEFAULT_LIGHTING, depthCompare, depthFormat, lookAt, multiply, perspect
 
 // position 3f, normal 3f, uv 2f, bone ids u16×4, weights unorm8×4, tangent 4f (w handedness), colour unorm8×4
 const VERTEX_BYTES = 64;
+/**
+ * Largest shared vertex or index buffer (meshes are packed into as many as needed). One buffer per
+ * mesh made Chrome's GPU process check thousands of buffers on every submit.
+ */
+const GEOMETRY_CHUNK = 128 * 2 ** 20;
+
+/** Bytes per draw in the shared uniform buffer (208 used; bindings start at 256-byte multiples). */
+const UNIFORM_SLOT = 256;
+
 const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
 const SHADER = /* wgsl */ `${SHADOW_WGSL}
@@ -219,7 +228,10 @@ interface DrawItem {
   count: number;
   bind: GPUBindGroup;
   item: number;
-  ubuf: GPUBuffer;
+  /** byte offset of the draw's uniforms in uniformBuf */
+  uoff: number;
+  /** the mesh's first vertex in its vertex chunk (firstIndex already counts from its chunk's start) */
+  baseVertex: number;
   inst: GPUBuffer;
   instCount: number;
   /** the mesh's own node transform, composed with the item transform */
@@ -230,9 +242,11 @@ interface DrawItem {
   ground: boolean;
   /** an eye shadow shell (%EYE_AO_OVERLAY): multiplied over what is behind it, in the blended pass (blend is set too) */
   overlay: boolean;
+  /** alpha-tested (leaves, hair): its texture decides its shadow */
+  cutout: boolean;
   /** pooled diffuse, specular and normal textures (null: not pooled), the palette bound, and UV units per metre */
   pooled: (PooledTexture | null)[];
-  palette: GPUBuffer;
+  palette: GPUBufferBinding;
   uvDensity: number;
 }
 
@@ -333,11 +347,43 @@ export class ModelRenderer {
   /** (0, 0): the unperturbed normal, for draws without a normal map */
   private flatNormal: GPUTexture;
   private draws: DrawItem[] = [];
-  private palettes: ({ buf: GPUBuffer; count: number } | null)[] = [];
+  /**
+   * Skinning palettes: every item's range of one shared buffer (aligned for binding), with a copy
+   * on the CPU. setPalette only writes the copy; the changed span goes up in one writeBuffer before
+   * the next draw. (One writeBuffer per NPC part, every frame, was a quarter of the main thread's
+   * time in Chrome, where each call crosses into the GPU process.)
+   */
+  private palettes: ({ binding: GPUBufferBinding; at: number; count: number; slot: number } | null)[] = [];
+  private paletteCpu = new Float32Array(0);
+  private paletteBuf: GPUBuffer | null = null;
+  /** per palette slot (in buffer order): changed since the last upload */
+  private paletteDirty = new Uint8Array(0);
+  private paletteSlots: { at: number; count: number }[] = [];
+  private anyPaletteDirty = false;
+  /** per item: its palette is an earlier item's (paletteKey) */
+  private paletteFollower = new Uint8Array(0);
+  /**
+   * Every draw's uniforms in one buffer (a 256-byte slot each), with a copy on the CPU; changed
+   * slots go up before the next draw. Chrome's WebGPU checks every buffer a pass uses on each
+   * submit: one small buffer per draw made that the GPU process's largest cost.
+   */
+  private uniformBuf: GPUBuffer | null = null;
+  private uniformCpu = new Float32Array(0);
+  private uniformDirty = new Uint8Array(0);
+  private anyUniformDirty = false;
   private itemInst: { buf: GPUBuffer; count: number; capacity: number }[] = [];
   private dynamicItems: number[] = [];
   private drawsByItem: Map<number, DrawItem[]> | null = null;
   private drawIndex: Map<number, number[]> | null = null;
+  /**
+   * Shadow views draw depth only, so an item's opaque sub-meshes that follow each other in one
+   * index buffer (walls, roof and beams of a house; an NPC's head, eyes and mouth) go in one draw
+   * there. Cut-outs stay apart (their texture decides the shadow). Per item: the draws, each with
+   * its indirect-argument slot (merged ones after this.draws' slots). About 30% fewer shadow draws
+   * in the world, half for NPCs: each draw costs Chrome's GPU process about a microsecond.
+   */
+  private shadowDraws: Map<number, { d: DrawItem; arg: number; firstIndex: number; count: number }[]> | null = null;
+  private mergedArgs = 0;
   private identityPalette: GPUBuffer;
   private identityInstance: GPUBuffer;
   private owned: (GPUBuffer | GPUTexture)[] = [];
@@ -490,9 +536,11 @@ export class ModelRenderer {
     if (!this.indirect) return;
     const items = this.itemInst.length;
     const total = this.dynamicItems.reduce((s, k) => s + this.itemInst[k].capacity, 0);
-    const make = (pipeline: GPURenderPipeline, camBuf: GPUBuffer, camBind: GPUBindGroup, colorFormats: GPUTextureFormat[], depth: GPUTextureFormat, samples: number): View => {
+    // (shadow views also hold the merged shadow draws' arguments, after the draws')
+    if (this.shadow) this.shadowDrawsOf(0);
+    const make = (pipeline: GPURenderPipeline, camBuf: GPUBuffer, camBind: GPUBindGroup, colorFormats: GPUTextureFormat[], depth: GPUTextureFormat, samples: number, shadow = false): View => {
       const packed = this.device.createBuffer({ size: Math.max(1, total) * 64, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
-      const args = new Uint32Array(Math.max(1, this.draws.length) * 5);
+      const args = new Uint32Array(Math.max(1, this.draws.length + (shadow ? this.mergedArgs : 0)) * 5);
       const argsBuf = this.device.createBuffer({ size: args.byteLength, usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST });
       const counts = new Uint32Array(items);
       this.itemInst.forEach((it, k) => { if (!this.dynamicItems.includes(k)) counts[k] = it.count; });
@@ -507,7 +555,7 @@ export class ModelRenderer {
       for (let c = 0; c < this.shadow.cascades; c++) {
         const buf = this.device.createBuffer({ size: 160, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         // casters bind the stand-in map (a texture can't be sampled while it is the depth target)
-        this.views.push(make(this.shadowPipeline, buf, this.cameraBind(buf, noShadows.get(this.device) ?? this.shadowOrStandInFresh()), [], SHADOW_FORMAT, 1));
+        this.views.push(make(this.shadowPipeline, buf, this.cameraBind(buf, noShadows.get(this.device) ?? this.shadowOrStandInFresh()), [], SHADOW_FORMAT, 1, true));
       }
     }
   }
@@ -541,20 +589,41 @@ export class ModelRenderer {
     instances?: Float32Array;
     /** or: room for this many instances, filled per frame with setInstances() */
     capacity?: number;
+    /** items with the same key share one skinning palette (same bones, same bind poses) */
+    paletteKey?: string;
   }[]): void {
     this.clear();
     this.itemRadius = items.map(() => 0);
     this.itemFixed = items.map(({ transform, instances, capacity }) => (capacity !== undefined ? null : transform ? transform.slice(12, 15) : instances?.length ? positionsOf(instances) : new Float32Array(3)));
-    this.palettes = items.map(({ model }) => {
+    const align = this.device.limits.minStorageBufferOffsetAlignment;
+    let paletteBytes = 0;
+    const slots: { at: number; n: number }[] = [];
+    const byKey = new Map<string, number>();
+    const slotOf = items.map(({ model, paletteKey }) => {
       const n = model.skeleton && model.cgf.meshes.some((m) => m.boneIds) ? model.skeleton.bones.length : 0;
-      if (!n) return null;
-      const buf = this.device.createBuffer({ size: n * 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-      const id = new Float32Array(n * 16);
-      for (let i = 0; i < n; i++) id.set(IDENTITY, i * 16);
-      this.device.queue.writeBuffer(buf, 0, id);
-      this.owned.push(buf);
-      return { buf, count: n };
+      if (!n) return -1;
+      const shared = paletteKey !== undefined ? byKey.get(paletteKey) : undefined;
+      if (shared !== undefined && slots[shared].n === n) return shared;
+      slots.push({ at: paletteBytes, n });
+      paletteBytes += Math.ceil((n * 64) / align) * align;
+      if (paletteKey !== undefined) byKey.set(paletteKey, slots.length - 1);
+      return slots.length - 1;
     });
+    this.paletteCpu = new Float32Array(paletteBytes / 4);
+    this.paletteBuf = paletteBytes ? this.device.createBuffer({ size: paletteBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }) : null;
+    if (this.paletteBuf) this.owned.push(this.paletteBuf);
+    this.paletteDirty = new Uint8Array(slots.length);
+    this.anyPaletteDirty = false;
+    this.paletteSlots = slots.map((p) => ({ at: p.at / 4, count: p.n }));
+    for (const p of slots) for (let i = 0; i < p.n; i++) this.paletteCpu.set(IDENTITY, p.at / 4 + i * 16);
+    this.palettes = slotOf.map((k) => {
+      if (k < 0) return null;
+      const p = slots[k];
+      return { binding: { buffer: this.paletteBuf!, offset: p.at, size: p.n * 64 }, at: p.at / 4, count: p.n, slot: k };
+    });
+    const seen = new Set<number>();
+    this.paletteFollower = Uint8Array.from(slotOf, (k) => (k < 0 ? 0 : seen.has(k) ? 1 : (seen.add(k), 0)));
+    if (this.paletteBuf) this.device.queue.writeBuffer(this.paletteBuf, 0, this.paletteCpu);
     const textures = new Map<MipChain, GPUTexture>();
     const min: Vec3 = [Infinity, Infinity, Infinity];
     const max: Vec3 = [-Infinity, -Infinity, -Infinity];
@@ -576,6 +645,32 @@ export class ModelRenderer {
       return { buf, count: instances.length / 16, capacity: instances.length / 16 };
     });
     const instBufs = this.itemInst;
+    let drawSlots = 0;
+    for (const { model } of items) for (const mesh of model.cgf.meshes) for (const s of mesh.subsets) if (!model.materials[model.materials.length === 1 ? 0 : s.matId]?.nodraw) drawSlots++;
+    this.uniformBuf = drawSlots ? this.device.createBuffer({ size: drawSlots * UNIFORM_SLOT, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }) : null;
+    if (this.uniformBuf) this.owned.push(this.uniformBuf);
+    this.uniformCpu = new Float32Array((drawSlots * UNIFORM_SLOT) / 4);
+    this.uniformDirty = new Uint8Array(drawSlots);
+    this.anyUniformDirty = false;
+    let slot = 0;
+    // every mesh's vertices and indices in shared chunks (see GEOMETRY_CHUNK): place them first
+    const chunkMax = Math.min(GEOMETRY_CHUNK, this.device.limits.maxBufferSize);
+    const place = (sizes: number[], usage: number): { buf: GPUBuffer; at: number }[] => {
+      const out: { chunk: number; at: number }[] = [];
+      const chunks: number[] = [];
+      for (const n of sizes) {
+        if (!chunks.length || chunks[chunks.length - 1] + n > chunkMax) chunks.push(0);
+        out.push({ chunk: chunks.length - 1, at: chunks[chunks.length - 1] });
+        chunks[chunks.length - 1] += n;
+      }
+      const bufs = chunks.map((size) => this.device.createBuffer({ size: Math.max(4, size), usage: usage | GPUBufferUsage.COPY_DST }));
+      this.owned.push(...bufs);
+      return out.map((o) => ({ buf: bufs[o.chunk], at: o.at }));
+    };
+    const meshesOf = items.flatMap(({ model }) => model.cgf.meshes);
+    const vAt = place(meshesOf.map((m) => (m.positions.length / 3) * VERTEX_BYTES), GPUBufferUsage.VERTEX);
+    const iAt = place(meshesOf.map((m) => Math.ceil(m.indices.byteLength / 4) * 4), GPUBufferUsage.INDEX);
+    let meshNo = 0;
     for (const [itemIndex, { model, transform: partTm, layer = 0 }] of items.entries())
     for (const mesh of model.cgf.meshes) {
       const meshTm = partTm ? multiply(partTm, mesh.transform) : mesh.transform;
@@ -606,11 +701,10 @@ export class ModelRenderer {
         const r = Math.hypot(p[0], p[1], p[2]);
         if (r > this.itemRadius[itemIndex]) this.itemRadius[itemIndex] = r;
       }
-      const vb = this.device.createBuffer({ size: verts.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
-      this.device.queue.writeBuffer(vb, 0, verts);
-      const ib = this.device.createBuffer({ size: Math.ceil(mesh.indices.byteLength / 4) * 4, usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST });
-      this.device.queue.writeBuffer(ib, 0, mesh.indices);
-      this.owned.push(vb, ib);
+      const { buf: vb, at: vOff } = vAt[meshNo], { buf: ib, at: iOff } = iAt[meshNo];
+      meshNo++;
+      this.device.queue.writeBuffer(vb, vOff, verts);
+      if (mesh.indices.byteLength) this.device.queue.writeBuffer(ib, iOff, mesh.indices);
       this.stats.meshes++;
       this.stats.vertices += nv;
 
@@ -638,8 +732,8 @@ export class ModelRenderer {
         const gpuTex = gpu(chain, 0);
         const specTex = gpu(specChain, 1);
         if (chain) this.stats.textured++;
-        const ubuf = this.device.createBuffer({ size: 208, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        const u = new Float32Array(52);
+        const uoff = slot++ * UNIFORM_SLOT;
+        const u = this.uniformCpu.subarray(uoff / 4, uoff / 4 + 52);
         const decal = !!mat?.genMask.includes("%DECAL");
         const overlay = !!mat?.genMask.includes("%EYE_AO_OVERLAY");
         // water sheets on Illum (waterfalls, weirs: Opacity below 1) are see-through like decals,
@@ -670,28 +764,28 @@ export class ModelRenderer {
           u.set([...cz.global, cz.withMask && specChain ? 2 : 1], 28);
           cz.masks.forEach((m, k) => u.set([...m, 0], 32 + k * 4));
         }
-        this.device.queue.writeBuffer(ubuf, 0, u);
-        this.owned.push(ubuf);
         const bind = this.device.createBindGroup({
           layout: this.drawLayout,
           entries: [
-            { binding: 0, resource: { buffer: ubuf } },
+            { binding: 0, resource: { buffer: this.uniformBuf!, offset: uoff, size: 208 } },
             { binding: 1, resource: gpuTex },
             { binding: 2, resource: this.sampler },
             { binding: 3, resource: specTex },
-            { binding: 4, resource: { buffer: palette ? palette.buf : this.identityPalette } },
+            { binding: 4, resource: palette ? palette.binding : { buffer: this.identityPalette } },
             { binding: 5, resource: normTex },
           ],
         });
         const ib2 = instBufs[itemIndex];
         const d: DrawItem = {
-          vb, ib, firstIndex: s.firstIndex, count: s.numIndices, bind, item: itemIndex, ubuf, meshTm: mesh.transform, inst: ib2.buf, instCount: ib2.count, blend: (blend && !decal) || overlay, ground: decal, overlay,
-          pooled, palette: palette ? palette.buf : this.identityPalette, uvDensity: pooled.some(Boolean) ? uvDensity(mesh, s.firstIndex, s.numIndices) : 0,
+          vb, ib, firstIndex: s.firstIndex + iOff / 4, baseVertex: vOff / VERTEX_BYTES, count: s.numIndices, bind, item: itemIndex, uoff, meshTm: mesh.transform, inst: ib2.buf, instCount: ib2.count, blend: (blend && !decal) || overlay, ground: decal, overlay,
+          cutout: !decal && (mat?.alphaTest ?? 0) > 0,
+          pooled, palette: palette ? palette.binding : { buffer: this.identityPalette }, uvDensity: pooled.some(Boolean) ? uvDensity(mesh, s.firstIndex, s.numIndices) : 0,
         };
         this.draws.push(d);
         for (const e of pooled) if (e) { const l = this.drawsByTexture.get(e); if (l) l.push(d); else this.drawsByTexture.set(e, [d]); }
       }
     }
+    if (this.uniformBuf) this.device.queue.writeBuffer(this.uniformBuf, 0, this.uniformCpu);
     this.stats.draws = this.draws.length;
     if (min[0] <= max[0]) { this.bboxMin = min; this.bboxMax = max; }
     this.buildViews();
@@ -767,6 +861,7 @@ export class ModelRenderer {
 
   /** Record this renderer's draws into a pass with the same format, sample count and depth convention. */
   draw(pass: GPURenderPassEncoder): void {
+    this.uploadPalettes();
     if (this.indirect) {
       const v = this.views[0];
       if (!v) return;
@@ -788,7 +883,7 @@ export class ModelRenderer {
       pass.setVertexBuffer(1, d.inst);
       pass.setIndexBuffer(d.ib, "uint32");
       pass.setBindGroup(1, d.bind);
-      pass.drawIndexed(d.count, n, d.firstIndex);
+      pass.drawIndexed(d.count, n, d.firstIndex, d.baseVertex);
       tris += (d.count / 3) * n;
       calls++;
     }
@@ -808,6 +903,7 @@ export class ModelRenderer {
   }
 
   private drawKind(pass: GPURenderPassEncoder, kind: "blend" | "ground"): void {
+    this.uploadPalettes();
     if (this.indirect) {
       const v = this.views[0];
       if (!v) return;
@@ -826,7 +922,7 @@ export class ModelRenderer {
       pass.setVertexBuffer(1, d.inst);
       pass.setIndexBuffer(d.ib, "uint32");
       pass.setBindGroup(1, d.bind);
-      pass.drawIndexed(d.count, n, d.firstIndex);
+      pass.drawIndexed(d.count, n, d.firstIndex, d.baseVertex);
     }
   }
 
@@ -860,6 +956,7 @@ export class ModelRenderer {
 
   /** Record cascade `c`'s casters into a depth-only pass (ShadowMap.beginPass). */
   drawShadow(pass: GPURenderPassEncoder, c: number): void {
+    this.uploadPalettes();
     const v = this.views[1 + c];
     if (!v) return;
     this.flush(v);
@@ -875,6 +972,11 @@ export class ModelRenderer {
     if (!v || !it || this.dynamicItems.includes(index)) return false;
     v.counts[index] = hidden ? 0 : it.count;
     return true;
+  }
+
+  /** Draw calls the last flush of each view recorded: the camera, then each shadow cascade. */
+  viewCalls(): number[] {
+    return this.views.map((v) => v.calls);
   }
 
   /** Whether this renderer casts shadows (indirect mode with a shadow map set). */
@@ -904,11 +1006,26 @@ export class ModelRenderer {
       a[i * 5] = d.count;
       a[i * 5 + 1] = n;
       a[i * 5 + 2] = d.firstIndex;
-      a[i * 5 + 3] = 0;
+      a[i * 5 + 3] = d.baseVertex;
       a[i * 5 + 4] = v.itemFirst[d.item];
       if (n) { tris += (d.count / 3) * n; calls++; }
     }
-    if (this.draws.length) this.device.queue.writeBuffer(v.argsBuf!, 0, a, 0, this.draws.length * 5);
+    let slots = this.draws.length;
+    if (v !== this.views[0] && this.shadowDraws) {
+      // shadow views: the merged draws' arguments, and their draw count instead
+      calls = 0;
+      for (const [item, l] of this.shadowDraws) {
+        const n = v.counts[item];
+        for (const e of l) {
+          if (n) calls++;
+          if (e.arg < this.draws.length) continue;
+          const o = e.arg * 5;
+          a[o] = e.count; a[o + 1] = n; a[o + 2] = e.firstIndex; a[o + 3] = e.d.baseVertex; a[o + 4] = v.itemFirst[item];
+        }
+      }
+      slots += this.mergedArgs;
+    }
+    if (slots) this.device.queue.writeBuffer(v.argsBuf!, 0, a, 0, slots * 5);
     v.triangles = tris;
     v.calls = calls;
     if (this.pool && v === this.views[0] && ++this.requestFrame % 8 === 0) this.requestTextures(v.counts, v.pending);
@@ -944,7 +1061,9 @@ export class ModelRenderer {
       });
     }
     const kindOf = (d: DrawItem) => (d.ground ? "ground" : d.blend ? "blend" : "opaque");
-    const list = this.drawIndex.get(item)?.filter((i) => kindOf(this.draws[i]) === kind);
+    const list = v !== this.views[0] && kind === "opaque"
+      ? this.shadowDrawsOf(item).map((e) => e.arg)
+      : this.drawIndex.get(item)?.filter((i) => kindOf(this.draws[i]) === kind);
     if (!list?.length) return undefined;
     // (blended draws never write depth: their bundles also run in a pass that holds the depth
     // read-only, so the water can sample it)
@@ -953,8 +1072,9 @@ export class ModelRenderer {
     enc.setBindGroup(0, v === this.views[0] ? this.camBind : v.camBind);
     const dynamic = this.dynamicItems.includes(item);
     let vb: GPUBuffer | null = null, ib: GPUBuffer | null = null, inst: GPUBuffer | null = null;
+    const shadowOf = v !== this.views[0] && kind === "opaque" ? new Map(this.shadowDrawsOf(item).map((e) => [e.arg, e.d])) : null;
     for (const i of list) {
-      const d = this.draws[i];
+      const d = shadowOf ? shadowOf.get(i)! : this.draws[i];
       const ibuf = dynamic ? v.packed! : d.inst;
       const p = kind === "opaque" ? v.pipeline : d.overlay ? this.overlayPipeline : this.blendPipeline;
       if (p !== pipeline) enc.setPipeline((pipeline = p));
@@ -965,6 +1085,29 @@ export class ModelRenderer {
       enc.drawIndexedIndirect(v.argsBuf!, i * 20);
     }
     return enc.finish();
+  }
+
+  /** An item's shadow draws (see shadowDraws), built on first use for every item. */
+  private shadowDrawsOf(item: number): { d: DrawItem; arg: number; firstIndex: number; count: number }[] {
+    if (!this.shadowDraws) {
+      const map = new Map<number, { d: DrawItem; arg: number; firstIndex: number; count: number }[]>();
+      let merged = 0;
+      this.draws.forEach((d, i) => {
+        if (d.blend || d.ground || !d.count) return;
+        const l = map.get(d.item) ?? map.set(d.item, []).get(d.item)!;
+        const last = l[l.length - 1];
+        if (last && !d.cutout && !last.d.cutout && last.d.vb === d.vb && last.d.ib === d.ib && last.d.meshTm === d.meshTm && last.d.baseVertex === d.baseVertex && last.firstIndex + last.count === d.firstIndex) {
+          // extend the run: it becomes (or already is) a merged draw with its own argument slot
+          if (last.arg < this.draws.length) last.arg = this.draws.length + merged++;
+          last.count += d.count;
+          return;
+        }
+        l.push({ d, arg: i, firstIndex: d.firstIndex, count: d.count });
+      });
+      this.shadowDraws = map;
+      this.mergedArgs = merged;
+    }
+    return this.shadowDraws.get(item) ?? [];
   }
 
   /**
@@ -1011,11 +1154,11 @@ export class ModelRenderer {
         d.bind = this.device.createBindGroup({
           layout: this.drawLayout,
           entries: [
-            { binding: 0, resource: { buffer: d.ubuf } },
+            { binding: 0, resource: { buffer: this.uniformBuf!, offset: d.uoff, size: 208 } },
             { binding: 1, resource: dt ? dt.view : this.white.createView() },
             { binding: 2, resource: this.sampler },
             { binding: 3, resource: st ? st.view : this.white.createView() },
-            { binding: 4, resource: { buffer: d.palette } },
+            { binding: 4, resource: d.palette },
             { binding: 5, resource: nt ? nt.view : this.flatNormal.createView() },
           ],
         });
@@ -1042,13 +1185,53 @@ export class ModelRenderer {
         else this.drawsByItem.set(d.item, [d]);
       }
     }
-    for (const d of this.drawsByItem.get(index) ?? []) this.device.queue.writeBuffer(d.ubuf, 0, multiply(transform, d.meshTm));
+    for (const d of this.drawsByItem.get(index) ?? []) {
+      this.uniformCpu.set(multiply(transform, d.meshTm), d.uoff / 4);
+      this.uniformDirty[d.uoff / UNIFORM_SLOT] = 1;
+      this.anyUniformDirty = true;
+    }
   }
 
   /** Upload skinning matrices (column-major 4×4 per bone) for item `index`. */
   setPalette(index: number, matrices: Float32Array): void {
     const p = this.palettes[index];
-    if (p) this.device.queue.writeBuffer(p.buf, 0, matrices.subarray(0, p.count * 16));
+    if (!p) return;
+    this.paletteCpu.set(matrices.subarray(0, p.count * 16), p.at);
+    this.paletteDirty[p.slot] = 1;
+    this.anyPaletteDirty = true;
+  }
+
+  /** Whether item `index` shares its palette with an earlier item (setModels paletteKey): no need to set it again. */
+  paletteShared(index: number): boolean {
+    return this.paletteFollower[index] === 1;
+  }
+
+  /** Upload the palettes and draw uniforms changed since the last draw: one writeBuffer per run of adjacent changed slots. */
+  private uploadPalettes(): void {
+    if (this.anyUniformDirty && this.uniformBuf) {
+      const dirty = this.uniformDirty, F = UNIFORM_SLOT / 4;
+      for (let i = 0; i < dirty.length; ) {
+        if (!dirty[i]) { i++; continue; }
+        let j = i;
+        while (j + 1 < dirty.length && dirty[j + 1]) j++;
+        this.device.queue.writeBuffer(this.uniformBuf, i * UNIFORM_SLOT, this.uniformCpu, i * F, (j - i) * F + 52);
+        dirty.fill(0, i, j + 1);
+        i = j + 1;
+      }
+      this.anyUniformDirty = false;
+    }
+    if (!this.anyPaletteDirty || !this.paletteBuf) return;
+    const dirty = this.paletteDirty, slots = this.paletteSlots;
+    for (let i = 0; i < slots.length; ) {
+      if (!dirty[i]) { i++; continue; }
+      let j = i;
+      while (j + 1 < slots.length && dirty[j + 1]) j++;
+      const from = slots[i].at, to = slots[j].at + slots[j].count * 16;
+      this.device.queue.writeBuffer(this.paletteBuf, from * 4, this.paletteCpu, from, to - from);
+      dirty.fill(0, i, j + 1);
+      i = j + 1;
+    }
+    this.anyPaletteDirty = false;
   }
 
   clear(): void {
@@ -1059,9 +1242,13 @@ export class ModelRenderer {
     this.draws = [];
     this.drawsByItem = null;
     this.drawIndex = null;
+    this.shadowDraws = null;
+    this.mergedArgs = 0;
     for (const v of this.views) { if (v.camBuf !== this.camBuf) v.camBuf.destroy(); v.packed?.destroy(); v.argsBuf?.destroy(); }
     this.views = [];
     this.palettes = [];
+    this.paletteBuf = null;
+    this.uniformBuf = null;
     this.itemInst = [];
     this.stats = { meshes: 0, triangles: 0, vertices: 0, draws: 0, textured: 0, drawCalls: 0 };
   }

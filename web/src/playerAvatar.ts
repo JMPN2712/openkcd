@@ -2,7 +2,7 @@
 // assembled like an NPC, skinned by an Animator and placed at the controller's feet.
 
 import { CharacterDb, loadCharacter, type LoadedCharacter } from "./character.ts";
-import { parseSkeleton } from "./skeleton.ts";
+import { parseSkeleton, skeletonKey } from "./skeleton.ts";
 import { Animator } from "./pose.ts";
 import { Dba } from "./dba.ts";
 import type { Clip } from "./anim.ts";
@@ -68,9 +68,10 @@ export class PlayerAvatar {
   }
 
   /** Renderer items for the parts (bind pose, identity placement until place()). */
-  renderItems(base = 0): { model: LoadedModel; transform: Float32Array; layer: number }[] {
+  renderItems(base = 0): { model: LoadedModel; transform: Float32Array; layer: number; paletteKey?: string }[] {
     this.items = this.character.parts.map((_, k) => base + k);
-    return this.character.parts.map(({ model, part, transform }) => ({ model, transform: transform ? multiply(this.world, transform) : this.world, layer: part.layer }));
+    // (parts with the same bones share a skinning palette)
+    return this.character.parts.map(({ model, part, transform }) => ({ model, transform: transform ? multiply(this.world, transform) : this.world, layer: part.layer, paletteKey: model.skeleton ? skeletonKey(model.skeleton) : undefined }));
   }
 
   /** Feet at `pos`, facing `yaw` (radians, 0 = +X). Characters face +Y in model space. */
@@ -89,7 +90,7 @@ export class PlayerAvatar {
       const hide = this.hidden.has(k);
       const viaRenderer = r.setItemHidden?.(item, hide) ?? false;
       r.setItemTransform(item, hide && !viaRenderer ? zero : transform ? multiply(this.world, transform) : this.world);
-      if (model.skeleton && r.paletteSize(item)) r.setPalette(item, this.animator.palette(model.skeleton));
+      if (model.skeleton && r.paletteSize(item) && !r.paletteShared?.(item)) r.setPalette(item, this.animator.palette(model.skeleton));
     });
   }
 

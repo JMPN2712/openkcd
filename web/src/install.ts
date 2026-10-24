@@ -99,7 +99,7 @@ type Dir = FileSystemDirectoryHandle;
 /**
  * A read-only directory handle over files picked with <input webkitdirectory>
  * (no File System Access API, or a scripted test): just what
- * findInstallers needs. Paths come from webkitRelativePath.
+ * findInstallers and opening a game folder need. Paths come from webkitRelativePath.
  */
 export function dirFromFiles(picked: File[]): Dir {
   type Node = { dirs: Map<string, Node>; files: Map<string, File> };
@@ -120,6 +120,10 @@ export function dirFromFiles(picked: File[]): Dir {
       async *entries() {
         for (const [k, d] of n.dirs) yield [k, wrap(d, k)];
         for (const [k, f] of n.files) yield [k, { kind: "file", name: k, getFile: async () => f }];
+      },
+      async *keys() {
+        yield* n.dirs.keys();
+        yield* n.files.keys();
       },
     }) as unknown as Dir;
   return wrap(top, picked[0]?.webkitRelativePath.split("/")[0] ?? "");

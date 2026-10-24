@@ -89,9 +89,16 @@ function setStatus(msg: string, kind: "" | "error" = ""): void {
 
 // ---------- open folder ----------
 
+// without the File System Access API, a plain folder input opens the game folder too
+const openInput = $<HTMLInputElement>("open-input");
+openInput.addEventListener("change", () => {
+  const files = [...(openInput.files ?? [])];
+  if (files.length) { const root = dirFromFiles(files); void openGame(root, root.name); }
+});
+
 $<HTMLButtonElement>("open").addEventListener("click", async () => {
   if (!window.showDirectoryPicker) {
-    setStatus("This browser has no File System Access API. Use Chrome or Chromium.", "error");
+    openInput.click();
     return;
   }
   let root: FileSystemDirectoryHandle;

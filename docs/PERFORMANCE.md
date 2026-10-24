@@ -166,6 +166,41 @@ streaming as Henry runs):
 - `NO_POOL=1 node scripts/bench-presets.ts` compares; `scripts/test-texture-pool.ts` checks
   growing, shrinking (read back from the GPU) and the worker reads.
 
+## Chrome: what limits the frame (2026-10-23)
+
+Measured in Chrome itself (`scripts/profile-browser.ts`: headless Chrome on the RTX 5070 Ti,
+High, Henry at the market spawn after streaming has settled; `--trace` adds Chrome's own trace).
+Headless Dawn (`bench-presets.ts`) misses most of this: in Chrome every WebGPU call is serialised
+to the GPU process, which decodes it and records Vulkan commands on its own main thread.
+
+Both threads were saturated: the page's main thread at 99%, the GPU process's at 94%. The page's
+`writeBuffer` calls were mostly waiting for the GPU process.
+
+| Step | fps | page main thread per frame |
+|---|---:|---:|
+| Start (the user measured 43 fps and 22 ms here) | 50–56 | 16 ms |
+| Behaviour trees ticked at 10 Hz, staggered (`npcAi.ts`) | 62 | 14.4 ms |
+| NPC parts with the same bones share one palette; changed palettes go up in runs | 71 | 12.5 ms |
+| Shadow views merge each mesh's opaque sub-meshes; the far cascade every 4th frame | 73 | 11.8 ms |
+| One uniform buffer per renderer instead of one per draw | 88 | 9.9 ms |
+| Mesh vertices and indices packed into shared 128 MiB buffers | 96 | 8.8 ms |
+
+- **The GPU process's cost was the number of buffers, not draws.** Halving the shadow draws barely
+  moved it; `Queue::Submit` stayed at 55% of its time. Chrome's WebGPU checks every buffer a pass
+  uses on each submit (turning off Dawn's lazy clearing, a diagnostic flag only, jumped to 95
+  fps). One uniform buffer per draw and a vertex and index buffer per mesh were tens of thousands
+  of buffers.
+- **Palettes:** an NPC's clothing parts mostly share one bone list (4× less data); before, each
+  of 500-odd parts uploaded its own palette every frame.
+- **Shadow draws** on High in the market: near cascade 901 → 412 world draws, far 2,535 → 1,392,
+  NPCs 777 → 643 per cascade (`bench-presets.ts` prints the draws per view).
+- **Left (8.8 ms):** `selectLods` 19%, `flush` 10% (instance packing), animation (`evaluateLayers`,
+  `palette`) 14%, collision `ground` 5%. The GPU process is 87% busy.
+- **Startup:** the view streams the free-fly start (2192, 1050) completely before Henry's spawn,
+  about 100 s before the market is complete (headless, from `~/kcd1`).
+- **Streaming hitch:** each streaming step rebuilds every model's GPU data (`setModels`, about
+  2.7 s of main thread for 3,573 models).
+
 ## Instance clusters (2026-10-23)
 
 Each model's instances are sorted along a Morton curve (8 m cells) when the scene is built, and

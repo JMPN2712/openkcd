@@ -35,7 +35,17 @@ interface Driven {
   task: Task;
   state: AiState;
   done: boolean;
+  /** AI clock time of the tree's next tick */
+  due: number;
 }
+
+/**
+ * Trees are ticked ten times a (game) second, not every frame, spread over the frames so they
+ * don't all land on one: a tree decides what comes next, and 0.1 s later is not visible, while
+ * walking still moves every frame. Every frame, the trees took 6.5 ms of a 16 ms frame on High
+ * (60 NPCs), mostly polling smart-object searches and Lua conditions.
+ */
+const TICK = 0.1;
 
 export class NpcAi {
   readonly world: AiWorld;
@@ -47,6 +57,7 @@ export class NpcAi {
   /** level navmesh: moves longer than 1.5 m follow it (else straight lines) */
   nav: NavMesh | null = null;
   private pending = new Set<Promise<unknown>>();
+  private started = 0;
 
   constructor(world: AiWorld, libs: Record<"male" | "female", AnimLibrary>) {
     this.world = world;
@@ -92,7 +103,7 @@ export class NpcAi {
     this.world.positions.set(npc.id, [...pos]);
     const task = this.world.startAreaBehaviour(npc.id, area, behaviour);
     if (!task) return false;
-    this.driven.set(npc.id, { task, state: { pos: [...pos], rot: [...rot], mode: "idle", clip: null, fragment: "", since: this.now }, done: false });
+    this.driven.set(npc.id, { task, state: { pos: [...pos], rot: [...rot], mode: "idle", clip: null, fragment: "", since: this.now }, done: false, due: this.now + ((this.started++ * 0.37) % 1) * TICK });
     return true;
   }
 
@@ -116,7 +127,7 @@ export class NpcAi {
     return [...this.driven.keys()];
   }
 
-  /** Advance the AI clock and every driven tree. */
+  /** Advance the AI clock, every walk, and the trees that are due (TICK). */
   tick(dt: number): void {
     this.now += dt;
     for (const d of this.driven.values()) {
@@ -134,7 +145,9 @@ export class NpcAi {
         if (seg > 0.05) st.rot = yawQuat(Math.atan2(b[1] - a[1], b[0] - a[0]) - Math.PI / 2);
         if (walked >= total) { st.mode = "idle"; if (st.endRot) st.rot = [...st.endRot]; }
       }
-      if (!d.done && d.task.tick() !== "running") d.done = true;
+      if (d.done || this.now < d.due) continue;
+      d.due = Math.max(d.due + TICK, this.now);
+      if (d.task.tick() !== "running") d.done = true;
     }
   }
 
