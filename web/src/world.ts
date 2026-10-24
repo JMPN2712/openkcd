@@ -109,6 +109,9 @@ export function trimWorldCaches(caches: WorldCaches, keep = 3): { models: number
 /** Group key for a character skin with its material override (.cdf parts): "skin|mtl". */
 const skinKey = (skin: string, mtl: string | null) => `${skin}|${mtl ?? ""}`;
 
+/** Ground meshes are merged per tile of this size (metres), see buildWorldScene. */
+const GROUND_TILE = 512;
+
 /** Group key of a batch of ground meshes (same source, priority, material) merged into one model. */
 const groundKey = (source: number, ids: number[]) => `ground${source}:${ids.join(",")}`;
 
@@ -228,12 +231,19 @@ export async function buildWorldScene(
     const name = terrain.brushNames[objects.brushName[i]];
     if (name && !HIDDEN_BRUSH.test(name) && (!opts.onlyBrushes || opts.onlyBrushes(name))) add(resolveLevelPath(name), "brush", m, m[12], m[13]);
   }
-  // ground meshes (roads, then decals), merged by (priority, material), lowest priority first so
-  // higher ones blend over them
+  // ground meshes (roads, then decals), merged by (priority, material, GROUND_TILE tile), lowest
+  // priority first so higher ones blend over them. Whole tiles (any part within the radius): a
+  // tile's batch is the same at every position, so its merged mesh is reused (model cache) and
+  // keeps its geometry; merged over the whole radius, every streaming step built and uploaded all
+  // of them again (the largest frame spikes while moving)
   for (const [s, src] of (opts.onlyBrushes ? [] : opts.ground ?? []).entries()) {
     const batches = new Map<string, number[]>();
-    for (const i of src.near(center, radius)) {
-      const k = `${String(src.priority(i)).padStart(5, "0")}/${src.material(i)}`;
+    for (const i of src.near(center, radius + GROUND_TILE * 1.5)) {
+      const c = src.center(i), tx = Math.floor(c[0] / GROUND_TILE), ty = Math.floor(c[1] / GROUND_TILE);
+      const dx = Math.max(tx * GROUND_TILE - center[0], 0, center[0] - (tx + 1) * GROUND_TILE);
+      const dy = Math.max(ty * GROUND_TILE - center[1], 0, center[1] - (ty + 1) * GROUND_TILE);
+      if (Math.hypot(dx, dy) > radius) continue;
+      const k = `${String(src.priority(i)).padStart(5, "0")}/${src.material(i)}/${tx},${ty}`;
       const b = batches.get(k);
       if (b) b.push(i); else batches.set(k, [i]);
     }

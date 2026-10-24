@@ -240,6 +240,15 @@ south-west from the market):
   renderer now indexes kept draws by texture too (`keptByTexture`). `profile-browser.ts --fly=120`
   (free-fly across the map) reproduced it within 10 s and runs clean now. The world view shows
   WebGPU errors and a lost device in its HUD (they were silent).
+- **Frame spikes while moving** (`profile-browser.ts --fly=40 --spikes`: free-fly at 60 m/s, a
+  streaming step every 3.5 s, frames over 25 ms and what ran in them): 129 → 74 long frames in
+  40 s, p99 32 → 26 ms. Roads and decals are merged per 512 m tile (whole tiles), so a tile's
+  merged mesh is the same at every step and keeps its geometry; merged over the whole radius,
+  every step rebuilt and uploaded all of them on the main thread (the worst spikes, up to 258 ms).
+  Road decoding and vertex encoding no longer allocate per vertex; `prepare` yields between
+  meshes, not only models. Headless steps: geometry 465 → 256 ms in slices of at most 4–8 ms,
+  rebuild 44–73 ms. Left in the long frames: the frame after a rebuild records every visible
+  item's bundles again, and small pak reads on the main thread.
 - **Startup:** the free-fly camera starts above Henry's spawn, so the first streamed scene is the
   market: in Chrome from `~/kcd1`, the market is complete after 64 s instead of 95–125 s.
 - Chrome at the market afterwards: 132 fps, main thread 6.7 ms (from 119 fps and 7.4 ms).
