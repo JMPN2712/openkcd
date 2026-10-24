@@ -236,8 +236,10 @@ playable frame rates on the Potato preset.
       21 (Potato: 8 instead of 12); the NPCs take another ~35 s from the paks.
 - [ ] Phase 3: characters and NPC clothing into the package (the NPCs are
       now the slowest part of loading), animations, audio.
-- [ ] Phases 3–4: characters, animations, audio; built straight from the
-      installer with no original files (part by part on low storage).
+- [ ] Phase 4: the package built straight from the GOG installer in one pass,
+      needing no original files. **Key requirement:** the low-storage,
+      part-by-part mode (convert one `.bin` slice at a time and delete it; the
+      installer's data is in slice order), for the Vega 7 laptop.
 - [ ] One streaming pass into a slim package in OPFS:
   - compressed textures (GPU formats), compressed meshes, and Opus audio;
   - region chunks plus an index.
