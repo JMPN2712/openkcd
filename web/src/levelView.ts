@@ -335,6 +335,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let npcKey = "";
   let npcBusy = false;
   let npcCheckedAt = -Infinity;
+  // NPCs (loading them, their behaviour trees, crowd and animation) wait until the first streamed
+  // scene is complete: running them meanwhile took about half the main thread while the market loaded
+  let worldLoading = true;
   let npcInfo = `NPCs: ${npcEntities.length} in level`;
   let minute = 10 * 60; // game time of day, minutes
   let simSeconds = 0; // simulation clock (real seconds at ×15)
@@ -405,7 +408,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         // forget what the last two positions' scenes (two builds each) didn't use
         trimWorldCaches(caches!, 4);
         sceneInfo = `${next.models.length} models, ${next.instances.toLocaleString()} instances within ${STREAM_RADIUS} m${next.modelsSkipped ? ` (loading ${next.modelsSkipped} more…)` : ""}`;
-        if (!next.modelsSkipped) break;
+        if (!next.modelsSkipped) { worldLoading = false; break; }
       }
     } catch (err) {
       sceneInfo = `objects: ${(err as Error).message}`;
@@ -516,11 +519,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     // (×15 = real time): legs keep pace with movement at every speed, and pausing freezes both
     const simDt = (dt * Number(speedSel.value)) / 15;
     simSeconds += simDt;
-    npcAi?.tick(simDt);
+    if (!worldLoading) npcAi?.tick(simDt);
     const hh = Math.floor(minute / 60), mm = Math.floor(minute % 60);
     clockLabel.textContent = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
     if (document.activeElement !== clockRange) clockRange.value = String(Math.floor(minute));
-    if (streamedAt && now - npcCheckedAt > 500) { npcCheckedAt = now; void updateNpcs(); }
+    if (streamedAt && !worldLoading && now - npcCheckedAt > 500) { npcCheckedAt = now; void updateNpcs(); }
     const target = ctx.getCurrentTexture();
     if (!depth || depth.width !== target.width || depth.height !== target.height) {
       depth?.destroy();
@@ -558,8 +561,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       selectLods(g.scene, cam.pos, vp, g.out, g.counts, { maxDistance: q.grass, fade: [q.grass * 0.67, q.grass] });
       g.counts.forEach((n, k) => grassR.setInstances(k, g.out[k], n));
     }
-    npcWorld.stepCrowd(npcs, minute, simDt);
-    animateNpcs(npcs, npcWorld, minute, simSeconds, npcR, cam.pos);
+    if (!worldLoading) {
+      npcWorld.stepCrowd(npcs, minute, simDt);
+      animateNpcs(npcs, npcWorld, minute, simSeconds, npcR, cam.pos);
+    }
     if (scene) {
       const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts, { lodScale: q.lodScale, distanceScale: q.distanceScale, indices: models.indexed });
       lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
@@ -604,7 +609,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     cpuAvg += (performance.now() - t0 - cpuAvg) * 0.05;
     const pc = player?.controller;
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
-    hud.textContent = `${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
+    hud.textContent = `${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();

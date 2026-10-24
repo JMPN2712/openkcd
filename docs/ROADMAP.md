@@ -3,12 +3,24 @@
 The milestones come in order. Every feature ships with a **Potato** preset,
 because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
 
-## Where things stand (2026-10-20)
+## Where things stand (2026-10-23)
 
-- **Milestone 2:** installing from the GOG installer into OPFS works,
-  including the repack without replaced files (default install 38.2 GiB).
-  Next: the slim format (GPU-compressed textures, compressed meshes, Opus
-  audio, region chunks).
+- **Milestone 2 is in progress, not done.** Installing from the GOG
+  installer into OPFS works, including the repack without replaced files
+  (default install 38.2 GiB). Now: the compact format, designed in
+  `docs/SLIM.md` (region chunks for load speed, full-resolution and Potato
+  packages, and finally a package built straight from the installer that
+  needs no original files). Milestone 3 (release) work is on hold until the
+  converter is finished.
+- **Performance and streaming (2026-10-23):** Chrome on High in the market
+  went from 43 fps to about 130; streaming steps no longer stall (2.6 s →
+  under 0.1 s, loading in slices of about 5 ms); the market loads in 53 s
+  instead of 74 (from `~/kcd1`). Measured in real Chrome with
+  `scripts/profile-browser.ts`; details in `docs/PERFORMANCE.md`.
+- **Fixed in the same session:** water on its fog plane (the Rattay tannery
+  had been flooded), the weir's water film, clothing layers poking through
+  outer garments (`docs/CHARACTERS.md`), a black screen after a while (a
+  stale texture in prepared draws).
 - **Visual pass on the walking simulator (done this session):** grass
   (merged-mesh sectors), roads, octree decals, `%DECAL` blending and vertex
   colours, far-tree impostors, water ripples, ambient light rebalanced,
@@ -221,6 +233,9 @@ playable frame rates on the Potato preset.
 - [ ] No game data is ever hosted or distributed by the project.
 
 ## 3. Public GitHub release
+
+On hold until the milestone 2 converter is finished. The repository is
+private (it had become public; set back to private on 2026-10-23).
 
 - [ ] Choose a license.
 - [x] Clean-room rebuilds of code first written with decompiler output in view: collision

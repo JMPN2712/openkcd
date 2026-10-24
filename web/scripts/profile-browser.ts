@@ -117,10 +117,10 @@ await waitFor("Henry", () => hud().then((s) => (/Henry \(/.test(s) ? s : undefin
 if (!process.argv.includes("--windowed")) await evaluate(`[...document.querySelectorAll("button")].find((b) => /Full window/.test(b.textContent))?.click()`);
 // until the models within the streaming radius have loaded, then `settle` more seconds (textures)
 const t0 = Date.now();
-// (ten quiet seconds in a row: the view streams the free-fly start first, then Henry's spawn)
+// (ten quiet seconds in a row: the scene complete and the NPCs assembled; they start once it is)
 let quiet = 0;
-await waitFor("the models", () => hud().then((s) => { quiet = /instances within/.test(s) && !/oading/.test(s) ? quiet + 1 : 0; return quiet >= 20 ? true : undefined; }), 900000);
-console.log(`models loaded in ${((Date.now() - t0) / 1000).toFixed(0)} s; settling ${settle} s…`);
+await waitFor("the models", () => hud().then((s) => { quiet = /instances within/.test(s) && !/oading|Assembling|start once/.test(s) ? quiet + 1 : 0; return quiet >= 20 ? true : undefined; }), 900000);
+console.log(`world and NPCs loaded in ${((Date.now() - t0) / 1000).toFixed(0)} s; settling ${settle} s…`);
 if (loadProfile) {
   const { profile: lp } = await page("Profiler.stop");
   type N = { id: number; callFrame: { functionName: string; url: string }; children?: number[] };
@@ -151,7 +151,7 @@ if (loadProfile) {
 }
 await sleep(settle * 1000);
 const readings: string[] = [];
-for (let k = 0; k < 3; k++) { readings.push((await hud()).replace(/ · .*?x /, " · x ").slice(0, 260)); await sleep(1000); }
+for (let k = 0; k < 3; k++) { readings.push((await hud()).replace(/ · .*?x /, " · x ").replace(/ · (terrain|textures)[^·]*/g, "").slice(0, 300)); await sleep(1000); }
 console.log(readings.join("\n"));
 
 const fly = Number(arg("fly", "0"));

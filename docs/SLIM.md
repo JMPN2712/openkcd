@@ -4,8 +4,16 @@ Status: proposal, 2026-10-23. Nothing here is built yet.
 
 ## Goal
 
-Loading speed first (decided with the player, 2026-10-23). Textures stay at full resolution, and
-cutscene videos are left out for now (added later, on demand).
+Loading speed first (decided with the player, 2026-10-23). Cutscene videos are left out for now
+(added later, on demand). Two package variants:
+
+- **Full:** textures at full resolution (what the install has; High loads up to 2048 px).
+- **Potato:** textures capped at the Potato preset's largest size (512 px), for the Vega 7
+  laptop. Everything else is the same.
+
+**The end goal** is a package that needs no original files at all (world, characters, animations,
+audio), built in the browser straight from the GOG offline installer in one streaming pass. See
+phase 4.
 
 **Measured today** (Chrome, High, market):
 
@@ -80,6 +88,20 @@ slim/
    Measured with `profile-browser.ts --load-profile`.
 3. **Then:** characters and NPC clothing, animations (`.caf`/`.dba`, 7.5 GiB), audio (Opus via
    WebCodecs, optional), cutscenes on demand.
+4. **Straight from the installer, no original files:**
+   - The converter reads the GOG offline installer in one streaming pass (`inno.ts`) and writes
+     the package directly, with no intermediate copy of the paks in OPFS.
+   - The package then holds everything the engine reads: the world, characters, animations,
+     audio, scripts and tables.
+   - **Pak entries are read in stream order** from their local headers (no central directory
+     needed); per-asset results are staged in OPFS and assembled into tiles at the end.
+   - **Low-storage, part-by-part mode:** the installer's layout allows it.
+     - Measured on the base game's 15 `.bin` slices: 6,095 of 6,098 file parts are stored in
+       slice order, almost every pak's data is contiguous (118 runs for 102 paks), and only 14 parts
+       cross into the next slice.
+     - So the pass can finish slice N while keeping only the part that runs into N+1, and the
+       player can download or keep one slice at a time and delete it once it has been read.
+     - The converter saves its position after each slice, so it resumes in a later session.
 
 ## Not decided yet
 
