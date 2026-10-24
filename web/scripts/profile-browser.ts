@@ -5,7 +5,7 @@
 // call crosses into the GPU process: this measures what a player gets.
 // Driven over the DevTools protocol (Node's built-in WebSocket); no npm deps.
 // usage: node scripts/profile-browser.ts [--root=GAME_ROOT] [--preset=high] [--settle=30]
-//          [--seconds=8] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080]
+//          [--seconds=8] [--windowed] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080]
 //   CHROME=… picks the browser binary, CHROME_FLAGS=… adds flags; --probe stops after naming the
 //   WebGPU adapter; --trace also records a Chrome trace over the same seconds and prints how busy
 //   each thread was (the renderer's main thread, the GPU process's main thread, …). Prints the HUD and the hottest functions (self and total).
@@ -104,6 +104,8 @@ console.log(status);
 await evaluate(`document.getElementById("world").click()`);
 const hud = () => evaluate<string>(`document.querySelector(".level-hud")?.textContent ?? ""`);
 await waitFor("Henry", () => hud().then((s) => (/Henry \(/.test(s) ? s : undefined)), 180000);
+// the view fills the window, as a player has it (--windowed: the page's own small canvas)
+if (!process.argv.includes("--windowed")) await evaluate(`[...document.querySelectorAll("button")].find((b) => /Full window/.test(b.textContent))?.click()`);
 // until the models within the streaming radius have loaded, then `settle` more seconds (textures)
 const t0 = Date.now();
 // (ten quiet seconds in a row: the view streams the free-fly start first, then Henry's spawn)

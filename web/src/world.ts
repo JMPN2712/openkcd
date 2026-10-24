@@ -380,6 +380,14 @@ export function lodItems(scene: WorldScene): { model: LoadedModel; capacity: num
   return scene.models.flatMap((m) => m.lods.map((model) => ({ model, capacity: m.count })));
 }
 
+/** Every instance's matrix, model after model: what selectLods' indices point into. */
+export function sceneMatrices(scene: WorldScene): Float32Array {
+  const out = new Float32Array(scene.models.reduce((n, m) => n + m.count, 0) * 16);
+  let at = 0;
+  for (const m of scene.models) { out.set(m.matrices.subarray(0, m.count * 16), at); at += m.count * 16; }
+  return out;
+}
+
 export interface LodStats {
   drawn: number;
   culledDistance: number;
@@ -401,10 +409,12 @@ export function selectLods(
   scene: WorldScene,
   eye: [number, number, number],
   viewProj: Float32Array,
-  out: Float32Array[],
+  out: (Float32Array | Uint32Array)[],
   counts: number[],
   opts: {
     lodScale?: number; distanceScale?: number; maxDistance?: number; minRadius?: number; uberNear?: number;
+    /** out holds instance indices into sceneMatrices(scene) (Uint32Array), not matrices (no fade) */
+    indices?: boolean;
     /** shrink instances into the ground between these distances (grass: no hard edge where it ends) */
     fade?: [number, number];
   } = {},
@@ -423,7 +433,8 @@ export function selectLods(
   const P = new Float64Array(24);
   planes.forEach((p, k) => P.set(p, k * 4));
   const ex = eye[0], ey = eye[1], ez = eye[2];
-  let item = 0;
+  let item = 0, first = 0;
+  const indices = !!opts.indices && !fade;
   for (const wm of scene.models) {
     const base = item;
     for (let l = 0; l < wm.lods.length; l++) counts[base + l] = 0;
@@ -454,6 +465,12 @@ export function selectLods(
         if (!inside) { stats.culledFrustum++; continue; }
         const lod = Math.min(nl, Math.floor(Math.max(0, d - r) / ((8 * r + 10) * lodScale)));
         const dst = base + lod;
+        if (indices) {
+          out[dst][counts[dst]++] = first + i;
+          stats.perLod[lod] = (stats.perLod[lod] ?? 0) + 1;
+          stats.drawn++;
+          continue;
+        }
         // copy the 16 floats by hand (a subarray per instance kept the garbage collector busy)
         const o = out[dst], to = counts[dst] * 16, from = i * 16;
         for (let c = 0; c < 16; c++) o[to + c] = M[from + c];
@@ -468,6 +485,7 @@ export function selectLods(
       }
     }
     item += wm.lods.length;
+    first += wm.count;
   }
   return stats;
 }

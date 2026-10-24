@@ -19,7 +19,7 @@ import { ModelRenderer } from "./renderer.ts";
 import { TexturePool } from "./texturePool.ts";
 import { ReadWorkers } from "./readWorkers.ts";
 import { WaterRenderer } from "./waterRenderer.ts";
-import { buildGrassScene, buildWorldScene, isUberLod, lodItems, newWorldCaches, selectLods, trimWorldCaches, type WorldScene } from "./world.ts";
+import { buildGrassScene, buildWorldScene, isUberLod, lodItems, newWorldCaches, sceneMatrices, selectLods, trimWorldCaches, type WorldScene } from "./world.ts";
 import { Vfs } from "./vfs.ts";
 import { parseNpcEntities, parseEntityIndex, propEntities, type EntityInfo, type NpcEntity } from "./levelEntities.ts";
 import { Schedules } from "./schedule.ts";
@@ -233,7 +233,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   void loadDetailLayers(vfs, surfaceTypes, q.terrainDetail).then((d) => { if (!stopped) renderer.setDetail(d); }).catch((err) => console.warn("terrain detail:", err));
   // textures shared by the object, grass, NPC and player renderers, sharper for what is near
   const pool = new TexturePool(device, vfs, { budget: q.textures.budgetMiB * 2 ** 20, maxDim: q.textures.maxDim });
-  const models = new ModelRenderer(device, format, passSetup.sampleCount, { ...passSetup, pool });
+  // (instance indices: the scene's matrices go up once per streaming step, see ModelRenderer.indexed)
+  const models = new ModelRenderer(device, format, passSetup.sampleCount, { ...passSetup, pool, instanceIndices: true });
   // grass and ground plants (merged-mesh sectors): a small scene of their own around the camera,
   // rebuilt every few metres, with sharper textures than other objects (thin blades in atlases)
   const grassR = new ModelRenderer(device, format, passSetup.sampleCount, { ...passSetup, pool });
@@ -355,7 +356,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let streaming = false;
   let sceneInfo = "objects: loading…";
   let scene: WorldScene | null = null;
-  let lodOut: Float32Array[] = [];
+  let lodOut: (Float32Array | Uint32Array)[] = [];
   let lodCounts: number[] = [];
   let lodInfo = "";
   const stream = async () => {
@@ -375,11 +376,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         });
         if (stopped) return;
         const items = lodItems(next);
-        models.setModels(items);
+        models.setModels(items, models.indexed ? sceneMatrices(next) : undefined);
         models.setShadow(shadowMap);
-        if (shadowMap) casters.setScene(next, items.map((it) => it.capacity), shadowMap.cascades);
+        if (shadowMap) casters.setScene(next, items.map((it) => it.capacity), shadowMap.cascades, models.indexed);
         surroundings.setScene(next);
-        lodOut = items.map((it) => new Float32Array(it.capacity * 16));
+        lodOut = items.map((it) => (models.indexed ? new Uint32Array(it.capacity) : new Float32Array(it.capacity * 16)));
         lodCounts = items.map(() => 0);
         scene = next;
         streamedAt = at;
@@ -541,7 +542,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     npcWorld.stepCrowd(npcs, minute, simDt);
     animateNpcs(npcs, npcWorld, minute, simSeconds, npcR, cam.pos);
     if (scene) {
-      const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts, { lodScale: q.lodScale, distanceScale: q.distanceScale });
+      const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts, { lodScale: q.lodScale, distanceScale: q.distanceScale, indices: models.indexed });
       lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
       lodInfo = ` · drawing ${st.drawn.toLocaleString()} (LOD ${st.perLod.map((n) => n ?? 0).join("/")}), culled ${st.culledDistance.toLocaleString()} by distance, ${st.culledFrustum.toLocaleString()} off-screen`;
     }

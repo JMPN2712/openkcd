@@ -13,7 +13,7 @@ import { FOV_Y, TerrainRenderer, type FlyCamera } from "../src/terrainRenderer.t
 import { TexturePool } from "../src/texturePool.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 import { WaterRenderer } from "../src/waterRenderer.ts";
-import { buildGrassScene, buildWorldScene, isUberLod, lodItems, newWorldCaches, selectLods, type WorldScene } from "../src/world.ts";
+import { buildGrassScene, buildWorldScene, isUberLod, lodItems, newWorldCaches, sceneMatrices, selectLods, type WorldScene } from "../src/world.ts";
 import { PlayerAvatar } from "../src/playerAvatar.ts";
 import { PlayerSession } from "../src/playerSession.ts";
 import { type MoveInput } from "../src/player.ts";
@@ -66,7 +66,7 @@ const passSetup: PassSetup = { sampleCount: 4, reversedZ: true };
 const detail = args.includes("--no-detail") ? undefined : await loadDetailLayers(lvl.vfs, lvl.surfaceTypes, 512);
 if (detail) console.log(`terrain detail: ${detail.layers.length} layers (${detail.names.map((n) => n.split("/").pop()).join(", ")})`);
 const terrainR = new TerrainRenderer(device, format, lvl.terrain, lvl.cover, passSetup, detail);
-const models = new ModelRenderer(device, format, 4, { ...passSetup, pool });
+const models = new ModelRenderer(device, format, 4, { ...passSetup, pool, instanceIndices: !process.env.MATRICES });
 const shadowMap = args.includes("--no-shadows") ? null : new ShadowMap(device, 2048, 2, [20, 120]);
 const casters = new ShadowCasters();
 const water = new WaterRenderer(device, format, lvl.objects.water, passSetup);
@@ -82,10 +82,10 @@ const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, [ax, ay],
 // debug: HIDE=regex leaves matching models out (e.g. HIDE='^road:|road_side')
 if (process.env.HIDE) scene.models = scene.models.filter((m) => !new RegExp(process.env.HIDE!).test(m.path));
 const items = lodItems(scene);
-models.setModels(items);
+models.setModels(items, models.indexed ? sceneMatrices(scene) : undefined);
 models.setShadow(shadowMap);
-if (shadowMap) casters.setScene(scene, items.map((it) => it.capacity), shadowMap.cascades);
-const lodOut = items.map((it) => new Float32Array(it.capacity * 16));
+if (shadowMap) casters.setScene(scene, items.map((it) => it.capacity), shadowMap.cascades, models.indexed);
+const lodOut = items.map((it) => (models.indexed ? new Uint32Array(it.capacity) : new Float32Array(it.capacity * 16)));
 const lodCounts = items.map(() => 0);
 console.log(`world: ${scene.models.length} models, ${scene.instances} instances within ${radius} m (${((performance.now() - t0) / 1000).toFixed(1)} s)`);
 
@@ -180,7 +180,7 @@ async function render(name: string): Promise<void> {
   const g = heightAt(lvl.terrain, cam.pos[0], cam.pos[1]);
   if (session.viewMode === "third" && cam.pos[2] < g + 0.3) cam.pos[2] = g + 0.3;
   const vp = TerrainRenderer.viewProj(cam, W / H, { reversed: true, near: session.viewMode === "first" ? 0.01 : 0.1 });
-  const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts);
+  const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts, { indices: models.indexed });
   lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
   await updateGrass([cam.pos[0], cam.pos[1]]);
   if (grass) {

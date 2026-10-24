@@ -184,6 +184,8 @@ Both threads were saturated: the page's main thread at 99%, the GPU process's at
 | Shadow views merge each mesh's opaque sub-meshes; the far cascade every 4th frame | 73 | 11.8 ms |
 | One uniform buffer per renderer instead of one per draw | 88 | 9.9 ms |
 | Mesh vertices and indices packed into shared 128 MiB buffers | 96 | 8.8 ms |
+| Full window (1920×1080; the rows above used the page's 740×416 canvas) | 105 | 8.5 ms |
+| World instances as 4-byte indices into matrices uploaded once per streaming step | 119 | 7.4 ms |
 
 - **The GPU process's cost was the number of buffers, not draws.** Halving the shadow draws barely
   moved it; `Queue::Submit` stayed at 55% of its time. Chrome's WebGPU checks every buffer a pass
@@ -194,8 +196,15 @@ Both threads were saturated: the page's main thread at 99%, the GPU process's at
   of 500-odd parts uploaded its own palette every frame.
 - **Shadow draws** on High in the market: near cascade 901 → 412 world draws, far 2,535 → 1,392,
   NPCs 777 → 643 per cascade (`bench-presets.ts` prints the draws per view).
-- **Left (8.8 ms):** `selectLods` 19%, `flush` 10% (instance packing), animation (`evaluateLayers`,
-  `palette`) 14%, collision `ground` 5%. The GPU process is 87% busy.
+- **Instance indices** (`ModelRenderer` with `instanceIndices`, the world renderer only):
+  `selectLods` writes one index per visible instance instead of copying its 16 floats, and the
+  vertex shader (`vsIndexed`) reads the matrix from a storage buffer. Grass (its fade scales the
+  matrices), NPCs, Henry and the far field keep per-frame matrices. `MATRICES=1` turns it off in
+  `bench-presets.ts` and `render-player.ts`.
+- **Left (7.4 ms):** `selectLods` 19%, `flush` 12%, animation (`evaluateLayers`, `palette`) 13%,
+  collision `ground` 6%. The GPU process is 92% busy.
+- **The player's own Chrome** measured 75 fps with 8–9 ms of main thread after the buffer
+  changes, while headless at 1920×1080 measured 105: a display refresh cap or a larger window.
 - **Startup:** the view streams the free-fly start (2192, 1050) completely before Henry's spawn,
   about 100 s before the market is complete (headless, from `~/kcd1`).
 - **Streaming hitch:** each streaming step rebuilds every model's GPU data (`setModels`, about
