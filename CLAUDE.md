@@ -39,11 +39,10 @@ affiliated with or endorsed by Warhorse Studios or PLAION. Local folder is
 ## Distribution model
 
 - **Primary input:** the GOG offline installer (setup `.exe` + `.bin`). It is
-  converted in the browser, in one streaming pass, into a slim web package in
-  OPFS:
+  converted in the browser into a slim web package in OPFS:
   - compressed textures and meshes;
-  - Opus audio;
-  - region chunks plus an index.
+  - region chunks plus an index;
+  - a file store of everything else (Opus audio later).
 
   The original installer can then be deleted.
 - **Today:** two install modes from the installer. The paks can be copied
@@ -59,11 +58,12 @@ affiliated with or endorsed by Warhorse Studios or PLAION. Local folder is
 See `docs/ROADMAP.md`. In order:
 
 1. Walking simulator. Done (follow-ups listed in the roadmap).
-2. Installer converter and slim format. **In progress, not done:** the
-   compact package is built from the installer and runs the engine alone
-   (`docs/SLIM.md`, phases 1–4). The open items are in the roadmap.
-   Milestone 3 work waits until the converter is finished.
-3. Public GitHub release.
+2. Installer converter and slim format. Done (2026-10-24): the compact
+   package is built from the installer, in place or part by part, and runs
+   the engine alone (`docs/SLIM.md`). Later items are in the roadmap.
+3. Public GitHub release. **In progress:** GPL-3.0-only; the audit's
+   history findings wait on the user. Ask before rewriting history; the
+   user makes the repository public.
 4. Living world (NPC routines; partly done).
 5. Diet planning.
 6. Core gameplay.

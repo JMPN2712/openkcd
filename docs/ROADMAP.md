@@ -5,15 +5,23 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
 
 ## Where things stand (2026-10-24)
 
-- **Milestone 2: the converter is finished; what is left is size work and
-  checks on other hardware.** The compact package (`docs/SLIM.md`) is built
-  in the browser straight from the GOG installer, in place (576 s) or part
-  by part (473 s, two slices at a time), and the engine runs from it alone:
-  Potato 12.8 GiB, Full about 21 GiB, against 38.2 GiB for the repacked
-  install. Still open under milestone 2: the Vega 7 laptop, Opus audio and
-  converted animations, cutscene videos. Whether the milestone closes
-  before those (they are size savings, the package works without them) is
-  the user's call.
+- **Milestone 2 is done.** The compact package (`docs/SLIM.md`) is built in
+  the browser straight from the GOG installer, in place or part by part, and
+  the engine runs from it alone. Part by part (two slices at a time) now
+  peaks at 16.1 GiB of browser storage for Potato (was 37.2) and 29.5 GiB for
+  Full; the packages end at 12.76 GiB (Potato) and 21.41 GiB (Full).
+  Cutscene videos are left out and can be added later. Opus audio, converted
+  animations and video transcoding moved to "Later" under milestone 2.
+- **Milestone 3 (release) prep has started:** GPL-3.0-only license added; the
+  clean-room and history audit's first pass is done, with history findings
+  waiting on the user's decision (milestone 3 below). The user makes the
+  repository public.
+- **Fixed: furniture turned and moved in houses** (the user's "objects
+  completely misarranged" report). A model's main root node transform is
+  left out now (`docs/LEVELS.md`); beds had lain 90° across their bedding.
+  `scripts/test-interiors.ts` guards it.
+- **Not yet checked in the user's Chrome:** everything since the installer
+  commit was verified headless only. Ask the user to walk around and report.
 - **Performance and streaming (2026-10-23):** Chrome on High in the market
   went from 43 fps to about 130; streaming steps no longer stall (2.6 s →
   under 0.1 s, loading in slices of about 5 ms); the market loads in 53 s
@@ -32,12 +40,6 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
 - **NPC fixes:** NPCs stand on collision surfaces (not navmesh heights), the
   walk cycle follows the distance walked, hoods draw one state (down). See
   `docs/GAMELOGIC.md` and `docs/CHARACTERS.md`.
-- **Open, reported by the user:** "objects completely misarranged" somewhere
-  in the world. Not found: `.cga` parts, prop rotations, editor layers and
-  parented entities were checked. Ask the user for the x / y from the HUD.
-- **Not yet checked in the user's Chrome:** everything since the installer
-  commit was verified headless only (`scripts/render-player.ts`,
-  `bench-presets.ts`, the tests). Ask the user to walk around and report.
 - **Water (2026-10-23, done):** wave maps from the volumes' materials,
   flowing downhill; see-through shallows, soft banks and foam from the scene
   depth (blended surfaces now draw in a second, depth-read-only pass). See
@@ -205,9 +207,9 @@ playable frame rates on the Potato preset.
         then haze, then sky; sun glitter.
   - [ ] Flowing (scrolling) waterfalls, foam, depth fade at the banks.
 
-## 2. Installer converter and slim format (current)
+## 2. Installer converter and slim format (done, 2026-10-24)
 
-- [ ] Read the GOG offline installer (setup `.exe` + `.bin` files) in the
+- [x] Read the GOG offline installer (setup `.exe` + `.bin` files) in the
       browser.
   - [x] Installer reader (`inno.ts`, `docs/INSTALLER.md`): setup headers
         (LZMA), GOG's 10 MiB zlib file parts, slices and installers that keep
@@ -226,7 +228,8 @@ playable frame rates on the Potato preset.
   - [x] Repack without the files later patches replace (`repack.ts`):
         14.2 GiB of the default 52.5 GiB, in 48 paks. Checked by
         `scripts/test-repack.ts`.
-  - [ ] Cutscene videos (about 15 GiB) installed on demand, or transcoded.
+  - [x] Cutscene videos (about 15 GiB) left out by default, installable on
+        demand into the compact package's store (transcoding: later).
 - [x] Compact package, phase 1 (`docs/SLIM.md`): Node converter and reader for
       Rataje's world in 256 m region chunks; full (5.28 GiB) and Potato (3.68
       GiB) packages; the cold scene build at the market 4.83 → 2.36 s headless.
@@ -247,32 +250,54 @@ playable frame rates on the Potato preset.
       low-storage mode): installs what the slices present hold, names the
       next slice, lists the ones done with (safe to delete), resumes; then
       builds from that copy and deletes it pak by pak.
-- [ ] Still open in milestone 2:
-  - [x] The part-by-part path run to the end in Chrome (2026-10-24): 473 s,
-        two slices at a time, peak 37.2 GiB, 12.76 GiB at the end; an
-        interrupted store step carries on without the deleted slices.
-  - [ ] Try it on the Vega 7 laptop (memory: the in-place build keeps up to
-        640 MiB of inflated parts).
-  - [ ] Opus audio and converted animations (sizes; they work as they are).
-  - [ ] Cutscene videos, on demand or transcoded.
-  - [x] Cancel during the build step.
+- [x] Part by part run to the end in Chrome, interrupted and resumed, Cancel
+      through the whole build.
+- [x] Low-storage peak (2026-10-24): each pak staged without the files a
+      higher-ranked pak already seen replaces and (Potato) mips above 512 px,
+      kept by size only; slices asked for last to first so the patches come
+      first. Chrome, part by part: Potato peak 16.1 GiB (was 37.2), 12.76 GiB
+      at the end; Full 29.5 GiB, 21.41 GiB at the end. Checked against the
+      whole game by `scripts/test-part-compact.ts`.
+- [ ] Try it on the Vega 7 laptop (memory: the in-place build keeps up to
+      640 MiB of inflated parts). Needs the user.
 - [x] Afterwards the original install or installer can be deleted.
 - [x] Installed-folder mode stays as an alternative.
-- [ ] No game data is ever hosted or distributed by the project.
+- [x] No game data is ever hosted or distributed by the project.
 
-## 3. Public GitHub release
+### Later (after the release)
 
-On hold until the milestone 2 converter is finished. The repository is
-private (it had become public; set back to private on 2026-10-23).
+- [ ] Opus audio (the store keeps Wwise/ogg as they are; a size saving).
+- [ ] Converted animations (2.6 GiB of `.caf`/`.dba` in the store).
+- [ ] Cutscene videos transcoded to a format browsers play (`.usm` today).
 
-- [ ] Choose a license.
+## 3. Public GitHub release (in progress)
+
+The repository is private (it had become public; set back to private on
+2026-10-23). The user makes it public.
+
+- [x] Choose a license: GPL-3.0-only (`LICENSE`; dependencies are MIT,
+      BSD-3-Clause and Apache-2.0).
 - [x] Clean-room rebuilds of code first written with decompiler output in view: collision
       avoidance (`crowd.ts`) and the navmesh decoder (`navmesh.ts`, `tools/navmesh.py`), now
       written from research notes (2026-10-19).
 - [ ] Final clean-room and history audit (no game data, no decompiled code,
-      no branding).
-- [ ] Make the `openkcd` repo public, with build and run docs and a
-      compatibility list.
+      no branding). First pass done (2026-10-24):
+  - [x] No game files, assets, renders or large binaries anywhere in the
+        history (728 blobs, largest 80 KB of source; no path was ever
+        deleted); the only images are the original app icon.
+  - [x] No decompiler output in any version of any file (Ghidra/IDA names,
+        addresses), apart from the rules that forbid it; no secrets.
+  - [x] No long excerpts of the game's scripts or data in docs or code.
+  - [ ] **History, waiting on the user's decision:** early versions of two
+        files from before the clean-room process, one commit message, and
+        whether the GitHub repository is recreated before going public.
+  - [ ] Current tree, the user's call: personal paths (`.claude/settings.json`)
+        and hardware notes (`CLAUDE.md`); `docs/GAMELOGIC.md` and
+        `tools/rtti_survey.py` list RTTI class counts and namespace names read
+        from `WHGame.dll` (strings, not code); the commit author's e-mail
+        address becomes public with the history.
+- [ ] Make the `openkcd` repo public (the user), with build and run docs and
+      a compatibility list.
 
 ## 4. Living world (partly done)
 
