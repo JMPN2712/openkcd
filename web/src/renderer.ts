@@ -495,6 +495,12 @@ export class ModelRenderer {
    * builds the new models' draws. gen: the last setModels that used them.
    */
   private modelDraws = new Map<LoadedModel, { draws: DrawItem[]; gen: number }>();
+  /**
+   * Kept draws by pooled texture, whether or not they are in the current set: a texture the pool
+   * replaces must be rebound in draws prepare() built ahead of the next setModels too (they kept
+   * the destroyed texture, and every frame failed: a black screen after a while).
+   */
+  private keptByTexture = new Map<PooledTexture, Set<DrawItem>>();
   private generation = 0;
   private uniformSlots: UniformSlots;
   private instMatsCpu = new Float32Array(16);
@@ -628,6 +634,21 @@ export class ModelRenderer {
     for (const e of d.pooled) if (e) { const l = this.drawsByTexture.get(e); if (l) l.push(d); else this.drawsByTexture.set(e, [d]); }
   }
 
+  /** Mark a draw as kept (modelDraws) and index it by its pooled textures. */
+  private keep(d: DrawItem): void {
+    d.cached = true;
+    for (const e of d.pooled) if (e) (this.keptByTexture.get(e) ?? this.keptByTexture.set(e, new Set()).get(e)!).add(d);
+  }
+
+  private unkeep(d: DrawItem): void {
+    for (const e of d.pooled) {
+      const l = e && this.keptByTexture.get(e);
+      if (!l) continue;
+      l.delete(d);
+      if (!l.size) this.keptByTexture.delete(e!);
+    }
+  }
+
   private releaseDraw(d: DrawItem): void {
     if (this.pool) for (const e of d.pooled) if (e) this.pool.release(e);
   }
@@ -740,7 +761,7 @@ export class ModelRenderer {
             this.device.queue.writeBuffer(r.buf, r.at, u);
             return r;
           });
-          if (d) { d.cached = true; draws.push(d); }
+          if (d) { this.keep(d); draws.push(d); }
         }
       }
       // (gen: the current set's, so a setModels that leaves the model out gives them back)
@@ -1003,7 +1024,7 @@ export class ModelRenderer {
           });
           if (!d) continue;
           if (cacheable[itemIndex]) {
-            d.cached = true;
+            this.keep(d);
             const t = this.modelDraws.get(model) ?? this.modelDraws.set(model, { draws: [], gen }).get(model)!;
             t.draws.push(d);
           } else this.addDraw(d, itemIndex, instBufs[itemIndex]);
@@ -1019,7 +1040,7 @@ export class ModelRenderer {
     // models no longer drawn give back their textures and uniform slots
     for (const [model, t] of this.modelDraws) {
       if (t.gen === gen) continue;
-      for (const d of t.draws) { this.releaseDraw(d); this.uniformSlots.free({ buf: d.ubuf, at: d.uoff }); }
+      for (const d of t.draws) { this.unkeep(d); this.releaseDraw(d); this.uniformSlots.free({ buf: d.ubuf, at: d.uoff }); }
       this.modelDraws.delete(model);
     }
     if (this.uniformBuf) this.device.queue.writeBuffer(this.uniformBuf, 0, this.uniformCpu);
@@ -1397,7 +1418,9 @@ export class ModelRenderer {
   private texturesChanged(changed: Set<PooledTexture>): void {
     const items = new Set<number>();
     for (const e of changed) {
-      for (const d of this.drawsByTexture.get(e) ?? []) {
+      // the current set's draws, and kept draws not drawn yet (built by prepare)
+      const draws = new Set([...(this.drawsByTexture.get(e) ?? []), ...(this.keptByTexture.get(e) ?? [])]);
+      for (const d of draws) {
         const [dt, st, nt] = d.pooled;
         d.bind = this.device.createBindGroup({
           layout: this.drawLayout,
@@ -1410,7 +1433,7 @@ export class ModelRenderer {
             { binding: 5, resource: nt ? nt.view : this.flatNormal.createView() },
           ],
         });
-        items.add(d.item);
+        if (d.item >= 0) items.add(d.item);
       }
     }
     for (const v of this.views) for (const k of items) { v.bundles[k] = null; v.blendBundles[k] = null; v.groundBundles[k] = null; }
@@ -1507,6 +1530,7 @@ export class ModelRenderer {
     this.clear();
     for (const t of this.modelDraws.values()) for (const d of t.draws) this.releaseDraw(d);
     this.modelDraws.clear();
+    this.keptByTexture.clear();
     this.uniformSlots.destroy();
     this.vertexStore.destroy();
     this.indexStore.destroy();

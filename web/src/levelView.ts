@@ -163,6 +163,21 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     return;
   }
 
+  // WebGPU failures were silent (a black view): the first errors go to the console and the HUD
+  let gpuProblem = "";
+  let gpuErrors = 0;
+  const gpuDevice = device;
+  const onGpuError = (e: Event) => {
+    const msg = (e as GPUUncapturedErrorEvent).error.message;
+    if (gpuErrors++ < 5) console.error("WebGPU:", msg);
+    if (!gpuProblem) gpuProblem = `GPU error: ${msg.split("\n")[0]}`;
+  };
+  gpuDevice.addEventListener("uncapturederror", onGpuError);
+  void gpuDevice.lost.then((info) => {
+    console.error("WebGPU device lost:", info.reason, info.message);
+    gpuProblem = `GPU device lost (${info.reason}): ${info.message}`;
+  });
+
   const presetName = savedPreset();
   const q = PRESETS[presetName];
   const STREAM_RADIUS = q.streamRadius; // metres of objects around the camera
@@ -589,13 +604,14 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     cpuAvg += (performance.now() - t0 - cpuAvg) * 0.05;
     const pc = player?.controller;
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
-    hud.textContent = `${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
+    hud.textContent = `${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();
 
   stopActive = () => {
     stopped = true;
+    gpuDevice.removeEventListener("uncapturederror", onGpuError);
     cancelAnimationFrame(raf);
     models.destroy();
     grassR.destroy();
