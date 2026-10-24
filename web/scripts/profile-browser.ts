@@ -95,7 +95,12 @@ await waitFor("the page", () => evaluate<boolean>(`document.readyState === "comp
 await evaluate(`localStorage.setItem("openkcd.quality", ${JSON.stringify(preset)})`);
 const adapter = await evaluate<string>(`navigator.gpu ? navigator.gpu.requestAdapter().then((a) => a ? a.info.vendor + " " + a.info.architecture + " " + a.info.description : "no adapter") : "no WebGPU"`);
 console.log(`WebGPU adapter: ${adapter}`);
-if (process.argv.includes("--probe")) process.exit(0);
+if (process.argv.includes("--probe")) {
+  // what the browser can inflate natively (the compact package's codec choice)
+  const formats = await evaluate<string[]>(`["gzip", "deflate", "deflate-raw", "brotli", "zstd"].filter((f) => { try { new DecompressionStream(f); return true; } catch { return false; } })`);
+  console.log(`DecompressionStream: ${formats.join(", ")}`);
+  process.exit(0);
+}
 
 // hand the game folder to the input, as picking it would (Chrome fires "change" itself)
 const { root: doc } = await page("DOM.getDocument");

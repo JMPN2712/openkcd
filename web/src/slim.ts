@@ -12,10 +12,11 @@
 // value are written to the binary part and come back as views into the bytes read, without
 // copying. Entries start at multiples of 8 in their file, so the views are aligned.
 
+import { MeshoptDecoder } from "meshoptimizer/decoder";
 import { textureFile } from "./mtl.ts";
 import { withTextures, type LoadedModel, type LoadOptions, type MipChain, type ModelParts, type TextureLoader } from "./model.ts";
 
-export const SLIM_VERSION = 1;
+export const SLIM_VERSION = 2;
 /** Region chunk size (metres): chosen by measuring the reads per area, docs/SLIM.md. */
 export const TILE = 256;
 /** Texture levels up to this size are stored with the texture in its tile; larger ones in the tile's pack. */
@@ -23,8 +24,8 @@ export const INLINE_MAX = 256;
 /** Models whose instances fall in more tiles than this go in the common chunk, read once. */
 export const COMMON_TILES = 6;
 
-/** A byte range: file, offset, length. */
-export interface SlimRef { f: string; o: number; n: number }
+/** A byte range: file, offset, length; `z`: the entry is deflated, and this is its size inflated. */
+export interface SlimRef { f: string; o: number; n: number; z?: number }
 
 export interface SlimIndex {
   version: number;
@@ -101,8 +102,48 @@ export function decodeEntry<T>(bytes: Uint8Array, copy = false): T {
       return at % size === 0 && !copy ? new T(bytes.buffer as ArrayBuffer, at, v.n) : new T(bytes.buffer.slice(at, at + v.n * size) as ArrayBuffer, 0, v.n);
     }
     if (v && typeof v === "object" && "$m" in v) return new Map(v.$m);
+    // a meshoptimizer-encoded vertex stream or index buffer (slimWrite.ts)
+    if (v && typeof v === "object" && "$mo" in v) {
+      const T = ARRAYS[v.t];
+      const out = new T(new ArrayBuffer(v.n * (T as unknown as { BYTES_PER_ELEMENT: number }).BYTES_PER_ELEMENT), 0, v.n);
+      const target = new Uint8Array(out.buffer);
+      if (v.$mo === "v") MeshoptDecoder.decodeVertexBuffer(target, v.count, v.size, v.data);
+      else MeshoptDecoder.decodeIndexBuffer(target, v.count, v.size, v.data);
+      return out;
+    }
     return v;
   }) as T;
+}
+
+/** A deflated entry's bytes, inflated (`size`: their size inflated). */
+export async function inflate(bytes: Uint8Array, size: number): Promise<Uint8Array> {
+  const ds = new DecompressionStream("deflate-raw");
+  const writer = ds.writable.getWriter();
+  writer.write(bytes as Uint8Array<ArrayBuffer>).catch(() => {});
+  writer.close().catch(() => {});
+  const reader = ds.readable.getReader();
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    out.set(value.subarray(0, Math.min(value.byteLength, size - at)), at);
+    at += value.byteLength;
+  }
+  if (at !== size) throw new Error(`entry inflates to ${at} bytes, not ${size}`);
+  return out;
+}
+
+/** Time spent inflating and decoding entries (SlimPackage.stats). */
+const timing = { inflateMs: 0, decodeMs: 0 };
+
+/** An entry's value from its stored bytes (inflated first when `ref.z`, by `files.inflate` when it has one). */
+async function decodeStored<T>(bytes: Uint8Array, ref: SlimRef, copy: boolean, files: SlimFiles): Promise<T> {
+  let t = performance.now();
+  if (ref.z) { bytes = await (files.inflate ?? inflate)(bytes, ref.z); timing.inflateMs += performance.now() - t; t = performance.now(); }
+  const v = decodeEntry<T>(bytes, copy && !ref.z);
+  timing.decodeMs += performance.now() - t;
+  return v;
 }
 
 // ---------------------------------------------------------------- reading a package
@@ -111,6 +152,8 @@ export function decodeEntry<T>(bytes: Uint8Array, copy = false): T {
 export interface SlimFiles {
   read(file: string, at: number, size: number): Promise<Uint8Array>;
   text(file: string): Promise<string>;
+  /** inflate a deflated entry (`size` once inflated): zlib in Node, the read workers in the browser; default: DecompressionStream here */
+  inflate?(bytes: Uint8Array, size: number): Promise<Uint8Array>;
 }
 
 export const tileKey = (x: number, y: number) => `${Math.floor(x / TILE)}_${Math.floor(y / TILE)}`;
@@ -131,7 +174,7 @@ export function textureKeys(materials: ModelParts["materials"]): string[] {
 export class SlimPackage {
   readonly index: SlimIndex;
   private files: SlimFiles;
-  readonly stats = { chunkReads: 0, chunkBytes: 0, singleReads: 0, singleBytes: 0, singleModels: 0, packReads: 0, packBytes: 0 };
+  readonly stats = { chunkReads: 0, chunkBytes: 0, singleReads: 0, singleBytes: 0, singleModels: 0, packReads: 0, packBytes: 0, inflateMs: 0, decodeMs: 0, prefetchMs: 0 };
 
   private constructor(files: SlimFiles, index: SlimIndex) {
     this.files = files;
@@ -141,6 +184,7 @@ export class SlimPackage {
   static async open(files: SlimFiles): Promise<SlimPackage> {
     const index = JSON.parse(await files.text("index.json")) as SlimIndex;
     if (index.version !== SLIM_VERSION) throw new Error(`package format ${index.version}, this engine reads ${SLIM_VERSION}`);
+    await MeshoptDecoder.ready;
     return new SlimPackage(files, index);
   }
 
@@ -156,6 +200,15 @@ export class SlimPackage {
    * by entry when loaded. What was decoded is let go with release().
    */
   async prefetch(paths: string[]): Promise<void> {
+    const t0 = performance.now();
+    try { await this.prefetchPaths(paths); } finally {
+      this.stats.prefetchMs += performance.now() - t0;
+      this.stats.inflateMs = timing.inflateMs;
+      this.stats.decodeMs = timing.decodeMs;
+    }
+  }
+
+  private async prefetchPaths(paths: string[]): Promise<void> {
     const byPiece = new Map<string, { paths: string[]; bytes: number }>();
     const add = (p: string) => {
       const r = this.index.models[p];
@@ -182,13 +235,13 @@ export class SlimPackage {
       this.stats.chunkBytes += r.n;
       const at = (ref: SlimRef) => bytes.subarray(ref.o - r.o, ref.o - r.o + ref.n);
       for (const p of n.paths) {
-        const parts = decodeEntry<ModelParts>(at(this.index.models[p]), true);
+        const parts = await decodeStored<ModelParts>(at(this.index.models[p]), this.index.models[p], true, this.files);
         this.ready.models.set(p, parts);
         for (const t of textureKeys(parts.materials)) textures.add(t);
       }
       for (const t of textures) {
         const ref = this.index.textures[t];
-        if (ref?.t === k && !this.ready.textures.has(t)) this.ready.textures.set(t, decodeEntry<SlimTexture>(at(ref), true));
+        if (ref?.t === k && !this.ready.textures.has(t)) this.ready.textures.set(t, await decodeStored<SlimTexture>(at(ref), ref, true, this.files));
       }
     };
     let next = 0;
@@ -208,7 +261,7 @@ export class SlimPackage {
   private async entry<T>(ref: SlimRef): Promise<T> {
     this.stats.singleReads++;
     this.stats.singleBytes += ref.n;
-    return decodeEntry<T>(await this.files.read(ref.f, ref.o, ref.n));
+    return decodeStored<T>(await this.files.read(ref.f, ref.o, ref.n), ref, false, this.files);
   }
 
   async modelParts(path: string): Promise<ModelParts> {

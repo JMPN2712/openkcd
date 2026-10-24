@@ -127,7 +127,7 @@ for (const [k, s] of route.entries()) {
   console.log(`${k} | ${at.map((v) => v.toFixed(0)).join(",")} | ${scene.models.length} | ${scene.instances} | ${(build / 1000).toFixed(2)} s | ${prepare.toFixed(0)} ms (${longest.toFixed(1)}) | ${rebuild.toFixed(0)} ms | ${first.toFixed(0)} ms | ${next.toFixed(1)} ms`);
   if (caches.slim) {
     const st = caches.slim.stats;
-    parts.push(`slim: ${st.chunkReads} chunks ${(st.chunkBytes / 2 ** 20).toFixed(0)} MiB, ${st.singleReads} single (${st.singleModels} models) ${(st.singleBytes / 2 ** 20).toFixed(0)} MiB, ${st.packReads} pack ${(st.packBytes / 2 ** 20).toFixed(0)} MiB (so far)`);
+    parts.push(`slim: ${st.chunkReads} chunks ${(st.chunkBytes / 2 ** 20).toFixed(0)} MiB, ${st.singleReads} single (${st.singleModels} models) ${(st.singleBytes / 2 ** 20).toFixed(0)} MiB, ${st.packReads} pack ${(st.packBytes / 2 ** 20).toFixed(0)} MiB (so far); prefetch ${st.prefetchMs.toFixed(0)} ms, inflate ${st.inflateMs.toFixed(0)}, decode ${st.decodeMs.toFixed(0)}`);
   }
   parts.push(`rss ${(process.memoryUsage().rss / 2 ** 30).toFixed(1)} GiB`);
   const g = models.geometryBytes();

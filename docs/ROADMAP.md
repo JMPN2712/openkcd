@@ -228,8 +228,11 @@ playable frame rates on the Potato preset.
 - [x] Compact package, phase 1 (`docs/SLIM.md`): Node converter and reader for
       Rataje's world in 256 m region chunks; full (5.28 GiB) and Potato (3.68
       GiB) packages; the cold scene build at the market 4.83 → 2.36 s headless.
+- [x] Geometry compressed losslessly (meshoptimizer + deflate): Full 5.28 →
+      3.56 GiB, Potato 3.68 → 1.96 GiB.
 - [ ] Phase 2: the converter in the browser after the install, the engine
-      reading the package from OPFS.
+      reading the package from OPFS (read, inflate and decode on the read
+      workers), measured in Chrome.
 - [ ] Phases 3–4: characters, animations, audio; built straight from the
       installer with no original files (part by part on low storage).
 - [ ] One streaming pass into a slim package in OPFS:

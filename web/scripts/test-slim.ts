@@ -24,6 +24,17 @@ const same = (a: ArrayLike<number> | null | undefined, b: ArrayLike<number> | nu
   return true;
 };
 
+/** Index buffers with the same triangles in the same order, each possibly rotated (meshoptimizer's index codec keeps the winding, not the first vertex). */
+const sameTriangles = (a: Uint32Array, b: Uint32Array) => {
+  if (a.length !== b.length) return false;
+  for (let t = 0; t + 2 < a.length; t += 3) {
+    let ok = false;
+    for (let r = 0; r < 3 && !ok; r++) ok = a[t] === b[t + r] && a[t + 1] === b[t + (r + 1) % 3] && a[t + 2] === b[t + (r + 2) % 3];
+    if (!ok) return false;
+  }
+  return true;
+};
+
 // the codec
 {
   const v = { a: new Float32Array([1.5, -2, 3]), b: [new Uint16Array([1, 2, 3, 4, 5]), new Uint8Array([7])], m: new Map([["x", "y"]]), s: "text", n: null };
@@ -51,7 +62,7 @@ for (let i = 0; i < paths.length; i += step) {
   a.cgf.meshes.forEach((m, k) => {
     const n = b.cgf.meshes[k];
     if (!n) return;
-    check(same(m.positions, n.positions) && same(m.indices, n.indices) && same(m.normals, n.normals) && same(m.uvs, n.uvs) && same(m.tangents, n.tangents) && same(m.colors, n.colors), `${p} mesh ${k}: streams`);
+    check(same(m.positions, n.positions) && sameTriangles(m.indices, n.indices) && same(m.normals, n.normals) && same(m.uvs, n.uvs) && same(m.tangents, n.tangents) && same(m.colors, n.colors), `${p} mesh ${k}: streams`);
     check(JSON.stringify(m.subsets) === JSON.stringify(n.subsets) && same(m.transform, n.transform), `${p} mesh ${k}: subsets / transform`);
   });
   check(a.cgf.physics.length === b.cgf.physics.length, `${p}: physics proxies`);
