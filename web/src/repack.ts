@@ -15,7 +15,7 @@
 //   time) are left alone and replace nothing, and equal ranks replace nothing.
 
 import { readZip, type PakEntry } from "./zip.ts";
-import { pakRank, Vfs, type VfsHit } from "./vfs.ts";
+import { isPhantom, pakRank, Vfs, type VfsHit } from "./vfs.ts";
 import { openTexture, TEXTURE_RE, textureStem } from "./texture.ts";
 import { MODEL_RE } from "./model.ts";
 import { parseCgf } from "./cgf.ts";
@@ -38,13 +38,18 @@ export interface PakPlan {
   deadBytes: number;
 }
 
-/** Work out the dead entries of every repackable pak in `paks`. */
-export async function planRepack(paks: PakSource[], onProgress?: (done: number, total: number) => void): Promise<PakPlan[]> {
+/**
+ * Work out the dead entries of every repackable pak in `paks`. With `only`, just the files those
+ * paks hold are looked at (a part-by-part staging: what the paks just added change), in every pak.
+ * Phantom entries (PakSource.phantoms) count for choosing versions but are never dead.
+ */
+export async function planRepack(paks: PakSource[], onProgress?: (done: number, total: number) => void, only?: Set<PakSource>): Promise<PakPlan[]> {
   const sources = paks.filter((p) => repackable(p.path));
   const vfs = await Vfs.build(sources, { filter: () => true, includeHd: false });
   const plans = new Map<PakSource, PakPlan>();
   for (const pak of sources) plans.set(pak, { pak, entries: [], cdOffset: 0, dead: new Set(), deadBytes: 0 });
   const kill = (h: VfsHit) => {
+    if (isPhantom(h)) return;
     const plan = plans.get(h.pak)!;
     if (plan.dead.has(h.entry)) return;
     plan.dead.add(h.entry);
@@ -52,7 +57,7 @@ export async function planRepack(paks: PakSource[], onProgress?: (done: number, 
   };
   const rank = (h: VfsHit) => pakRank(h.pak.path);
 
-  const paths = [...vfs.paths()];
+  const paths = only ? [...vfs.paths()].filter((p) => vfs.lookupAll(p).some((h) => only.has(h.pak))) : [...vfs.paths()];
   let done = 0;
   for (const path of paths) {
     if (++done % 4096 === 0) onProgress?.(done, paths.length);
@@ -88,7 +93,7 @@ export async function planRepack(paks: PakSource[], onProgress?: (done: number, 
   onProgress?.(paths.length, paths.length);
 
   // entries in pak order, as the rewrite needs them
-  for (const plan of plans.values()) Object.assign(plan, await readZip(await plan.pak.open()));
+  for (const plan of plans.values()) if (!only || plan.dead.size || only.has(plan.pak)) Object.assign(plan, await readZip(await plan.pak.open()));
   // Vfs.build read its own copies of the entries; match them up by offset
   for (const plan of plans.values()) {
     if (!plan.dead.size) continue;

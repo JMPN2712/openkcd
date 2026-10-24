@@ -320,58 +320,71 @@ Start page → pick or drop the installer folder → **Install: compact package,
   region). Random access by part gives the same "no intermediate copy" result with the existing
   reader, without a second, stream-order parser.
 
-### Part by part (the low-storage mode)
+### Part by part (the low-storage mode, 2026-10-24)
 
-When some `.bin` slices are not in the folder:
+When some `.bin` slices are not in the folder, each stop converts what the slices present allow,
+names the next slice, and lists the ones done with (which may be deleted). Picking the folder
+again with the next slice continues.
 
-- The installer view lists the missing slices. **Install** copies every wanted pak whose parts
-  are all in the slices present into OPFS `compact-staging/` (whole, as they come).
-- It then stops and names the next slice needed, and the slices it is done with, which may be
-  deleted (`SliceNeeded` in `install.ts`). Picking the folder again, with the next slices,
-  continues; finished paks are kept.
-- Once every pak is staged, the package is built from the staging copy. The store is written pak
-  by pak, each staged pak deleted as soon as its store copy is written, and the staging folder
-  goes.
-- With every slice present, staging is skipped (the in-place path). Any earlier partial staging
-  is deleted.
+- **What made the old peak (37.2 GiB): every wanted pak staged whole.** Of those 37.4 GiB,
+  14.2 GiB are files later patches replace, and most of the 12.4 GiB of textures are mips above
+  512 px that a Potato package never holds.
+- **Now each pak is staged without what the package will never need** (`compactInstall.ts`):
+  the files a higher-ranked pak already seen replaces (the repack's rules, `planRepack` limited
+  to the new paks' files), and for Potato the split mips above 512 px under every version of
+  their texture's header seen so far. Those mips stay listed by size only, as phantom entries
+  (`PakSource.phantoms`), so choosing a texture version gives what the whole pak would; they are
+  never read. Paks staged earlier are rewritten without what a pak added later replaces (from
+  16 MiB of it), so another slice order costs time, not storage.
+- **The slices are asked for last to first, base game then DLC.** The patches are in the base
+  game's last slices, so they come first and little is staged that a patch then replaces
+  (0.08 GiB in a simulation of this order, 5.5 GiB in installer order). Start with the last two.
+- **Then the package is built from the staging copy** and the store written pak by pak, each
+  staged pak deleted once its store copy is written (an interruption carries on from the saved
+  store plan, below).
+- **Checked against the whole game** (`scripts/test-part-compact.ts`, in Node from the real
+  installer, two slices at a time): the file store planned from the staging copy keeps exactly
+  the entries planned from the whole game, and 3,039 sampled textures pick the same header
+  version and mips. Staging peaks at 13.98 GiB (Potato), 14 stops.
+- **Why not convert each file into the package as it arrives.** Region chunks need the whole
+  world first (where every model is placed, the level paks being in slice 6, and which textures
+  its materials use), and a texture's version can depend on files in later slices. What can't
+  be discarded on arrival is what the package or store will hold.
 
-Checked in Node (`scripts/test-part-install.ts`). With slices 1–2: 5 paks, then "needs -3.bin,
-done with -1.bin". With -1.bin deleted and -3.bin added: 5 more paks, then "needs -4.bin, done
-with -2.bin". In Chrome the same first step took 34 s (`test-install-browser.ts --compact`, with
-a folder holding the first two slices).
-
-### Storage (Potato, base game and DLC, measured in Chrome)
+### Storage (base game and DLC, measured in Chrome)
 
 | | Installer files on disk | Browser storage, peak | Browser storage, at the end |
 |---|---:|---:|---:|
-| In place (every slice present) | all (56 GiB of `.bin` files for the base game) | 12.8 GiB | **12.8 GiB** |
-| Part by part | about 2 slices at a time (8.6 GiB) | about 40 GiB (the staged paks, plus the package) | **12.8 GiB** |
+| Potato, in place (every slice present) | all (56 GiB of `.bin` files for the base game) | 12.8 GiB | **12.76 GiB** |
+| Potato, part by part | about 2 slices at a time (8.6 GiB) | **16.1 GiB** (was 37.2) | **12.76 GiB** |
+| Full, part by part | about 2 slices at a time | **29.5 GiB** | **21.41 GiB** |
 
-- **In place, measured in Chrome:** 576 s from clicking Install to the package and store being
-  ready (Potato, 2.11 + 10.64 GiB). The page then opens it with no game files
-  (`test-install-browser.ts --compact=potato`).
-- **Part by part, measured in Chrome (2026-10-24):** 473 s in all from the first Install to the
-  package and store being ready, two base-game slices at a time, each deleted as soon as the
-  page said it was done with it (`test-install-browser.ts --compact=potato --part=2`). Ten stops;
-  slice -6 is never asked for (nothing wanted is in it). Browser storage peaked at 37.2 GiB (all
-  staged paks) and ended at 12.76 GiB, the same package and store as the in-place build (78
-  paks, 10.64 GiB). Timed with another game running on the machine.
+- **Potato, part by part** (`test-install-browser.ts --compact=potato --part=2`): 646 s in all,
+  14 stops, the slices deleted as the page said. The peak comes while the package is built
+  beside the staged copy (13.98 + 2.11 GiB). The package and store are those of the in-place
+  build: 16,661 models, 7,077 textures, 2.11 GiB; store 10.64 GiB in 78 paks.
+- **Full, part by part** (`--compact=full --part=2`): 699 s; staging peaks at 23.2 GiB (no mips
+  left out), plus the 6.28 GiB package; store 15.12 GiB.
+- **In place, Potato:** 569-576 s from clicking Install (`--compact=potato`).
+- Timings were taken with another game and other tests running on the machine.
 - **Interrupted while the store is written** (cancelled, or the tab closed): the staged paks
   already written to the store are deleted, and their slices may be gone. So once the package is
   complete, the store plan is saved (`store-plan.json`: the source paks and each store pak's
-  left-out entries). Installing again counts the deleted paks as installed and writes only the
-  store paks still missing. Checked with `--interrupt` (Cancel at pak 3 of 78, then on from 4).
+  left-out entries). Installing again writes only the store paks still missing. Checked with
+  `--interrupt` (Cancel at pak 3 of 78, then on from 4).
 - **Cancel** works through the whole build, not only the copy.
-- **Part by part trades storage for slices.** The browser holds the staged paks until the build,
-  but the player needs only one or two slices at a time (GOG lets them download one file at a
-  time).
-- **Lowering that peak** needs the repack plan before the patch slices arrive, but the patches
-  are in the last slices. Leaving out replaced files while staging (as the in-place path's plan
-  allows) would bring it to about 26 GiB if the patch slices could come first.
+
+### Cutscene videos, on demand
+
+The package is made without them (15 GiB). Later, picking the installer folder again offers
+**Install: the cutscene videos, into the compact package built here**: their paks are added to
+the package's store as they are (`addVideos` in `compactInstall.ts`), part by part if slices are
+missing. The engine doesn't play them yet (CRI `.usm`, which browsers don't decode); transcoding
+is a later step.
 
 ### What's not in the package yet
 
-- **Videos:** left out (15 GiB); cutscenes need installing on demand or transcoding.
+- **Videos:** left out (15 GiB); installable on demand (above), not yet playable.
 - **Audio** stays in its original form in the store (Wwise/ogg); Opus is a later size saving.
 - **Animations** are in the store as `.caf`/`.dba` (2.6 GiB), not converted.
 
