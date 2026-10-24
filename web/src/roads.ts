@@ -26,15 +26,17 @@ export function roadMesh(record: Uint8Array): CgfMesh {
   const nv = dv.getUint32(80, true), ni = dv.getUint32(84, true);
   const positions = new Float32Array(nv * 3), uvs = new Float32Array(nv * 2), colors = new Uint8Array(nv * 4);
   const min: [number, number, number] = [Infinity, Infinity, Infinity], max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  // (no arrays per vertex or triangle: hundreds of roads are read per streaming step)
+  colors.fill(255);
   for (let i = 0; i < nv; i++) {
     const o = 108 + i * 12;
     for (let k = 0; k < 3; k++) {
       const v = half(dv.getUint16(o + k * 2, true)) + (k === 2 ? LIFT : 0);
       positions[i * 3 + k] = v;
-      min[k] = Math.min(min[k], v);
-      max[k] = Math.max(max[k], v);
+      if (v < min[k]) min[k] = v;
+      if (v > max[k]) max[k] = v;
     }
-    colors.set([255, 255, 255, Math.round(Math.max(0, Math.min(1, half(dv.getUint16(o + 6, true)))) * 255)], i * 4);
+    colors[i * 4 + 3] = Math.round(Math.max(0, Math.min(1, half(dv.getUint16(o + 6, true)))) * 255);
     uvs[i * 2] = half(dv.getUint16(o + 8, true));
     uvs[i * 2 + 1] = half(dv.getUint16(o + 10, true));
   }
@@ -43,13 +45,16 @@ export function roadMesh(record: Uint8Array): CgfMesh {
   for (let i = 0; i < ni; i++) indices[i] = dv.getUint16(ib + i * 2, true);
   // smooth normals from the triangles (the road follows the ground)
   const normals = new Float32Array(nv * 3);
+  const P = positions;
   for (let t = 0; t + 2 < ni; t += 3) {
-    const [a, b, c] = [indices[t], indices[t + 1], indices[t + 2]];
-    const e1 = [0, 1, 2].map((k) => positions[b * 3 + k] - positions[a * 3 + k]);
-    const e2 = [0, 1, 2].map((k) => positions[c * 3 + k] - positions[a * 3 + k]);
-    let n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
-    if (n[2] < 0) n = n.map((x) => -x); // facing up whatever the winding
-    for (const v of [a, b, c]) for (let k = 0; k < 3; k++) normals[v * 3 + k] += n[k];
+    const a = indices[t] * 3, b = indices[t + 1] * 3, c = indices[t + 2] * 3;
+    const ax = P[b] - P[a], ay = P[b + 1] - P[a + 1], az = P[b + 2] - P[a + 2];
+    const bx = P[c] - P[a], by = P[c + 1] - P[a + 1], bz = P[c + 2] - P[a + 2];
+    let nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+    if (nz < 0) { nx = -nx; ny = -ny; nz = -nz; } // facing up whatever the winding
+    normals[a] += nx; normals[a + 1] += ny; normals[a + 2] += nz;
+    normals[b] += nx; normals[b + 1] += ny; normals[b + 2] += nz;
+    normals[c] += nx; normals[c + 1] += ny; normals[c + 2] += nz;
   }
   for (let i = 0; i < nv; i++) {
     const l = Math.hypot(normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]) || 1;

@@ -15,7 +15,7 @@ import { GeometryStore, type Range } from "./geometryStore.ts";
 import { uploadChain, type PooledTexture, type TexturePool } from "./texturePool.ts";
 import { colorizeOf } from "./mtl.ts";
 import { ShadowMap, SHADOW_FORMAT, SHADOW_WGSL } from "./shadow.ts";
-import { DEFAULT_LIGHTING, depthCompare, depthFormat, lookAt, multiply, perspective, transformPoint, type Lighting, type PassSetup, type Vec3 } from "./mat4.ts";
+import { DEFAULT_LIGHTING, depthCompare, depthFormat, lookAt, multiply, perspective, type Lighting, type PassSetup, type Vec3 } from "./mat4.ts";
 
 // position 3f, normal 3f, uv 2f, bone ids u16×4, weights unorm8×4, tangent 4f (w handedness), colour unorm8×4
 const VERTEX_BYTES = 64;
@@ -301,12 +301,17 @@ class UniformSlots {
 function meshExtent(mesh: CgfMesh, tm: Float32Array): { min: Vec3; max: Vec3; radius: number } {
   const min: Vec3 = [Infinity, Infinity, Infinity], max: Vec3 = [-Infinity, -Infinity, -Infinity];
   let radius = 0;
-  const P = mesh.positions;
+  const P = mesh.positions, m = tm;
   for (let i = 0; i < P.length; i += 3) {
-    const p = transformPoint(tm, [P[i], P[i + 1], P[i + 2]]);
-    for (let c = 0; c < 3; c++) { min[c] = Math.min(min[c], p[c]); max[c] = Math.max(max[c], p[c]); }
-    radius = Math.max(radius, Math.hypot(p[0], p[1], p[2]));
+    const x = P[i], y = P[i + 1], z = P[i + 2];
+    const px = m[0] * x + m[4] * y + m[8] * z + m[12], py = m[1] * x + m[5] * y + m[9] * z + m[13], pz = m[2] * x + m[6] * y + m[10] * z + m[14];
+    if (px < min[0]) min[0] = px; if (px > max[0]) max[0] = px;
+    if (py < min[1]) min[1] = py; if (py > max[1]) max[1] = py;
+    if (pz < min[2]) min[2] = pz; if (pz > max[2]) max[2] = pz;
+    const r = px * px + py * py + pz * pz;
+    if (r > radius) radius = r;
   }
+  radius = Math.sqrt(radius);
   return { min, max, radius };
 }
 /** meshExtent under the mesh's own transform (items without one of their own), once per mesh */
@@ -763,6 +768,12 @@ export class ModelRenderer {
           });
           if (d) { this.keep(d); draws.push(d); }
         }
+        // (after each mesh: a model can hold several large ones)
+        if (performance.now() - t > sliceMs) {
+          longest = Math.max(longest, performance.now() - t);
+          await new Promise((r) => setTimeout(r, 0));
+          t = performance.now();
+        }
       }
       // (gen: the current set's, so a setModels that leaves the model out gives them back)
       if (keep) this.modelDraws.set(model, { draws, gen: this.generation });
@@ -783,13 +794,16 @@ export class ModelRenderer {
     const ids = new Uint16Array(raw);
     const wts = new Uint8Array(raw);
     const F = VERTEX_BYTES / 4, U = VERTEX_BYTES / 2;
+    // (plain indexed copies: a subarray per attribute and vertex made big meshes cost tens of ms)
+    const P = mesh.positions, N = mesh.normals, T = mesh.uvs, G = mesh.tangents, C = mesh.colors;
     for (let i = 0; i < nv; i++) {
-      verts.set(mesh.positions.subarray(i * 3, i * 3 + 3), i * F);
-      if (mesh.normals) verts.set(mesh.normals.subarray(i * 3, i * 3 + 3), i * F + 3);
-      else verts[i * F + 5] = 1;
-      if (mesh.uvs) verts.set(mesh.uvs.subarray(i * 2, i * 2 + 2), i * F + 6);
-      if (mesh.tangents) verts.set(mesh.tangents.subarray(i * 4, i * 4 + 4), i * F + 11);
-      for (let k = 0; k < 4; k++) wts[i * VERTEX_BYTES + 60 + k] = mesh.colors ? mesh.colors[i * 4 + k] : 255;
+      const o = i * F;
+      verts[o] = P[i * 3]; verts[o + 1] = P[i * 3 + 1]; verts[o + 2] = P[i * 3 + 2];
+      if (N) { verts[o + 3] = N[i * 3]; verts[o + 4] = N[i * 3 + 1]; verts[o + 5] = N[i * 3 + 2]; } else verts[o + 5] = 1;
+      if (T) { verts[o + 6] = T[i * 2]; verts[o + 7] = T[i * 2 + 1]; }
+      if (G) { verts[o + 11] = G[i * 4]; verts[o + 12] = G[i * 4 + 1]; verts[o + 13] = G[i * 4 + 2]; verts[o + 14] = G[i * 4 + 3]; }
+      const w = i * VERTEX_BYTES + 60;
+      if (C) { wts[w] = C[i * 4]; wts[w + 1] = C[i * 4 + 1]; wts[w + 2] = C[i * 4 + 2]; wts[w + 3] = C[i * 4 + 3]; } else { wts[w] = wts[w + 1] = wts[w + 2] = wts[w + 3] = 255; }
       if (paletteCount) {
         for (let k = 0; k < 4; k++) {
           ids[i * U + 16 + k] = Math.min(mesh.boneIds![i * 4 + k], paletteCount - 1);
