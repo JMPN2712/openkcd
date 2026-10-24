@@ -12,7 +12,7 @@
 
 import { tessellate } from "./physics.ts";
 import type { LoadedModel } from "./model.ts";
-import type { WorldModel, WorldScene } from "./world.ts";
+import { CLUSTER, type WorldModel, type WorldScene } from "./world.ts";
 import type { Surroundings, Vec3 } from "./player.ts";
 
 export type CollisionSource = "proxy" | "render" | "visible" | "none";
@@ -91,6 +91,8 @@ export function collisionShape(wm: Pick<WorldModel, "path" | "kind" | "lods">): 
 }
 
 const CELL = 4;
+/** the cluster bins' cell (a multiple of CELL) */
+const COARSE = 64;
 /** per triangle: 9 vertex floats, 3 normal floats, 6 AABB floats */
 const TRI = 18;
 
@@ -102,8 +104,15 @@ interface Cell {
 export class CollisionWorld implements Surroundings {
   private shapes = new Map<string, CollisionShape>();
   private scene: WorldScene | null = null;
-  /** instances overlapping each cell: model index, instance index */
-  private bins = new Map<number, number[]>();
+  /**
+   * The scene's instance clusters (WorldModel.clusters) overlapping each COARSE cell: model index,
+   * cluster index. A cell's instances are gathered from them when it is first needed: binning
+   * every instance of the 700 m scene on each streaming step took 40 ms, for the few cells around
+   * Henry and the NPCs that are ever asked for.
+   */
+  private coarse = new Map<number, number[]>();
+  /** cells found empty (no instance overlaps them) */
+  private empty = new Set<number>();
   private cells = new Map<number, Cell>();
   private terrainHeight: (x: number, y: number) => number;
   /** shapes chosen, by source (for the HUD and the report) */
@@ -131,33 +140,56 @@ export class CollisionWorld implements Surroundings {
     return s;
   }
 
-  /** Use a new streamed scene (instances are binned now, triangles when a cell is first needed). */
+  /** Use a new streamed scene (its clusters are binned now, instances and triangles when a cell is first needed). */
   setScene(scene: WorldScene): void {
     this.scene = scene;
-    this.bins.clear();
+    this.coarse.clear();
     this.cells.clear();
+    this.empty.clear();
     scene.models.forEach((wm, mi) => {
       if (wm.uber || NO_COLLISION.test(wm.path)) return;
-      for (let i = 0; i < wm.count; i++) {
-        const x = wm.spheres[i * 4], y = wm.spheres[i * 4 + 1], r = wm.spheres[i * 4 + 3];
-        const x0 = Math.floor((x - r) / CELL), x1 = Math.floor((x + r) / CELL), y0 = Math.floor((y - r) / CELL), y1 = Math.floor((y + r) / CELL);
-        if ((x1 - x0 + 1) * (y1 - y0 + 1) > 4096) continue; // a stand-in the size of a town block
-        for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++) {
-          const k = key(cx, cy);
-          let b = this.bins.get(k);
-          if (!b) this.bins.set(k, (b = []));
-          b.push(mi, i);
-        }
+      const C = wm.clusters;
+      for (let j = 0; j * 5 < C.length; j++) {
+        const x = C[j * 5], y = C[j * 5 + 1], e = C[j * 5 + 3] + C[j * 5 + 4];
+        for (let cy = Math.floor((y - e) / COARSE); cy <= Math.floor((y + e) / COARSE); cy++)
+          for (let cx = Math.floor((x - e) / COARSE); cx <= Math.floor((x + e) / COARSE); cx++) {
+            const k = key(cx, cy);
+            let b = this.coarse.get(k);
+            if (!b) this.coarse.set(k, (b = []));
+            b.push(mi, j);
+          }
       }
     });
+  }
+
+  /** The instances overlapping cell (cx, cy): model index, instance index. */
+  private binOf(cx: number, cy: number): number[] {
+    const out: number[] = [];
+    const list = this.coarse.get(key(Math.floor((cx * CELL) / COARSE), Math.floor((cy * CELL) / COARSE)));
+    if (!list || !this.scene) return out;
+    const lx = cx * CELL, ly = cy * CELL, hx = lx + CELL, hy = ly + CELL;
+    for (let k = 0; k < list.length; k += 2) {
+      const wm = this.scene.models[list[k]], j = list[k + 1], C = wm.clusters;
+      const x = C[j * 5], y = C[j * 5 + 1], e = C[j * 5 + 3] + C[j * 5 + 4];
+      if (x + e < lx || x - e > hx || y + e < ly || y - e > hy) continue;
+      for (let i = j * CLUSTER; i < Math.min(wm.count, (j + 1) * CLUSTER); i++) {
+        const sx = wm.spheres[i * 4], sy = wm.spheres[i * 4 + 1], r = wm.spheres[i * 4 + 3];
+        const x0 = Math.floor((sx - r) / CELL), x1 = Math.floor((sx + r) / CELL), y0 = Math.floor((sy - r) / CELL), y1 = Math.floor((sy + r) / CELL);
+        if ((x1 - x0 + 1) * (y1 - y0 + 1) > 4096) continue; // a stand-in the size of a town block
+        if (cx < x0 || cx > x1 || cy < y0 || cy > y1) continue;
+        out.push(list[k], i);
+      }
+    }
+    return out;
   }
 
   private cell(cx: number, cy: number): Cell | null {
     const k = key(cx, cy);
     let c = this.cells.get(k);
     if (c) return c;
-    const bin = this.bins.get(k);
-    if (!bin || !this.scene) return null;
+    if (this.empty.has(k) || !this.scene) return null;
+    const bin = this.binOf(cx, cy);
+    if (!bin.length) { this.empty.add(k); return null; }
     const lo = [cx * CELL - 0.5, cy * CELL - 0.5], hi = [(cx + 1) * CELL + 0.5, (cy + 1) * CELL + 0.5];
     const out: number[] = [];
     for (let j = 0; j < bin.length; j += 2) {

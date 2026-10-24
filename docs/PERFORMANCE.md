@@ -205,10 +205,38 @@ Both threads were saturated: the page's main thread at 99%, the GPU process's at
   collision `ground` 6%. The GPU process is 92% busy.
 - **The player's own Chrome** measured 75 fps with 8–9 ms of main thread after the buffer
   changes, while headless at 1920×1080 measured 105: a display refresh cap or a larger window.
-- **Startup:** the view streams the free-fly start (2192, 1050) completely before Henry's spawn,
-  about 100 s before the market is complete (headless, from `~/kcd1`).
-- **Streaming hitch:** each streaming step rebuilds every model's GPU data (`setModels`, about
-  2.7 s of main thread for 3,573 models).
+- **Startup** (fixed below): the view streamed the free-fly start (2192, 1050) completely before
+  Henry's spawn.
+- **Streaming hitch** (fixed below): each streaming step rebuilt every model's GPU data.
+
+## Streaming steps (2026-10-23)
+
+A streaming step (every 210 m on High) rebuilt the world renderer from scratch: every vertex of
+every model encoded and uploaded again (1.1 GB on High in Rattay, 6,391 meshes), and 11,000 draws'
+uniforms, textures and bind groups. `scripts/bench-streaming.ts` (headless, High, steps of 210 m
+south-west from the market):
+
+| | Before | After |
+|---|---:|---:|
+| Renderer rebuild, one frame | 2,000–2,600 ms | 31–102 ms |
+| Geometry of new models (in slices of at most 6–17 ms, while the scene builds) | (in the rebuild) | 220–540 ms |
+| First frame after it | 15–70 ms | 9–28 ms |
+
+- **Kept geometry** (`geometryStore.ts`): meshes keep their ranges of the shared vertex and index
+  buffers across rebuilds; a rebuild frees the ones it no longer uses (first fit, merged free
+  ranges). Walking 8 steps out and back, the stores hold 1,536 MiB throughout (in use: 1,288 MiB
+  in Rattay, 162 MiB in the countryside): they don't grow, but only release a chunk once it is
+  empty. Compacting them is a follow-up if GPU memory gets tight.
+- **Kept draws** (`modelDraws`): items without a transform, layer or skinning (the world, grass)
+  keep their draws, bind groups, pooled textures and uniforms (in persistent slots) with their
+  model; a rebuild only gives back the models it left out.
+- **`ModelRenderer.prepare(items)`**, called by the world view before `setModels`, uploads new
+  meshes and builds their draws a few milliseconds at a time, yielding between slices.
+- **Collision** bins the scene's clusters (64 m cells) instead of every instance; a 4 m cell
+  finds its instances when it is first needed.
+- **Startup:** the free-fly camera starts above Henry's spawn, so the first streamed scene is the
+  market: in Chrome from `~/kcd1`, the market is complete after 64 s instead of 95–125 s.
+- Chrome at the market afterwards: 132 fps, main thread 6.7 ms (from 119 fps and 7.4 ms).
 
 ## Instance clusters (2026-10-23)
 
