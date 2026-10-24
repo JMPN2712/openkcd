@@ -15,7 +15,7 @@ import { TexturePool } from "../src/texturePool.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 import { WaterRenderer } from "../src/waterRenderer.ts";
 import { FarTrees } from "../src/farTrees.ts";
-import { buildGrassScene, buildWorldScene, lodItems, newWorldCaches, selectLods } from "../src/world.ts";
+import { buildGrassScene, buildWorldScene, lodItems, newWorldCaches, sceneMatrices, selectLods } from "../src/world.ts";
 import { PlayerAvatar } from "../src/playerAvatar.ts";
 import { PlayerSession } from "../src/playerSession.ts";
 import { CollisionWorld } from "../src/collision.ts";
@@ -80,7 +80,8 @@ for (const pp of gpus) {
     const terrainR = new TerrainRenderer(device, format, lvl.terrain, lvl.cover, pass, await loadDetailLayers(lvl.vfs, lvl.surfaceTypes, q.terrainDetail), { detailFade: q.detailFade });
     // streamed textures (NO_POOL=1: every renderer uploads its own at the preset's first size)
     const pool = process.env.NO_POOL ? undefined : new TexturePool(device, lvl.vfs, { budget: Number(process.env.POOL_MIB ?? q.textures.budgetMiB) * 2 ** 20, maxDim: q.textures.maxDim });
-    const models = new ModelRenderer(device, format, q.msaa, { ...pass, pool });
+    // (MATRICES=1: instance matrices uploaded every frame, as before instance indices)
+    const models = new ModelRenderer(device, format, q.msaa, { ...pass, pool, instanceIndices: !process.env.MATRICES });
     const water = new WaterRenderer(device, format, lvl.objects.water, pass);
     // OLD_WATER=1: the water as it was, in the opaque pass (no material, no scene depth)
     const oldWater = !!process.env.OLD_WATER;
@@ -106,10 +107,10 @@ for (const pp of gpus) {
     for (const sc of SCENES) {
       const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, sc.at, q.streamRadius, { maxModels: 20000, maxTextureDim: q.maxTextureDim, caches, props: lvl.props, hiddenLayers: lvl.hiddenLayers, normalMaps: q.normalMaps && !process.env.NO_NORMAL, ground: process.env.NO_ROADS ? undefined : [lvl.roads, lvl.decals] });
       const items = lodItems(scene);
-      models.setModels(items);
+      models.setModels(items, models.indexed ? sceneMatrices(scene) : undefined);
       models.setShadow(shadowMap);
-      if (shadowMap) casters.setScene(scene, items.map((it) => it.capacity), shadowMap.cascades);
-      const lodOut = items.map((it) => new Float32Array(it.capacity * 16));
+      if (shadowMap) casters.setScene(scene, items.map((it) => it.capacity), shadowMap.cascades, models.indexed);
+      const lodOut = items.map((it) => (models.indexed ? new Uint32Array(it.capacity) : new Float32Array(it.capacity * 16)));
       const lodCounts = items.map(() => 0);
       // grass around the start (NO_GRASS=1 leaves it out); the run stays well inside its radius
       const grass = process.env.NO_GRASS || !q.grass ? null : await buildGrassScene(lvl.vfs, lvl.terrain, lvl.merged, sc.at, q.grass, { caches, maxTextureDim: Math.min(1024, q.maxTextureDim * 4), normalMaps: q.normalMaps });
@@ -147,7 +148,7 @@ for (const pp of gpus) {
           pool.setViewport(hgt, FOV_Y);
           pool.beginFrame();
           const enc = device.createCommandEncoder();
-          selectLods(scene, cam.pos, vp, lodOut, lodCounts, { lodScale: q.lodScale, distanceScale: q.distanceScale });
+          selectLods(scene, cam.pos, vp, lodOut, lodCounts, { lodScale: q.lodScale, distanceScale: q.distanceScale, indices: models.indexed });
           lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
           models.setCamera(vp, cam.pos);
           const p = enc.beginRenderPass({ colorAttachments: [msaa ? { view: msaa.createView(), resolveTarget: target.createView(), loadOp: "clear", storeOp: "discard" } : { view: target.createView(), loadOp: "clear", storeOp: "store" }], depthStencilAttachment: { view: depth.createView(), depthClearValue: depthClear(pass), depthLoadOp: "clear", depthStoreOp: "discard" } });
@@ -178,7 +179,7 @@ for (const pp of gpus) {
         models.lighting = npcR.lighting = playerR.lighting = grassR.lighting = state.lighting;
         sky.update(invert(vp), cam.pos, state);
         mark("player");
-        const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts, { lodScale: q.lodScale, distanceScale: q.distanceScale });
+        const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts, { lodScale: q.lodScale, distanceScale: q.distanceScale, indices: models.indexed });
         lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
         if (grass) {
           selectLods(grass, cam.pos, vp, grassOut, grassCounts, { maxDistance: q.grass, fade: [q.grass * 0.67, q.grass] });

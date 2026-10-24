@@ -45,6 +45,8 @@ override alphaToCoverage: f32 = 0.0;
 @group(0) @binding(1) var shadowTex: texture_depth_2d_array;
 @group(0) @binding(2) var shadowSamp: sampler_comparison;
 @group(0) @binding(3) var<uniform> shadowU: Shadow;
+// instanceIndices renderers: every instance's world matrix, picked by the per-instance index
+@group(0) @binding(4) var<storage, read> instMats: array<mat4x4f>;
 @group(1) @binding(0) var<uniform> drw: Draw;
 @group(1) @binding(1) var tex: texture_2d<f32>;
 @group(1) @binding(2) var samp: sampler;
@@ -66,10 +68,20 @@ struct VOut {
 @vertex fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @location(2) uv: vec2f,
                @location(3) bi: vec4u, @location(4) bw: vec4f, @location(9) tan: vec4f, @location(10) vc: vec4f,
                @location(5) i0: vec4f, @location(6) i1: vec4f, @location(7) i2: vec4f, @location(8) i3: vec4f) -> VOut {
+  return vertexOut(p, n, uv, bi, bw, tan, vc, mat4x4f(i0, i1, i2, i3));
+}
+
+@vertex fn vsIndexed(@location(0) p: vec3f, @location(1) n: vec3f, @location(2) uv: vec2f,
+                     @location(3) bi: vec4u, @location(4) bw: vec4f, @location(9) tan: vec4f, @location(10) vc: vec4f,
+                     @location(5) inst: u32) -> VOut {
+  return vertexOut(p, n, uv, bi, bw, tan, vc, instMats[inst]);
+}
+
+fn vertexOut(p: vec3f, n: vec3f, uv: vec2f, bi: vec4u, bw: vec4f, tan: vec4f, vc: vec4f, instance: mat4x4f) -> VOut {
   var o: VOut;
   let sk = bones[bi.x] * bw.x + bones[bi.y] * bw.y + bones[bi.z] * bw.z + bones[bi.w] * bw.w;
   // per-instance world matrix (identity for single models)
-  let world = mat4x4f(i0, i1, i2, i3) * drw.model;
+  let world = instance * drw.model;
   var w = world * (sk * vec4f(p, 1.0));
   if (drw.flags.y > 2.5) {
     // decals and roads lie on the ground, whose triangulation differs a little from theirs:
@@ -289,10 +301,11 @@ interface View {
   depthFormat: GPUTextureFormat;
   sampleCount: number;
   counts: Uint32Array;
-  pending: (Float32Array | null)[];
+  pending: (Float32Array | Uint32Array | null)[];
   itemFirst: Uint32Array;
   packed: GPUBuffer | null;
-  packedCpu: Float32Array;
+  /** matrices (16 floats per instance), or instance indices (instanceIndices) */
+  packedCpu: Float32Array | Uint32Array;
   args: Uint32Array;
   argsBuf: GPUBuffer | null;
   /** one bundle per item: null not recorded yet, undefined no draws */
@@ -322,6 +335,13 @@ const VERTEX_LAYOUT: GPUVertexBufferLayout[] = [{
   arrayStride: 64,
   stepMode: "instance",
   attributes: [0, 1, 2, 3].map((k) => ({ shaderLocation: 5 + k, offset: k * 16, format: "float32x4" as GPUVertexFormat })),
+}];
+
+/** instanceIndices: the second buffer holds one u32 per instance, an index into the instance matrices. */
+const VERTEX_LAYOUT_INDEXED: GPUVertexBufferLayout[] = [VERTEX_LAYOUT[0], {
+  arrayStride: 4,
+  stepMode: "instance",
+  attributes: [{ shaderLocation: 5, offset: 0, format: "uint32" }],
 }];
 
 /** A stand-in shadow map (always lit) per device, for renderers without shadows. */
@@ -398,6 +418,16 @@ export class ModelRenderer {
    * frame was the town's biggest CPU cost.
    */
   readonly indirect: boolean;
+  /**
+   * instanceIndices: instances are indices into matrices uploaded once per setModels (4 bytes an
+   * instance each frame instead of 64). The world's 17,000 visible instances were copied twice
+   * and uploaded every frame.
+   */
+  readonly indexed: boolean;
+  private instMatsBuf: GPUBuffer | null = null;
+  private instMatsCpu = new Float32Array(16);
+  /** elements per instance in instance data: 16 floats, or 1 index */
+  private instStride = 16;
   /** views[0] the camera; views[1 + c] shadow cascade c (indirect mode only) */
   private views: View[] = [];
   private shadow: ShadowMap | null = null;
@@ -416,7 +446,7 @@ export class ModelRenderer {
   private eye: Vec3 = [0, 0, 0];
   private requestFrame = 0;
 
-  constructor(device: GPUDevice, format: GPUTextureFormat, sampleCount = 4, opts: { reversedZ?: boolean; pool?: TexturePool } = {}) {
+  constructor(device: GPUDevice, format: GPUTextureFormat, sampleCount = 4, opts: { reversedZ?: boolean; pool?: TexturePool; instanceIndices?: boolean } = {}) {
     this.pool = opts.pool ?? null;
     if (this.pool) this.unlisten = this.pool.onChange((changed) => this.texturesChanged(changed));
     this.device = device;
@@ -426,6 +456,10 @@ export class ModelRenderer {
     const pass: PassSetup = { sampleCount, reversedZ: this.reversedZ };
     this.pass = pass;
     this.indirect = device.features.has("indirect-first-instance");
+    this.indexed = !!opts.instanceIndices && this.indirect;
+    this.instStride = this.indexed ? 1 : 16;
+    this.identityPalette = device.createBuffer({ size: 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(this.identityPalette, 0, IDENTITY);
     this.module = device.createShaderModule({ code: SHADER });
     const VF = GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, F = GPUShaderStage.FRAGMENT;
     this.camLayout = device.createBindGroupLayout({
@@ -434,6 +468,7 @@ export class ModelRenderer {
         { binding: 1, visibility: F, texture: { sampleType: "depth", viewDimension: "2d-array" } },
         { binding: 2, visibility: F, sampler: { type: "comparison" } },
         { binding: 3, visibility: F, buffer: { type: "uniform" } },
+        { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
       ],
     });
     this.drawLayout = device.createBindGroupLayout({
@@ -449,7 +484,7 @@ export class ModelRenderer {
     this.pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [this.camLayout, this.drawLayout] });
     this.pipeline = device.createRenderPipeline({
       layout: this.pipelineLayout,
-      vertex: { module: this.module, entryPoint: "vs", buffers: VERTEX_LAYOUT },
+      vertex: this.vertexState(),
       fragment: { module: this.module, entryPoint: "fs", targets: [{ format }], constants: { alphaToCoverage: sampleCount > 1 ? 1 : 0 } },
       primitive: { topology: "triangle-list", cullMode: "none", frontFace: "ccw" },
       depthStencil: { format: depthFormat(pass), depthWriteEnabled: true, depthCompare: depthCompare(pass) },
@@ -457,7 +492,7 @@ export class ModelRenderer {
     });
     this.blendPipeline = device.createRenderPipeline({
       layout: this.pipelineLayout,
-      vertex: { module: this.module, entryPoint: "vs", buffers: VERTEX_LAYOUT },
+      vertex: this.vertexState(),
       fragment: {
         module: this.module, entryPoint: "fsBlend",
         targets: [{ format, blend: { color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" }, alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha" } } }],
@@ -468,7 +503,7 @@ export class ModelRenderer {
     });
     this.overlayPipeline = device.createRenderPipeline({
       layout: this.pipelineLayout,
-      vertex: { module: this.module, entryPoint: "vs", buffers: VERTEX_LAYOUT },
+      vertex: this.vertexState(),
       fragment: {
         module: this.module, entryPoint: "fsOverlay",
         targets: [{ format, blend: { color: { srcFactor: "dst", dstFactor: "zero" }, alpha: { srcFactor: "zero", dstFactor: "one" } } }],
@@ -482,8 +517,6 @@ export class ModelRenderer {
     this.sampler = device.createSampler({ magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", addressModeU: "repeat", addressModeV: "repeat", maxAnisotropy: 8 });
     this.identityInstance = device.createBuffer({ size: 64, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(this.identityInstance, 0, IDENTITY);
-    this.identityPalette = device.createBuffer({ size: 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-    device.queue.writeBuffer(this.identityPalette, 0, IDENTITY);
     this.white = device.createTexture({ size: [1, 1], format: "rgba8unorm-srgb", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     device.queue.writeTexture({ texture: this.white }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4 }, [1, 1]);
     this.flatNormal = device.createTexture({ size: [1, 1], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
@@ -505,8 +538,13 @@ export class ModelRenderer {
         { binding: 1, resource: map.arrayView },
         { binding: 2, resource: map.sampler },
         { binding: 3, resource: { buffer: map.buffer } },
+        { binding: 4, resource: { buffer: this.instMatsBuf ?? this.identityPalette } },
       ],
     });
+  }
+
+  private vertexState(): GPUVertexState {
+    return { module: this.module, entryPoint: this.indexed ? "vsIndexed" : "vs", buffers: this.indexed ? VERTEX_LAYOUT_INDEXED : VERTEX_LAYOUT };
   }
 
   /**
@@ -519,7 +557,7 @@ export class ModelRenderer {
     if (this.shadow && this.indirect && !this.shadowPipeline) {
       this.shadowPipeline = this.device.createRenderPipeline({
         layout: this.pipelineLayout,
-        vertex: { module: this.module, entryPoint: "vs", buffers: VERTEX_LAYOUT },
+        vertex: this.vertexState(),
         fragment: { module: this.module, entryPoint: "fsShadow", targets: [] },
         primitive: { topology: "triangle-list", cullMode: "none" },
         // slope-scaled bias against acne on surfaces at grazing light
@@ -539,14 +577,14 @@ export class ModelRenderer {
     // (shadow views also hold the merged shadow draws' arguments, after the draws')
     if (this.shadow) this.shadowDrawsOf(0);
     const make = (pipeline: GPURenderPipeline, camBuf: GPUBuffer, camBind: GPUBindGroup, colorFormats: GPUTextureFormat[], depth: GPUTextureFormat, samples: number, shadow = false): View => {
-      const packed = this.device.createBuffer({ size: Math.max(1, total) * 64, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+      const packed = this.device.createBuffer({ size: Math.max(1, total) * this.instStride * 4, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
       const args = new Uint32Array(Math.max(1, this.draws.length + (shadow ? this.mergedArgs : 0)) * 5);
       const argsBuf = this.device.createBuffer({ size: args.byteLength, usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST });
       const counts = new Uint32Array(items);
       this.itemInst.forEach((it, k) => { if (!this.dynamicItems.includes(k)) counts[k] = it.count; });
       return {
         pipeline, camBuf, camBind, colorFormats, depthFormat: depth, sampleCount: samples, counts,
-        pending: new Array(items).fill(null), itemFirst: new Uint32Array(items), packed, packedCpu: new Float32Array(Math.max(1, total) * 16),
+        pending: new Array(items).fill(null), itemFirst: new Uint32Array(items), packed, packedCpu: this.indexed ? new Uint32Array(Math.max(1, total)) : new Float32Array(Math.max(1, total) * 16),
         args, argsBuf, bundles: new Array(items).fill(null), live: [], blendBundles: new Array(items).fill(null), liveBlend: [], groundBundles: new Array(items).fill(null), liveGround: [], triangles: 0, calls: 0,
       };
     };
@@ -591,8 +629,21 @@ export class ModelRenderer {
     capacity?: number;
     /** items with the same key share one skinning palette (same bones, same bind poses) */
     paletteKey?: string;
-  }[]): void {
+  }[], instanceMatrices?: Float32Array): void {
     this.clear();
+    if (this.indexed) {
+      // (instanceIndices) the matrices setInstances' indices point into, and an identity after
+      // them for items without instances
+      const n = (instanceMatrices?.length ?? 0) / 16;
+      this.instMatsCpu = new Float32Array((n + 1) * 16);
+      if (instanceMatrices) this.instMatsCpu.set(instanceMatrices);
+      this.instMatsCpu.set(IDENTITY, n * 16);
+      this.instMatsBuf = this.device.createBuffer({ size: this.instMatsCpu.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+      this.device.queue.writeBuffer(this.instMatsBuf, 0, this.instMatsCpu);
+      this.owned.push(this.instMatsBuf);
+      this.device.queue.writeBuffer(this.identityInstance, 0, new Uint32Array([n]));
+      this.camBind = this.cameraBind(this.camBuf, this.shadowOrStandIn());
+    }
     this.itemRadius = items.map(() => 0);
     this.itemFixed = items.map(({ transform, instances, capacity }) => (capacity !== undefined ? null : transform ? transform.slice(12, 15) : instances?.length ? positionsOf(instances) : new Float32Array(3)));
     const align = this.device.limits.minStorageBufferOffsetAlignment;
@@ -639,6 +690,7 @@ export class ModelRenderer {
         return { buf, count: 0, capacity };
       }
       if (!instances?.length) return { buf: this.identityInstance, count: 1, capacity: 1 };
+      if (this.indexed) throw new Error("instanceIndices renderers take instances through setInstances only");
       const buf = this.device.createBuffer({ size: instances.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
       this.device.queue.writeBuffer(buf, 0, instances);
       this.owned.push(buf);
@@ -926,8 +978,11 @@ export class ModelRenderer {
     }
   }
 
-  /** Upload `count` instance matrices for an item created with `capacity` (indirect mode: at the next draw). */
-  setInstances(index: number, matrices: Float32Array, count: number): void {
+  /**
+   * Upload `count` instances for an item created with `capacity` (indirect mode: at the next draw):
+   * matrices, or with instanceIndices indices into setModels' matrices.
+   */
+  setInstances(index: number, matrices: Float32Array | Uint32Array, count: number): void {
     const it = this.itemInst[index];
     if (!it) return;
     it.count = Math.min(count, it.capacity);
@@ -937,7 +992,7 @@ export class ModelRenderer {
   }
 
   /** Shadow casters in cascade `c`: like setInstances (items without capacity always cast). */
-  setShadowInstances(c: number, index: number, matrices: Float32Array, count: number): void {
+  setShadowInstances(c: number, index: number, matrices: Float32Array | Uint32Array, count: number): void {
     const v = this.views[1 + c], it = this.itemInst[index];
     if (!v || !it) return;
     v.counts[index] = Math.min(count, it.capacity);
@@ -994,10 +1049,11 @@ export class ModelRenderer {
       const n = v.counts[k], m = v.pending[k];
       v.itemFirst[k] = off;
       if (!n || !m) { if (!m) v.counts[k] = 0; continue; }
-      v.packedCpu.set(m.subarray(0, n * 16), off * 16);
+      const S = this.instStride;
+      v.packedCpu.set(m.subarray(0, n * S), off * S);
       off += n;
     }
-    if (off) this.device.queue.writeBuffer(v.packed!, 0, v.packedCpu, 0, off * 16);
+    if (off) this.device.queue.writeBuffer(v.packed!, 0, v.packedCpu, 0, off * this.instStride);
     let tris = 0, calls = 0;
     const a = v.args;
     for (let i = 0; i < this.draws.length; i++) {
@@ -1114,7 +1170,7 @@ export class ModelRenderer {
    * Ask the pool for the texture sizes the visible draws need: the screen size of a texel at the
    * nearest instance of each item (distance to its bounding sphere), from the mesh's UV density.
    */
-  private requestTextures(counts: Uint32Array, pending: (Float32Array | null)[]): void {
+  private requestTextures(counts: Uint32Array, pending: (Float32Array | Uint32Array | null)[]): void {
     const pool = this.pool!, [ex, ey, ez] = this.eye;
     const nearest = new Float32Array(counts.length).fill(Infinity);
     for (let k = 0; k < counts.length; k++) {
@@ -1123,9 +1179,10 @@ export class ModelRenderer {
       const m = pending[k], fixed = this.itemFixed[k];
       let best = Infinity;
       if (m && !fixed) {
+        const M = this.indexed ? this.instMatsCpu : (m as Float32Array);
         for (let i = 0; i < n; i++) {
-          const o = i * 16, s = Math.hypot(m[o], m[o + 1], m[o + 2]);
-          const d = Math.hypot(m[o + 12] - ex, m[o + 13] - ey, m[o + 14] - ez) - this.itemRadius[k] * s;
+          const o = this.indexed ? m[i] * 16 : i * 16, s = Math.hypot(M[o], M[o + 1], M[o + 2]);
+          const d = Math.hypot(M[o + 12] - ex, M[o + 13] - ey, M[o + 14] - ez) - this.itemRadius[k] * s;
           if (d < best) best = d;
         }
       } else if (fixed) {
@@ -1249,6 +1306,7 @@ export class ModelRenderer {
     this.palettes = [];
     this.paletteBuf = null;
     this.uniformBuf = null;
+    this.instMatsBuf = null;
     this.itemInst = [];
     this.stats = { meshes: 0, triangles: 0, vertices: 0, draws: 0, textured: 0, drawCalls: 0 };
   }
