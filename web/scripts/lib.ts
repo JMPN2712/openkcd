@@ -151,3 +151,22 @@ export class Offscreen {
     return png(this.width, this.height, rgba);
   }
 }
+
+/** A compact package's files in a directory (src/slim.ts SlimFiles). */
+export function nodeSlimFiles(dir: string): import("../src/slim.ts").SlimFiles {
+  return {
+    async read(file, at, size) {
+      const fh = await (await import("node:fs/promises")).open(join(dir, file));
+      try {
+        const out = new Uint8Array(size);
+        await fh.read(out, 0, size, at);
+        return out;
+      } finally {
+        await fh.close();
+      }
+    },
+    async text(file) {
+      return (await import("node:fs/promises")).readFile(join(dir, file), "utf8");
+    },
+  };
+}

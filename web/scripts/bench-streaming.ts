@@ -2,7 +2,8 @@
 // the world view's rebuild distance (0.3 × the preset's streaming radius) along a line; for each
 // step, the scene build (model loads and decoding), the world renderer's rebuild (setModels,
 // shadows, collision) and the first frame drawn after it (render bundles are recorded then).
-// usage: node scripts/bench-streaming.ts [--preset high] [--steps 4] [--heading DEG] [--root GAME_ROOT]
+// usage: node scripts/bench-streaming.ts [--preset high] [--steps 4] [--heading DEG] [--root GAME_ROOT] [--slim PACKAGE_DIR]
+//   --slim: models from a compact package (scripts/build-slim.ts), the rest from the paks
 //   PROFILE=file: a CPU profile of each rebuild and the frame after it (not the scene builds) to file-N.cpuprofile
 
 import { homedir } from "node:os";
@@ -20,7 +21,8 @@ import { PRESETS, type PresetName } from "../src/quality.ts";
 import { setGpuBlockCompression } from "../src/model.ts";
 import { ShadowMap } from "../src/shadow.ts";
 import { ShadowCasters } from "../src/shadowPass.ts";
-import { nodeReadWorkers, openRataje } from "./lib.ts";
+import { nodeReadWorkers, nodeSlimFiles, openRataje } from "./lib.ts";
+import { SlimPackage } from "../src/slim.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
@@ -51,6 +53,8 @@ const msaa = q.msaa > 1 ? device.createTexture({ size: [W, H], format, sampleCou
 const depth = device.createTexture({ size: [W, H], format: depthFormat(pass), sampleCount: q.msaa, usage: GPUTextureUsage.RENDER_ATTACHMENT });
 const world = new CollisionWorld((x, y) => heightAt(lvl.terrain, x, y), lvl.terrain.size);
 const caches = newWorldCaches();
+const slimDir = opt("--slim", "");
+if (slimDir) caches.slim = await SlimPackage.open(nodeSlimFiles(slimDir));
 const step = q.streamRadius * 0.3;
 
 const prof = process.env.PROFILE ? new (await import("node:inspector/promises")).Session() : null;
@@ -121,6 +125,11 @@ for (const [k, s] of route.entries()) {
   }
   const next = await frame();
   console.log(`${k} | ${at.map((v) => v.toFixed(0)).join(",")} | ${scene.models.length} | ${scene.instances} | ${(build / 1000).toFixed(2)} s | ${prepare.toFixed(0)} ms (${longest.toFixed(1)}) | ${rebuild.toFixed(0)} ms | ${first.toFixed(0)} ms | ${next.toFixed(1)} ms`);
+  if (caches.slim) {
+    const st = caches.slim.stats;
+    parts.push(`slim: ${st.chunkReads} chunks ${(st.chunkBytes / 2 ** 20).toFixed(0)} MiB, ${st.singleReads} single (${st.singleModels} models) ${(st.singleBytes / 2 ** 20).toFixed(0)} MiB, ${st.packReads} pack ${(st.packBytes / 2 ** 20).toFixed(0)} MiB (so far)`);
+  }
+  parts.push(`rss ${(process.memoryUsage().rss / 2 ** 30).toFixed(1)} GiB`);
   const g = models.geometryBytes();
   console.log(`     rebuild: ${parts.join(", ")} ms; geometry ${(g.used / 2 ** 20).toFixed(0)} of ${(g.held / 2 ** 20).toFixed(0)} MiB held`);
 }
