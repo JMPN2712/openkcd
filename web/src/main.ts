@@ -182,7 +182,16 @@ function startInstall(dir: FileSystemDirectoryHandle): void {
   head.append(el("div", "preview-path", `Install from the GOG installer: ${dir.name}`));
   const body = el("div", "preview-body");
   previewEl.replaceChildren(head, body);
-  void showInstall(body, dir, async () => {
+  void showInstall(body, dir, async (what) => {
+    if (what === "package") {
+      const p = await refreshPackage();
+      void refreshInstalled();
+      if (p) {
+        setAssetPackage(await openSlim(p.variant));
+        await openGame(p.store, `Compact package (${p.variant})`, true);
+      }
+      return;
+    }
     const game = await refreshInstalled();
     if (game) await openGame(game, "Installed copy (browser storage)", true);
   });

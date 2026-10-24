@@ -10,6 +10,7 @@
 //   unless asked for (storeSkips).
 
 import type { PakSource } from "./paks.ts";
+import { isVideoPak, pakKind } from "./install.ts";
 import { planRepack, repackable, repackedSize, type PakPlan } from "./repack.ts";
 import { readZip } from "./zip.ts";
 import { openTexture, textureStem, TEXTURE_RE, type Texture } from "./texture.ts";
@@ -20,16 +21,12 @@ import type { SlimIndex } from "./slim.ts";
 /** Paks left out of the store entirely: videos; voice in other languages than `language` (the
  *  small *_xml text paks of every language stay); HD texture paks unless `hd`. */
 export function storeSkips(path: string, opts: { language?: string; hd?: boolean } = {}): boolean {
-  const p = path.toLowerCase();
-  if (/(^|\/)(ipl_)?videos/.test(p)) return true;
-  if (!opts.hd && /_hd[-_.]/.test(p)) return true;
-  const loc = /^localization\/(ipl_)?([a-z]+)/.exec(p);
-  if (loc && LANGUAGES.has(loc[2]) && !p.endsWith("_xml.pak") && loc[2] !== (opts.language ?? "english").toLowerCase()) return true;
-  return false;
+  if (isVideoPak(path)) return true;
+  // (the installer's own sorting: voice paks and their patches by language, *_xml and common kept)
+  const { kind, language } = pakKind(path);
+  if (kind === "voice") return language !== (opts.language ?? "english").toLowerCase();
+  return kind !== "core" && !opts.hd;
 }
-
-/** Languages the localisation paks are named after (common.pak and patches aren't one). */
-const LANGUAGES = new Set(["chinese", "chineses", "czech", "english", "french", "german", "italian", "japanese", "korean", "polish", "portuguese", "russian", "spanish", "turkish", "ukrainian"]);
 
 export interface StorePlan {
   plans: PakPlan[];

@@ -20,8 +20,12 @@ export interface FoundInstaller {
   installer: Installer;
   /** bytes of all its .pak files */
   size: number;
-  /** missing or damaged .bin files; the installer can't be used while this is non-empty */
+  /** damaged .bin files; the installer can't be used while this is non-empty */
   problems: string[];
+  /** .bin slices not in the folder (yet): the install goes as far as it can without them (part by part) */
+  missing: number[];
+  /** whether slice `i` is in the folder */
+  has(index: number): boolean;
   slice: (index: number) => Promise<Blob>;
 }
 
@@ -63,12 +67,18 @@ export interface InstallOptions {
   hdSound: boolean;
   /** leave out the files later patches replace */
   repack: boolean;
+  /** the cutscene videos (about 15 GiB; left out of the compact package) */
+  videos?: boolean;
 }
 
 export const DEFAULT_OPTIONS: InstallOptions = { language: "english", hdTextures: false, hdVoice: false, hdSound: false, repack: true };
 
+/** Cutscene video paks. */
+export const isVideoPak = (path: string) => /(^|\/)(ipl_)?videos/i.test(path);
+
 export function wanted(f: InstallerFile, o: InstallOptions): boolean {
   if (!isPak(f)) return false;
+  if (o.videos === false && isVideoPak(f.path)) return false;
   const { kind, language } = pakKind(f.path);
   switch (kind) {
     case "core": return true;
@@ -152,12 +162,13 @@ export async function findInstallers(root: Dir): Promise<FoundInstaller[]> {
         continue; // not one of the GOG installers we can read
       }
       const problems: string[] = [];
+      const missing: number[] = [];
       const bins: Blob[] = [];
       for (let i = 0; i < installer.sliceCount; i++) {
         const bin = sliceName(exe.name, i);
         const h = inDir.get(bin.toLowerCase());
         if (!h) {
-          problems.push(`${bin} is missing`);
+          missing.push(i);
           continue;
         }
         bins[i] = await h.getFile();
@@ -171,6 +182,8 @@ export async function findInstallers(root: Dir): Promise<FoundInstaller[]> {
         installer,
         size,
         problems,
+        missing,
+        has: (i) => !!bins[i] || (installer.dataOffset > 0 && i === 0),
         slice: sliceSource(installer, exe, async (i) => bins[i]),
       });
     }
@@ -272,6 +285,38 @@ export interface Progress {
   /** paks the repack rewrote, and the bytes it left out (this run) */
   repacked: number;
   removed: number;
+  /** .bin slices every wanted file of has been installed from: they may be deleted */
+  doneSlices: string[];
+}
+
+/**
+ * The install needs a .bin slice that isn't in the folder (part by part: every file the slices
+ * here hold is installed; add this one, and those after it, and install again to continue).
+ */
+export class SliceNeeded extends Error {
+  readonly slice: string;
+  readonly progress: Progress;
+  constructor(slice: string, progress: Progress) {
+    super(`${slice} is needed next`);
+    this.name = "SliceNeeded";
+    this.slice = slice;
+    this.progress = progress;
+  }
+}
+
+/** "setup_…-3.bin to -5.bin" style listing of an installer's slices (0-based indexes). */
+export function sliceListing(ins: FoundInstaller, slices: number[]): string {
+  const names = slices.map((i) => sliceName(ins.name, i));
+  return names.length > 3 ? `${names[0]} … ${names[names.length - 1]} (${names.length} files)` : names.join(", ");
+}
+
+/** Slices of an installer from which every wanted file has been installed. */
+function doneSlices(ins: FoundInstaller, files: InstallerFile[], installed: Set<InstallerFile>): string[] {
+  const pending = new Set<number>();
+  for (const f of files) if (!installed.has(f)) for (const p of f.parts) for (let s = p.slice; s <= p.lastSlice; s++) pending.add(s);
+  const out: string[] = [];
+  for (let i = 0; i < ins.installer.sliceCount; i++) if (!pending.has(i) && ins.has(i)) out.push(sliceName(ins.name, i));
+  return out;
 }
 
 type Repacked = Record<string, { from: number; to: number }>; // by lower-case path
@@ -294,8 +339,11 @@ export async function install(
   signal?: AbortSignal,
 ): Promise<Progress> {
   const jobs = installers.flatMap((ins) => ins.installer.files.filter((f) => wanted(f, options)).map((f) => ({ ins, f })));
-  const p: Progress = { phase: "copy", done: 0, total: jobs.reduce((a, j) => a + j.f.size, 0), written: 0, file: "", filesDone: 0, files: jobs.length, skipped: 0, repacked: 0, removed: 0 };
+  const p: Progress = { phase: "copy", done: 0, total: jobs.reduce((a, j) => a + j.f.size, 0), written: 0, file: "", filesDone: 0, files: jobs.length, skipped: 0, repacked: 0, removed: 0, doneSlices: [] };
   const repacked = await readRepacked(target);
+  const installed = new Set<InstallerFile>();
+  const slicesDone = () => installers.flatMap((ins) => doneSlices(ins, jobs.filter((j) => j.ins === ins).map((j) => j.f), installed));
+  let needed: { ins: FoundInstaller; slice: number } | null = null;
   for (const { ins, f } of jobs) {
     if (signal?.aborted) throw signal.reason;
     p.file = f.path;
@@ -304,7 +352,15 @@ export async function install(
     const r = repacked[f.path.toLowerCase()];
     if (size === f.size || (r && r.from === f.size && r.to === size)) {
       p.skipped++;
+      installed.add(f);
     } else {
+      // part by part: a file whose data is in a slice that isn't here waits for the next run
+      const absent = f.parts.flatMap((part) => Array.from({ length: part.lastSlice - part.slice + 1 }, (_, k) => part.slice + k)).filter((s) => !ins.has(s));
+      if (absent.length) {
+        const first = Math.min(...absent);
+        if (!needed || first < needed.slice || needed.ins !== ins) needed = { ins, slice: first };
+        continue;
+      }
       const before = p.done;
       async function* counted(): AsyncGenerator<Uint8Array> {
         for await (const chunk of readFile(f, ins.slice)) {
@@ -319,8 +375,11 @@ export async function install(
     }
     p.done += f.size;
     p.filesDone++;
+    installed.add(f);
+    p.doneSlices = slicesDone();
     onProgress(p);
   }
+  if (needed) throw new SliceNeeded(sliceName(needed.ins.name, needed.slice), p);
   if (options.repack) await repack(target, repacked, p, onProgress, signal);
   return p;
 }

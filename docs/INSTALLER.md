@@ -155,6 +155,14 @@ None of these are needed by the engine.
   `*_xml.pak` and `common.pak`, with the language as the first word
   (`IPL_English.pak`, `English_DLC4.pak`, `english_patch_010900.pak`), and
   `_hd` in the name for the HD packs.
+- **Part by part.** Slices not in the folder are listed, not an error. The
+  install copies every file whose parts are in the slices present, then stops
+  (`SliceNeeded`), naming the next slice and the slices every wanted file of
+  which is installed (safe to delete). Pick the folder again to continue.
+- **Reading in place.** Each 10 MiB part inflates on its own, so a file can be
+  read at any offset by inflating just the parts that cover it
+  (`installerPak.ts`). The compact package is built that way, without
+  installing (`docs/SLIM.md`, phase 4).
 - **Resuming.**
   - `createWritable()` writes to a swap file and only replaces the real file
     when it is closed, so an interrupted file never looks complete.

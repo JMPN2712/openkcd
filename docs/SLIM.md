@@ -286,6 +286,9 @@ folder input; that copy has the HD texture paks, which the world view uses.
 | Full | 6.25 GiB (models 1.14, texture packs 4.79) | 15.46 GiB | **21.7 GiB** |
 | Potato | 2.11 GiB (models 1.14, texture packs 0.66) | 10.98 GiB | **13.1 GiB** |
 
+(These stores still held the other languages' voice patches, 0.34 GiB, since fixed: the
+installer-built Potato store is 10.64 GiB in 78 paks.)
+
 For comparison, the default install is 38.2 GiB, or about 23 GiB without its videos.
 
 - **The store holds** textures the package doesn't (5.3 GiB in Full), English voice (3.4 GiB),
@@ -293,6 +296,75 @@ For comparison, the default install is 38.2 GiB, or about 23 GiB without its vid
   (2.3 GiB).
 - **Texture compression** took the Full package from 9.16 to 6.25 GiB. Node deflates at level 9
   (a 600 s build); the browser's `CompressionStream` uses its default level.
+
+## Phase 4: straight from the installer (2026-10-23)
+
+Start page → pick or drop the installer folder → **Install: compact package, Full or Potato**
+(`compactInstall.ts`). Only the package and its store are kept; the start page then offers
+**Open compact package**.
+
+### How it reads the installer
+
+- **In place, with no copy.** GOG stores every file as zlib parts of 10 MiB, each inflatable on
+  its own (`docs/INSTALLER.md`). So `installerPak.ts` serves a pak straight from the `.bin`
+  files: a read inflates only the parts it covers (a 64-part cache, about 640 MiB, shared by all
+  paks). The pak readers only use `size`, `slice()`, `arrayBuffer()` and `stream()`, so the
+  whole build (level data, asset index, repack plan, package, store) runs on these unchanged,
+  just without the read workers.
+- **Checked** against `~/kcd1`: every pak's central directory, and 1,546 sampled entries, are
+  identical (`scripts/test-installer-pak.ts`). The repack plan from the installer alone takes
+  77 s: of the 37.4 GiB of wanted paks (one voice language, no videos), 23.2 GiB are not
+  replaced by later patches.
+- **Why not the planned single streaming pass.** Building needs random access across paks (a
+  later patch can replace any file of an earlier pak, and models and textures are gathered per
+  region). Random access by part gives the same "no intermediate copy" result with the existing
+  reader, without a second, stream-order parser.
+
+### Part by part (the low-storage mode)
+
+When some `.bin` slices are not in the folder:
+
+- The installer view lists the missing slices. **Install** copies every wanted pak whose parts
+  are all in the slices present into OPFS `compact-staging/` (whole, as they come).
+- It then stops and names the next slice needed, and the slices it is done with, which may be
+  deleted (`SliceNeeded` in `install.ts`). Picking the folder again, with the next slices,
+  continues; finished paks are kept.
+- Once every pak is staged, the package is built from the staging copy. The store is written pak
+  by pak, each staged pak deleted as soon as its store copy is written, and the staging folder
+  goes.
+- With every slice present, staging is skipped (the in-place path). Any earlier partial staging
+  is deleted.
+
+Checked in Node (`scripts/test-part-install.ts`). With slices 1–2: 5 paks, then "needs -3.bin,
+done with -1.bin". With -1.bin deleted and -3.bin added: 5 more paks, then "needs -4.bin, done
+with -2.bin". In Chrome the same first step took 34 s (`test-install-browser.ts --compact`, with
+a folder holding the first two slices).
+
+### Storage (Potato, base game and DLC, measured in Chrome)
+
+| | Installer files on disk | Browser storage, peak | Browser storage, at the end |
+|---|---:|---:|---:|
+| In place (every slice present) | all (56 GiB of `.bin` files for the base game) | 12.8 GiB | **12.8 GiB** |
+| Part by part | about 2 slices at a time (8.6 GiB) | about 40 GiB (the staged paks, plus the package) | **12.8 GiB** |
+
+- **In place, measured in Chrome:** 576 s from clicking Install to the package and store being
+  ready (Potato, 2.11 + 10.64 GiB). The page then opens it with no game files
+  (`test-install-browser.ts --compact=potato`).
+- **Part by part, not run to the end in Chrome:** the staged run needs about 40 GiB free, more
+  than the dev machine had. Its build step is the one tested in phases 2–3 (from installed paks
+  in OPFS), plus the deletes.
+- **Part by part trades storage for slices.** The browser holds the staged paks until the build,
+  but the player needs only one or two slices at a time (GOG lets them download one file at a
+  time).
+- **Lowering that peak** needs the repack plan before the patch slices arrive, but the patches
+  are in the last slices. Leaving out replaced files while staging (as the in-place path's plan
+  allows) would bring it to about 26 GiB if the patch slices could come first.
+
+### What's not in the package yet
+
+- **Videos:** left out (15 GiB); cutscenes need installing on demand or transcoding.
+- **Audio** stays in its original form in the store (Wwise/ogg); Opus is a later size saving.
+- **Animations** are in the store as `.caf`/`.dba` (2.6 GiB), not converted.
 
 ## Not decided yet
 
