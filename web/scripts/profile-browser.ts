@@ -1,0 +1,190 @@
+// The world view in real (headless) Chrome: builds the app, serves it, opens GAME_ROOT through the
+// page's folder input, starts Rataje at a quality preset (Henry at the market spawn), waits for
+// the streaming to settle, reads the HUD's fps and main-thread ms, and records a CPU profile of
+// the page. Headless Dawn (bench-presets.ts) times WebGPU differently from Chrome, where every
+// call crosses into the GPU process: this measures what a player gets.
+// Driven over the DevTools protocol (Node's built-in WebSocket); no npm deps.
+// usage: node scripts/profile-browser.ts [--root=GAME_ROOT] [--preset=high] [--settle=30]
+//          [--seconds=8] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080]
+//   CHROME=… picks the browser binary, CHROME_FLAGS=… adds flags; --probe stops after naming the
+//   WebGPU adapter; --trace also records a Chrome trace over the same seconds and prints how busy
+//   each thread was (the renderer's main thread, the GPU process's main thread, …). Prints the HUD and the hottest functions (self and total).
+
+import { spawn, type ChildProcess } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+
+const arg = (k: string, d: string) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3) ?? d;
+const root = arg("root", join(homedir(), "kcd1"));
+const preset = arg("preset", "high");
+const settle = Number(arg("settle", "15"));
+const seconds = Number(arg("seconds", "8"));
+const out = arg("out", "");
+const [W, H] = arg("size", "1920x1080").split("x").map(Number);
+const chrome = process.env.CHROME ?? "google-chrome";
+const PORT = 5198;
+const DEBUG = 9338;
+
+const children: ChildProcess[] = [];
+process.on("exit", () => children.forEach((c) => c.kill()));
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function waitFor<T>(what: string, fn: () => Promise<T | undefined>, ms = 60000): Promise<T> {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = await fn().catch(() => undefined);
+    if (v !== undefined) return v;
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+    await sleep(500);
+  }
+}
+
+// (not minified: the profile names real functions)
+const dist = join(tmpdir(), "openkcd-profile-dist");
+const build = spawn("node_modules/.bin/vite", ["build", "--outDir", dist, "--emptyOutDir", "--minify", "false"], { stdio: "ignore" });
+if ((await new Promise((r) => build.once("exit", r))) !== 0) throw new Error("vite build failed");
+children.push(spawn("node_modules/.bin/vite", ["preview", "--outDir", dist, "--port", String(PORT), "--strictPort"], { stdio: "ignore" }));
+await waitFor("Vite", async () => ((await fetch(`http://localhost:${PORT}/`)).ok ? true : undefined));
+const profile = await mkdtemp(join(tmpdir(), "openkcd-profile-"));
+children.push(
+  // Chrome on Linux has no WebGPU adapter without Vulkan, and headless falls back to SwiftShader
+  // (software) unless ANGLE runs on Vulkan and the GPU blocklist is off; frames unthrottled
+  spawn(chrome, ["--headless=new", "--enable-features=Vulkan", "--use-angle=vulkan", "--ignore-gpu-blocklist", "--enable-unsafe-webgpu", "--disable-gpu-vsync", "--disable-frame-rate-limit",
+    ...(process.env.CHROME_FLAGS ?? "").split(" ").filter(Boolean), `--window-size=${W},${H}`, `--remote-debugging-port=${DEBUG}`, `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "about:blank"], { stdio: "ignore" }),
+);
+const version = await waitFor("Chrome", async () => (await fetch(`http://127.0.0.1:${DEBUG}/json/version`)).json() as Promise<{ webSocketDebuggerUrl: string }>);
+
+// --- a minimal DevTools protocol client ---
+const ws = new WebSocket(version.webSocketDebuggerUrl);
+await new Promise((r) => ws.addEventListener("open", r, { once: true }));
+let nextId = 1;
+const pending = new Map<number, { ok: (v: any) => void; err: (e: Error) => void }>();
+const traceEvents: any[] = [];
+let traceDone: (() => void) | null = null;
+ws.addEventListener("message", (m) => {
+  const msg = JSON.parse(String(m.data));
+  if (msg.method === "Tracing.dataCollected") traceEvents.push(...msg.params.value);
+  if (msg.method === "Tracing.tracingComplete") traceDone?.();
+  if (msg.method === "Runtime.exceptionThrown") console.log("page exception:", msg.params.exceptionDetails.exception?.description ?? msg.params.exceptionDetails.text);
+  if (msg.method === "Runtime.consoleAPICalled" && msg.params.type === "error") console.log("page error:", msg.params.args.map((a: any) => a.value ?? a.description).join(" "));
+  const p = pending.get(msg.id);
+  if (!p) return;
+  pending.delete(msg.id);
+  if (msg.error) p.err(new Error(msg.error.message));
+  else p.ok(msg.result);
+});
+function send(method: string, params: object = {}, sessionId?: string): Promise<any> {
+  const id = nextId++;
+  ws.send(JSON.stringify({ id, method, params, sessionId }));
+  return new Promise((ok, err) => pending.set(id, { ok, err }));
+}
+const { targetId } = await send("Target.createTarget", { url: "about:blank" });
+const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
+const page = (method: string, params: object = {}) => send(method, params, sessionId);
+async function evaluate<T>(expression: string): Promise<T> {
+  const r = await page("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+  if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
+  return r.result.value as T;
+}
+await page("Runtime.enable");
+await page("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceScaleFactor: 1, mobile: false });
+await page("Page.navigate", { url: `http://localhost:${PORT}/` });
+await waitFor("the page", () => evaluate<boolean>(`document.readyState === "complete" && !!document.getElementById("open-input")`).then((v) => v || undefined));
+await evaluate(`localStorage.setItem("openkcd.quality", ${JSON.stringify(preset)})`);
+const adapter = await evaluate<string>(`navigator.gpu ? navigator.gpu.requestAdapter().then((a) => a ? a.info.vendor + " " + a.info.architecture + " " + a.info.description : "no adapter") : "no WebGPU"`);
+console.log(`WebGPU adapter: ${adapter}`);
+if (process.argv.includes("--probe")) process.exit(0);
+
+// hand the game folder to the input, as picking it would (Chrome fires "change" itself)
+const { root: doc } = await page("DOM.getDocument");
+const { nodeId } = await page("DOM.querySelector", { nodeId: doc.nodeId, selector: "#open-input" });
+await page("DOM.setFileInputFiles", { nodeId, files: [root] });
+const status = await waitFor("the game folder", () => evaluate<string>(`document.getElementById("status").textContent`).then((s) => (/archives|failed|no Data/.test(s) ? s : undefined)), 120000);
+console.log(status);
+await evaluate(`document.getElementById("world").click()`);
+const hud = () => evaluate<string>(`document.querySelector(".level-hud")?.textContent ?? ""`);
+await waitFor("Henry", () => hud().then((s) => (/Henry \(/.test(s) ? s : undefined)), 180000);
+// until the models within the streaming radius have loaded, then `settle` more seconds (textures)
+const t0 = Date.now();
+// (ten quiet seconds in a row: the view streams the free-fly start first, then Henry's spawn)
+let quiet = 0;
+await waitFor("the models", () => hud().then((s) => { quiet = /instances within/.test(s) && !/oading/.test(s) ? quiet + 1 : 0; return quiet >= 20 ? true : undefined; }), 900000);
+console.log(`models loaded in ${((Date.now() - t0) / 1000).toFixed(0)} s; settling ${settle} s…`);
+await sleep(settle * 1000);
+const readings: string[] = [];
+for (let k = 0; k < 3; k++) { readings.push((await hud()).replace(/ · .*?x /, " · x ").slice(0, 260)); await sleep(1000); }
+console.log(readings.join("\n"));
+
+const trace = process.argv.includes("--trace");
+if (trace) await send("Tracing.start", { transferMode: "ReportEvents", traceConfig: { includedCategories: ["toplevel", "gpu", "gpu.dawn", "disabled-by-default-gpu.dawn", "disabled-by-default-devtools.timeline"] } });
+await page("Profiler.enable");
+await page("Profiler.setSamplingInterval", { interval: 200 });
+await page("Profiler.start");
+await sleep(seconds * 1000);
+const { profile: cpu } = await page("Profiler.stop");
+if (trace) {
+  const done = new Promise<void>((r) => (traceDone = r));
+  await send("Tracing.end");
+  await done;
+  // busy time per thread: its top-level tasks (nested events are inside them)
+  const names = new Map<string, string>();
+  for (const e of traceEvents) if (e.ph === "M" && e.name === "thread_name") names.set(`${e.pid}:${e.tid}`, e.args.name);
+  for (const e of traceEvents) if (e.ph === "M" && e.name === "process_name") names.set(`${e.pid}`, e.args.name);
+  // (top-level tasks can nest: the union of their intervals)
+  const spans = new Map<string, [number, number][]>();
+  let t0 = Infinity, t1 = -Infinity;
+  for (const e of traceEvents) {
+    if (e.ph !== "X" || !e.cat?.includes("toplevel") || !e.dur) continue;
+    const k = `${e.pid}:${e.tid}`;
+    (spans.get(k) ?? spans.set(k, []).get(k)!).push([e.ts, e.ts + e.dur]);
+    t0 = Math.min(t0, e.ts); t1 = Math.max(t1, e.ts + e.dur);
+  }
+  const busy = new Map<string, number>();
+  for (const [k, l] of spans) {
+    l.sort((a, b) => a[0] - b[0]);
+    let sum = 0, end = -Infinity;
+    for (const [a, b] of l) { if (b > end) { sum += b - Math.max(a, end); end = b; } }
+    busy.set(k, sum);
+  }
+  // the GPU process's main thread: event names by total time (nested ones included)
+  const gpuMain = [...names].find(([k, v]) => v === "CrGpuMain" && names.get(k.split(":")[0]) === "GPU Process")?.[0];
+  const byName = new Map<string, number>();
+  for (const e of traceEvents) if (e.ph === "X" && e.dur && `${e.pid}:${e.tid}` === gpuMain) byName.set(e.name, (byName.get(e.name) ?? 0) + e.dur);
+  console.log("\nGPU process main thread, by event (ms per second):");
+  for (const [k, v] of [...byName].sort((a, b) => b[1] - a[1]).slice(0, 40)) console.log(`  ${(v / ((t1 - t0) / 1000)).toFixed(0).padStart(5)}  ${k}`);
+  console.log("\nthreads by busy time over the trace:");
+  for (const [k, v] of [...busy].sort((a, b) => b[1] - a[1]).slice(0, 8)) console.log(`  ${((v / (t1 - t0)) * 100).toFixed(0).padStart(4)}%  ${names.get(k.split(":")[0]) ?? "?"} / ${names.get(k) ?? k}`);
+}
+console.log((await hud()).slice(0, 120));
+if (out) await writeFile(out, JSON.stringify(cpu));
+
+// the hottest functions: self time, and total time (callers included once per sample)
+type Node = { id: number; callFrame: { functionName: string; url: string; lineNumber: number }; children?: number[] };
+const nodes = new Map<number, Node>((cpu.nodes as Node[]).map((n) => [n.id, n]));
+const parent = new Map<number, number>();
+for (const n of nodes.values()) for (const c of n.children ?? []) parent.set(c, n.id);
+const name = (n: Node) => `${n.callFrame.functionName || "(anonymous)"} ${n.callFrame.url.split("/").pop()?.replace(/-[\w-]{8}\.js$/, ".js")}:${n.callFrame.lineNumber + 1}`;
+const self = new Map<string, number>(), total = new Map<string, number>();
+let all = 0, idle = 0;
+(cpu.samples as number[]).forEach((id, i) => {
+  const dt = cpu.timeDeltas[i] as number;
+  all += dt;
+  const n = nodes.get(id)!;
+  if (n.callFrame.functionName === "(idle)") { idle += dt; return; }
+  self.set(name(n), (self.get(name(n)) ?? 0) + dt);
+  const seen = new Set<string>();
+  for (let j: number | undefined = id; j !== undefined; j = parent.get(j)) {
+    const k = name(nodes.get(j)!);
+    if (!seen.has(k)) { seen.add(k); total.set(k, (total.get(k) ?? 0) + dt); }
+  }
+});
+const pct = (v: number) => `${((v / all) * 100).toFixed(1).padStart(5)}%`;
+console.log(`\nprofile ${(all / 1e6).toFixed(1)} s, idle ${pct(idle)}\nself:`);
+for (const [k, v] of [...self].sort((a, b) => b[1] - a[1]).slice(0, 25)) console.log(`  ${pct(v)}  ${k}`);
+console.log("total:");
+for (const [k, v] of [...total].sort((a, b) => b[1] - a[1]).slice(0, 30)) console.log(`  ${pct(v)}  ${k}`);
+
+ws.close();
+await Promise.all(children.map((c) => new Promise((r) => (c.exitCode !== null ? r(null) : (c.once("exit", r), c.kill())))));
+await rm(profile, { recursive: true, force: true });
+process.exit(0);

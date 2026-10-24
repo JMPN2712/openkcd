@@ -4,7 +4,7 @@
 // plays a relaxed idle, the walk cycle in place, or the sleeping clip in bed.
 
 import { CharacterDb, loadCharacter, poseMatrix, type LoadedCharacter, type ScheduleItem } from "./character.ts";
-import { parseSkeleton, type Skeleton } from "./skeleton.ts";
+import { parseSkeleton, skeletonKey, type Skeleton } from "./skeleton.ts";
 import { Dba } from "./dba.ts";
 import { Animator } from "./pose.ts";
 import type { Clip } from "./anim.ts";
@@ -75,6 +75,8 @@ export interface NpcRenderItem {
   model: LoadedModel;
   transform: Float32Array;
   layer: number;
+  /** the parts of one NPC with the same bones share a skinning palette */
+  paletteKey?: string;
 }
 
 interface Rig {
@@ -429,7 +431,7 @@ export function npcItems(npcs: WorldNpc[], base = 0): NpcRenderItem[] {
     n.items = [];
     for (const { model, part, transform } of n.character.parts) {
       n.items.push(base + items.length);
-      items.push({ model, transform: transform ? multiply(n.world, transform) : n.world, layer: part.layer });
+      items.push({ model, transform: transform ? multiply(n.world, transform) : n.world, layer: part.layer, paletteKey: model.skeleton ? `${n.entity.id}:${skeletonKey(model.skeleton)}` : undefined });
     }
   }
   return items;
@@ -438,6 +440,8 @@ export function npcItems(npcs: WorldNpc[], base = 0): NpcRenderItem[] {
 /** Renderer operations animateNpcs needs (ModelRenderer's). */
 export interface NpcRendererOps {
   setPalette(item: number, m: Float32Array): void;
+  /** the item's palette is set through another item's (shared: skip it) */
+  paletteShared?(item: number): boolean;
   /** hide an item from the camera only (it still casts a shadow); false when unsupported */
   setItemHidden?(item: number, hidden: boolean): boolean;
   paletteSize(item: number): number;
@@ -489,7 +493,7 @@ export function animateNpcs(npcs: WorldNpc[], world: NpcWorld, minute: number, s
     }
     n.animator.evaluate(c, frame, p.pose === "walk");
     n.character.parts.forEach(({ model }, k) => {
-      if (model.skeleton && r.paletteSize(n.items[k])) r.setPalette(n.items[k], n.animator.palette(model.skeleton));
+      if (model.skeleton && r.paletteSize(n.items[k]) && !r.paletteShared?.(n.items[k])) r.setPalette(n.items[k], n.animator.palette(model.skeleton));
     });
   }
 }

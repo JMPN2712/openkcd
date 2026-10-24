@@ -248,6 +248,7 @@ for (const pp of gpus) {
       console.log(line);
       results.push(line);
       console.log(`     per frame: ${Object.entries(phase).map(([k, v]) => `${k} ${(v / (FRAMES + 30)).toFixed(2)} ms`).join(", ")}`);
+      console.log(`     draw calls (camera, cascades): world ${models.viewCalls().join("/")}, NPCs ${npcR.viewCalls().join("/")}, grass ${grassR.viewCalls().join("/")}`);
       if (pool) console.log(`     ${pool.summary()}; settled in ${ramp} frames (${(ms / 1000).toFixed(1)} s); ${pool.stats.loads} loads, ${pool.stats.shrinks} shrinks, ${pool.stats.evicted} evicted`);
     }
     for (const r of [terrainR, models, water, playerR, npcR, grassR, farTrees, sky]) r.destroy();

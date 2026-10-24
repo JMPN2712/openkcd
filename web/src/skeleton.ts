@@ -24,6 +24,18 @@ export interface Skeleton {
   byName: Map<string, number>;
 }
 
+const keys = new WeakMap<Skeleton, string>();
+
+/** Identifies a mesh's bone list (names and bind poses): meshes with equal keys skin with the same palette. */
+export function skeletonKey(sk: Skeleton): string {
+  let k = keys.get(sk);
+  if (k === undefined) {
+    k = sk.bones.map((b) => `${b.name}:${Array.from(b.bindPose, (v) => Math.round(v * 1e4)).join(",")}`).join(";");
+    keys.set(sk, k);
+  }
+  return k;
+}
+
 const BONE_SIZE = 584;
 const HEADER = 32;
 

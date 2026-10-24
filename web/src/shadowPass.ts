@@ -6,11 +6,16 @@ import type { ShadowMap } from "./shadow.ts";
 import { selectLods, type WorldScene } from "./world.ts";
 import type { Vec3 } from "./mat4.ts";
 
+/** The far cascade is redrawn every this many frames (or sooner, see render). */
+const FAR_EVERY = 4;
+
 export class ShadowCasters {
   private out: Float32Array[][] = [];
   private counts: number[][] = [];
   private scene: WorldScene | null = null;
   private frame = 0;
+  /** where the far cascades were last drawn from: eye and forward direction */
+  private farFrom: { eye: Vec3; fwd: Vec3 } | null = null;
 
   /** Per-cascade instance buffers sized for a scene's items (lodItems order). */
   setScene(scene: WorldScene, capacities: number[], cascades: number): void {
@@ -26,9 +31,17 @@ export class ShadowCasters {
   render(enc: GPUCommandEncoder, map: ShadowMap, eye: Vec3, fwd: Vec3, toLight: Vec3, world: ModelRenderer, others: ModelRenderer[], opts: { lodScale?: number } = {}): void {
     if (!map.cascades || !this.scene) return;
     if (toLight[2] < 0.03) { map.disable(); return; }
-    // the far cascade is redrawn every second frame (its lag doesn't show at that distance)
+    // the far cascade is redrawn every fourth frame (its lag doesn't show at that distance), and
+    // sooner after a turn or a run (it is centred ahead of the camera: a stale one may not cover
+    // the view). Every second frame, its 2,500 draws on High were a quarter of the GPU process's
+    // work in Chrome
     this.frame++;
-    const due = (c: number) => c === 0 || map.cascades === 1 || this.frame % 2 === 0;
+    const f = this.farFrom;
+    const farDue = !f || this.frame % FAR_EVERY === 0 ||
+      Math.hypot(eye[0] - f.eye[0], eye[1] - f.eye[1], eye[2] - f.eye[2]) > 8 ||
+      fwd[0] * f.fwd[0] + fwd[1] * f.fwd[1] + fwd[2] * f.fwd[2] < Math.cos((20 * Math.PI) / 180);
+    if (farDue && map.cascades > 1) this.farFrom = { eye: [...eye], fwd: [...fwd] };
+    const due = (c: number) => c === 0 || map.cascades === 1 || farDue;
     map.update(eye, fwd, toLight, 250, due);
     for (let c = 0; c < map.cascades; c++) {
       if (!due(c)) continue;
