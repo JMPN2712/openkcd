@@ -3,14 +3,17 @@
 The milestones come in order. Every feature ships with a **Potato** preset,
 because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
 
-## Where things stand (2026-10-23)
+## Where things stand (2026-10-24)
 
-- **Milestone 2 is in progress, close to done.** The compact package
-  (`docs/SLIM.md`) is built in the browser straight from the GOG installer,
-  in place or part by part, and the engine runs from it alone: Potato
-  12.8 GiB, Full about 21 GiB, against 38.2 GiB for the repacked install.
-  The open items are listed under milestone 2 below. Milestone 3 (release)
-  work is on hold until the converter is finished.
+- **Milestone 2: the converter is finished; what is left is size work and
+  checks on other hardware.** The compact package (`docs/SLIM.md`) is built
+  in the browser straight from the GOG installer, in place (576 s) or part
+  by part (473 s, two slices at a time), and the engine runs from it alone:
+  Potato 12.8 GiB, Full about 21 GiB, against 38.2 GiB for the repacked
+  install. Still open under milestone 2: the Vega 7 laptop, Opus audio and
+  converted animations, cutscene videos. Whether the milestone closes
+  before those (they are size savings, the package works without them) is
+  the user's call.
 - **Performance and streaming (2026-10-23):** Chrome on High in the market
   went from 43 fps to about 130; streaming steps no longer stall (2.6 s →
   under 0.1 s, loading in slices of about 5 ms); the market loads in 53 s
@@ -245,13 +248,14 @@ playable frame rates on the Potato preset.
       next slice, lists the ones done with (safe to delete), resumes; then
       builds from that copy and deletes it pak by pak.
 - [ ] Still open in milestone 2:
-  - [ ] The part-by-part path run to the end in Chrome (it needs about
-        40 GiB free; tested in Node and up to the first slice in Chrome).
+  - [x] The part-by-part path run to the end in Chrome (2026-10-24): 473 s,
+        two slices at a time, peak 37.2 GiB, 12.76 GiB at the end; an
+        interrupted store step carries on without the deleted slices.
   - [ ] Try it on the Vega 7 laptop (memory: the in-place build keeps up to
         640 MiB of inflated parts).
   - [ ] Opus audio and converted animations (sizes; they work as they are).
   - [ ] Cutscene videos, on demand or transcoded.
-  - [ ] Cancel during the build step (only the copy step can be cancelled).
+  - [x] Cancel during the build step.
 - [x] Afterwards the original install or installer can be deleted.
 - [x] Installed-folder mode stays as an alternative.
 - [ ] No game data is ever hosted or distributed by the project.

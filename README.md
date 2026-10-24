@@ -76,7 +76,7 @@ npm run dev        # then open http://localhost:5173/ in Chrome
 npm run test:pak   # Node smoke test against ~/kcd1 (or pass a game root)
 node scripts/test-inno.ts                        # read the GOG installers (base + DLC) in place: file lists, sampled files vs ~/kcd1 and MD5s (--full: every file, ~4 min)
 node scripts/test-install.ts ~/Downloads/kingdom_come_deliverance/DLC /tmp/inst --only=band_of_bastards   # install flow into a folder, compare with ~/kcd1, rerun skips, repack
-node scripts/test-install-browser.ts ~/Downloads/kingdom_come_deliverance   # headless Chrome: install into OPFS through the page, check the copy, open it (--compact=potato|full: the compact package straight from the installer, then open it with no game files)
+node scripts/test-install-browser.ts ~/Downloads/kingdom_come_deliverance   # headless Chrome: install into OPFS through the page, check the copy, open it (--compact=potato|full: the compact package straight from the installer, then open it with no game files; --part=2: part by part, two slices at a time, deleting each one the page is done with; --interrupt: Cancel while the store is written, then carry on)
 node scripts/test-part-install.ts ~/Downloads/kingdom_come_deliverance      # installing part by part: with only some .bin slices, stop at the next one, list the slices done with, resume (in memory)
 node scripts/test-installer-pak.ts ~/Downloads/kingdom_come_deliverance     # paks read in place from the installer: central directories and entries vs ~/kcd1, a repack plan from the installer alone
 node scripts/test-repack.ts                      # leave out replaced files: repack the default install into a scratch folder, read it back, check the engine picks the same files (with and without HD)

@@ -7,7 +7,13 @@
 // Driven over the DevTools protocol (Node's built-in WebSocket); no npm deps.
 // With --compact=full|potato it installs the compact package instead (compactInstall.ts) and
 // checks that only the package and its store are left, and that the page opens them.
-// usage: node scripts/test-install-browser.ts INSTALLER_DIR [--root=GAME_ROOT] [--keep] [--compact=full|potato]
+// With --part=N as well it goes part by part, as a player short of disk space would: a work folder
+// holds the base game's installer with only N of its .bin slices (copies, under ~/.cache), and
+// after each stop the slices the page says are done with are deleted and the next ones copied in,
+// until the package is built.
+// --interrupt also presses Cancel while the file store is being written, then picks the folder
+// again: the build carries on from the saved store plan, asking for no slice already deleted.
+// usage: node scripts/test-install-browser.ts INSTALLER_DIR [--root=GAME_ROOT] [--keep] [--compact=full|potato] [--part=N] [--interrupt]
 //   INSTALLER_DIR must hold real files: Chrome's folder upload skips symlinks.
 //   --keep keeps the browser profile (and its OPFS copy) for a later run.
 //   CHROME=… picks the browser binary, PROFILE_DIR=… where the profile goes
@@ -15,17 +21,41 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { open, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, open, readdir, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { sliceName } from "../src/inno.ts";
 
-const dir = resolve(process.argv.slice(2).find((a) => !a.startsWith("--")) ?? "");
+const srcDir = resolve(process.argv.slice(2).find((a) => !a.startsWith("--")) ?? "");
 const root = process.argv.find((a) => a.startsWith("--root="))?.slice(7) ?? join(homedir(), "kcd1");
 const keep = process.argv.includes("--keep");
 const compact = process.argv.find((a) => a.startsWith("--compact="))?.slice(10);
+const part = Number(process.argv.find((a) => a.startsWith("--part="))?.slice(7) ?? 0);
+if (part && !compact) throw new Error("--part needs --compact");
+let interrupt = process.argv.includes("--interrupt");
 const chrome = process.env.CHROME ?? "google-chrome";
 // a throwaway profile on disk (not tmpdir(): /tmp is often a small tmpfs); with --keep it stays for a later run
 const profile = join(process.env.PROFILE_DIR ?? join(homedir(), ".cache"), "openkcd-test-profile");
+// part by part: a work folder with the DLC installers (not the HD packs, which the package leaves
+// out) and the base game's installer with its first slices
+const dir = part ? join(homedir(), ".cache", "openkcd-part-work") : srcDir;
+const baseExe = part ? (await readdir(srcDir)).find((n) => n.startsWith("setup_") && n.endsWith(".exe"))! : "";
+let nextSlice = 0;
+async function addSlices(upTo: number): Promise<void> {
+  for (; nextSlice < upTo; nextSlice++) {
+    const name = sliceName(baseExe, nextSlice);
+    if (!(await stat(join(srcDir, name)).catch(() => null))) break;
+    await copyFile(join(srcDir, name), join(dir, name));
+    console.log(`  + ${name}`);
+  }
+}
+if (part) {
+  await rm(dir, { recursive: true, force: true });
+  await mkdir(join(dir, "DLC"), { recursive: true });
+  await copyFile(join(srcDir, baseExe), join(dir, baseExe));
+  for (const n of await readdir(join(srcDir, "DLC"))) if (!/hd_(texture|voice|sound)/.test(n)) await copyFile(join(srcDir, "DLC", n), join(dir, "DLC", n));
+  await addSlices(part);
+}
 const PORT = 5199;
 const DEBUG = 9339;
 
@@ -91,45 +121,93 @@ async function evaluate<T>(expression: string): Promise<T> {
 // module scripts have run once the document is complete
 await waitFor("the page", () => evaluate<boolean>(`document.readyState === "complete" && !!document.getElementById("install-input")`).then((v) => v || undefined));
 
-// hand the folder to the input, as picking it would
+// hand the folder to the input, as picking it would; Install; wait for it to stop
 const { root: doc } = await page("DOM.getDocument");
 const { nodeId } = await page("DOM.querySelector", { nodeId: doc.nodeId, selector: "#install-input" });
-await page("DOM.setFileInputFiles", { nodeId, files: [dir] });
-// Chrome fills the input asynchronously and fires "change" itself; Chromium fired none, so
-// fire one only if the page hasn't reacted. Folder uploads skip symlinks.
-const picked = await waitFor("the picked files", () => evaluate<number>(`document.getElementById("install-input").files.length`).then((n) => n || undefined));
-await new Promise((r) => setTimeout(r, 1000));
-await evaluate(`document.getElementById("preview").textContent.trim() || document.getElementById("install-input").dispatchEvent(new Event("change"))`);
-console.log(`picked ${picked} files from ${dir}`);
+async function pickAndInstall(): Promise<{ result: string; cls: string }> {
+  // (picking the same folder again: an emptied input and preview, so the page reacts as to a new pick)
+  await evaluate(`(() => { document.getElementById("install-input").value = ""; document.getElementById("preview").replaceChildren(); })()`);
+  await page("DOM.setFileInputFiles", { nodeId, files: [dir] });
+  // Chrome fills the input asynchronously and fires "change" itself; Chromium fired none, so
+  // fire one only if the page hasn't reacted. Folder uploads skip symlinks.
+  const picked = await waitFor("the picked files", () => evaluate<number>(`document.getElementById("install-input").files.length`).then((n) => n || undefined));
+  await new Promise((r) => setTimeout(r, 1000));
+  await evaluate(`document.getElementById("preview").textContent.trim() || document.getElementById("install-input").dispatchEvent(new Event("change"))`);
+  console.log(`picked ${picked} files from ${dir}`);
 
-const listed = await waitFor("the installer list", () =>
-  evaluate<string | null>(`(() => { const b = document.querySelector(".install-go"); const e = document.querySelector(".preview-body .error"); return e ? "ERROR " + e.textContent : b ? [...document.querySelectorAll(".install-list li")].map((li) => li.textContent).join("\\n") : null; })()`).then((v) => v ?? undefined),
-);
-console.log(listed);
-if (listed.startsWith("ERROR")) process.exit(1);
+  const listed = await waitFor("the installer list", () =>
+    evaluate<string | null>(`(() => { const b = document.querySelector(".install-go"); const e = document.querySelector(".preview-body .error"); return e ? "ERROR " + e.textContent : b ? [...document.querySelectorAll(".install-list li")].map((li) => li.textContent).join("\\n") : null; })()`).then((v) => v ?? undefined),
+  );
+  console.log(listed);
+  if (listed.startsWith("ERROR")) process.exit(1);
 
-if (compact) {
-  await evaluate(`(() => { const m = document.querySelector(".install-mode"); m.value = ${JSON.stringify(compact)}; m.dispatchEvent(new Event("change")); })()`);
-  await new Promise((r) => setTimeout(r, 500));
-  console.log(await evaluate<string>(`[...document.querySelectorAll(".preview-body .note")].map((n) => n.textContent).find((t) => /storage/.test(t)) ?? ""`));
+  if (compact) {
+    await evaluate(`(() => { const m = document.querySelector(".install-mode"); m.value = ${JSON.stringify(compact)}; m.dispatchEvent(new Event("change")); })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    console.log(await evaluate<string>(`[...document.querySelectorAll(".preview-body .note")].map((n) => n.textContent).find((t) => /storage/.test(t)) ?? ""`));
+  }
+  const t0 = Date.now();
+  await evaluate(`document.querySelector(".install-go").click()`);
+  let lastLine = "";
+  const outcome = await waitFor(
+    "the install",
+    async () => {
+      const s = await evaluate<{ line: string; result: string; cls: string; busy: boolean }>(
+        `(() => { const r = document.querySelector(".install-line ~ .note, .install-line ~ .error"); const b = document.querySelector(".install-go"); return { line: document.querySelector(".install-line")?.textContent ?? "", result: r?.textContent ?? "", cls: r?.className ?? "", busy: b.disabled }; })()`,
+      );
+      if (s.line && s.line !== lastLine && Date.now() % 15000 < 600) console.log("  " + s.line);
+      if (interrupt && /Writing the file store: ([3-9]|\d\d+)\//.test(s.line)) {
+        interrupt = false;
+        console.log(`  cancelling at "${s.line}"`);
+        await evaluate(`[...document.querySelectorAll(".tex-controls button")].find((b) => b.textContent === "Cancel").click()`);
+      }
+      lastLine = s.line;
+      return s.busy ? undefined : s;
+    },
+    4 * 3600 * 1000,
+  );
+  console.log(`${outcome.result} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+  if (/^Cancelled/.test(outcome.result)) return { result: outcome.result, cls: "cancelled" };
+  if (!outcome.cls.includes("ok")) process.exit(1);
+  return outcome;
 }
-const t0 = Date.now();
-await evaluate(`document.querySelector(".install-go").click()`);
-let lastLine = "";
-const outcome = await waitFor(
-  "the install",
-  async () => {
-    const s = await evaluate<{ line: string; result: string; cls: string; busy: boolean }>(
-      `(() => { const r = document.querySelector(".install-line ~ .note, .install-line ~ .error"); const b = document.querySelector(".install-go"); return { line: document.querySelector(".install-line")?.textContent ?? "", result: r?.textContent ?? "", cls: r?.className ?? "", busy: b.disabled }; })()`,
-    );
-    if (s.line && s.line !== lastLine && Date.now() % 15000 < 600) console.log("  " + s.line);
-    lastLine = s.line;
-    return s.busy ? undefined : s;
-  },
-  4 * 3600 * 1000,
-);
-console.log(`${outcome.result} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
-if (!outcome.cls.includes("ok")) process.exit(1);
+const tAll = Date.now();
+let outcome = await pickAndInstall();
+let peak = 0;
+const opfsUsage = () => evaluate<number>(`navigator.storage.estimate().then((e) => e.usage)`);
+for (let round = 1; part && /part-next|cancelled/.test(outcome.cls); round++) {
+  if (outcome.cls === "cancelled") {
+    // picked again with the same slices: the store carries on
+    console.log(`round ${round + 1}: after cancelling`);
+    outcome = await pickAndInstall();
+    if (!/Carrying on|ready/i.test(outcome.result + (await evaluate<string>(`document.querySelector(".install-line")?.textContent ?? ""`)))) console.log("note: no resume line seen");
+    continue;
+  }
+  // as the player would: delete the slices it is done with, add the next one(s)
+  peak = Math.max(peak, await opfsUsage());
+  const next = /Next, add (\S+\.bin)/.exec(outcome.result)?.[1];
+  const done = /safe to delete: (.*)\.$/.exec(outcome.result)?.[1].split(", ") ?? [];
+  if (!next || round > 40) throw new Error(`round ${round}: no next slice in "${outcome.result}"`);
+  for (const n of done) {
+    const at = [join(dir, n), join(dir, "DLC", n)];
+    for (const f of at) await rm(f, { force: true });
+    console.log(`  - ${n}`);
+  }
+  // (slices holding nothing wanted, e.g. only videos, are skipped)
+  const asked = Array.from({ length: 64 }, (_, i) => i).find((i) => sliceName(baseExe, i) === next);
+  if (asked === undefined || asked < nextSlice) throw new Error(`round ${round}: asked for ${next}, which was here before`);
+  if (asked > nextSlice) console.log(`  (skipping ${sliceName(baseExe, nextSlice)}${asked > nextSlice + 1 ? ` to ${sliceName(baseExe, asked - 1)}` : ""}: nothing wanted in it)`);
+  nextSlice = Math.max(nextSlice, asked);
+  const present = (await readdir(dir)).filter((n) => n.endsWith(".bin")).length;
+  await addSlices(nextSlice + Math.max(1, part - present));
+  console.log(`round ${round + 1} (${((Date.now() - tAll) / 1000).toFixed(0)} s so far, browser storage ${(peak / 2 ** 30).toFixed(1)} GiB peak)`);
+  outcome = await pickAndInstall();
+}
+if (part) {
+  peak = Math.max(peak, await opfsUsage());
+  console.log(`part by part: ${((Date.now() - tAll) / 1000).toFixed(0)} s in all, browser storage peak at the stops ${(peak / 2 ** 30).toFixed(1)} GiB`);
+  await rm(dir, { recursive: true, force: true });
+}
 const quit = async (code: number) => {
   ws.close();
   // Chrome keeps writing its profile until it has exited
@@ -137,7 +215,7 @@ const quit = async (code: number) => {
   if (!keep) await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
   process.exit(code);
 };
-if (compact && outcome.cls.includes("part-next")) {
+if (compact && !part && outcome.cls.includes("part-next")) {
   // part by part: stopped for the next slice; what was copied so far is staged
   const staged = await evaluate<string[]>(`(async () => {
     const out = [];

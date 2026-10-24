@@ -7,11 +7,13 @@
 //   the slices allow (install.ts stops with SliceNeeded and lists the slices it is done with,
 //   which may be deleted). Once every pak is there, the package is built from that copy, and the
 //   store written pak by pak, each staged pak deleted as soon as its store copy is written.
+//   Interrupted then (cancelled, or the tab closed), it carries on from the saved store plan: the
+//   staged paks already deleted count as installed, so their slices aren't asked for again.
 
-import { install, opfsTarget, wanted, type FoundInstaller, type InstallOptions, type Progress } from "./install.ts";
+import { install, opfsTarget, wanted, type Target, type FoundInstaller, type InstallOptions, type Progress } from "./install.ts";
 import { installerPak, PartCache } from "./installerPak.ts";
 import { scanDirectory } from "./paks.ts";
-import { buildSlimInBrowser, type SlimVariant } from "./slimView.ts";
+import { buildSlimInBrowser, storeInProgress, type SlimVariant } from "./slimView.ts";
 import { clearLevelCaches } from "./levelData.ts";
 
 const STAGING = "compact-staging";
@@ -43,11 +45,15 @@ export async function compactInstall(
       await opfs.removeEntry(STAGING, { recursive: true }).catch(() => {});
       const cache = new PartCache(64);
       const paks = installers.flatMap((ins) => ins.installer.files.filter((f) => wanted(f, opts)).map((f) => installerPak(f, ins.slice, cache)));
-      return await buildSlimInBrowser(paks, variant, build, true, { workers: false, language: opts.language });
+      return await buildSlimInBrowser(paks, variant, build, true, { workers: false, language: opts.language, signal });
     }
     // part by part: throws SliceNeeded until every wanted pak is copied
     const staging = await opfs.getDirectoryHandle(STAGING, { create: true });
-    await install(installers, opts, opfsTarget(staging), (progress) => onProgress({ stage: "install", progress }), signal);
+    const staged = opfsTarget(staging);
+    // a build interrupted while writing the store: the paks it has written (and deleted) count as here
+    const written = await storeInProgress(variant);
+    const target: Target = written ? { ...staged, size: async (path) => { const n = await staged.size(path); return n >= 0 ? n : written.get(path.toLowerCase()) ?? -1; } } : staged;
+    await install(installers, opts, target, (progress) => onProgress({ stage: "install", progress }), signal);
     const paks = await scanDirectory(staging);
     const remove = async (path: string) => {
       const parts = path.split("/");
@@ -58,6 +64,8 @@ export async function compactInstall(
     const result = await buildSlimInBrowser(paks, variant, build, true, {
       afterStorePak: (source) => remove(source.path).catch(() => {}),
       language: opts.language,
+      resumable: true,
+      signal,
     });
     // (with what the store didn't need: paks the package holds whole)
     await opfs.removeEntry(STAGING, { recursive: true }).catch(() => {});

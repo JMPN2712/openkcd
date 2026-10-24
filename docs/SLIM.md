@@ -350,9 +350,18 @@ a folder holding the first two slices).
 - **In place, measured in Chrome:** 576 s from clicking Install to the package and store being
   ready (Potato, 2.11 + 10.64 GiB). The page then opens it with no game files
   (`test-install-browser.ts --compact=potato`).
-- **Part by part, not run to the end in Chrome:** the staged run needs about 40 GiB free, more
-  than the dev machine had. Its build step is the one tested in phases 2–3 (from installed paks
-  in OPFS), plus the deletes.
+- **Part by part, measured in Chrome (2026-10-24):** 473 s in all from the first Install to the
+  package and store being ready, two base-game slices at a time, each deleted as soon as the
+  page said it was done with it (`test-install-browser.ts --compact=potato --part=2`). Ten stops;
+  slice -6 is never asked for (nothing wanted is in it). Browser storage peaked at 37.2 GiB (all
+  staged paks) and ended at 12.76 GiB, the same package and store as the in-place build (78
+  paks, 10.64 GiB). Timed with another game running on the machine.
+- **Interrupted while the store is written** (cancelled, or the tab closed): the staged paks
+  already written to the store are deleted, and their slices may be gone. So once the package is
+  complete, the store plan is saved (`store-plan.json`: the source paks and each store pak's
+  left-out entries). Installing again counts the deleted paks as installed and writes only the
+  store paks still missing. Checked with `--interrupt` (Cancel at pak 3 of 78, then on from 4).
+- **Cancel** works through the whole build, not only the copy.
 - **Part by part trades storage for slices.** The browser holds the staged paks until the build,
   but the player needs only one or two slices at a time (GOG lets them download one file at a
   time).
