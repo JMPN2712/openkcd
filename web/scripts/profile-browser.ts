@@ -5,9 +5,10 @@
 // call crosses into the GPU process: this measures what a player gets.
 // Driven over the DevTools protocol (Node's built-in WebSocket); no npm deps.
 // usage: node scripts/profile-browser.ts [--root=GAME_ROOT] [--preset=high] [--settle=30]
-//          [--seconds=8] [--windowed] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080]
+//          [--seconds=8] [--windowed] [--fly=SECONDS] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080]
 //   CHROME=… picks the browser binary, CHROME_FLAGS=… adds flags; --probe stops after naming the
-//   WebGPU adapter; --trace also records a Chrome trace over the same seconds and prints how busy
+//   WebGPU adapter; --fly then flies north-west across the map (free-fly, 60 m/s: a streaming
+//   step every few seconds) printing the HUD every 10 s, then profiles there; --trace also records a Chrome trace over the same seconds and prints how busy
 //   each thread was (the renderer's main thread, the GPU process's main thread, …). Prints the HUD and the hottest functions (self and total).
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -116,6 +117,28 @@ await sleep(settle * 1000);
 const readings: string[] = [];
 for (let k = 0; k < 3; k++) { readings.push((await hud()).replace(/ · .*?x /, " · x ").slice(0, 260)); await sleep(1000); }
 console.log(readings.join("\n"));
+
+const fly = Number(arg("fly", "0"));
+if (fly) {
+  // F: free-fly; drag to turn from south to north-west and level the view; hold W
+  const key = async (code: string, type: "keyDown" | "keyUp") => page("Input.dispatchKeyEvent", { type, code, key: code.replace(/^Key/, "").toLowerCase(), windowsVirtualKeyCode: code === "KeyF" ? 70 : code === "KeyW" ? 87 : 0 });
+  await evaluate(`document.querySelector(".level-canvas").focus()`);
+  await key("KeyF", "keyDown"); await key("KeyF", "keyUp");
+  await page("Input.dispatchMouseEvent", { type: "mousePressed", x: 400, y: 500, button: "left", clickCount: 1 });
+  for (let k = 1; k <= 10; k++) await page("Input.dispatchMouseEvent", { type: "mouseMoved", x: 400 + 59 * k, y: 500 - 10 * k, button: "left" });
+  await page("Input.dispatchMouseEvent", { type: "mouseReleased", x: 990, y: 400, button: "left", clickCount: 1 });
+  await key("KeyW", "keyDown");
+  for (let t = 0; t < fly; t += 10) {
+    await sleep(10000);
+    // (keys repeat as held keys do, so the view never sees them released)
+    await key("KeyW", "keyDown");
+    console.log(`  ${t + 10} s: ${(await hud()).replace(/ · (terrain|textures|Henry|free-fly)[^·]*/g, "").slice(0, 200)}`);
+  }
+  await key("KeyW", "keyUp");
+  await sleep(3000);
+}
+// (no screenshots: headless Chrome captures the WebGPU canvas blank; GPU errors show in the HUD
+// readings and as "page error" lines)
 
 const trace = process.argv.includes("--trace");
 if (trace) await send("Tracing.start", { transferMode: "ReportEvents", traceConfig: { includedCategories: ["toplevel", "gpu", "gpu.dawn", "disabled-by-default-gpu.dawn", "disabled-by-default-devtools.timeline"] } });

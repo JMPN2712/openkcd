@@ -234,6 +234,12 @@ south-west from the market):
   meshes and builds their draws a few milliseconds at a time, yielding between slices.
 - **Collision** bins the scene's clusters (64 m cells) instead of every instance; a 4 m cell
   finds its instances when it is first needed.
+- **Black screen (fixed the same day):** kept draws that `prepare()` built ahead of a rebuild were
+  not rebound when the texture pool replaced one of their textures; once the rebuild drew them,
+  every submit failed ("Destroyed texture … used in a submit") and the view went black. The
+  renderer now indexes kept draws by texture too (`keptByTexture`). `profile-browser.ts --fly=120`
+  (free-fly across the map) reproduced it within 10 s and runs clean now. The world view shows
+  WebGPU errors and a lost device in its HUD (they were silent).
 - **Startup:** the free-fly camera starts above Henry's spawn, so the first streamed scene is the
   market: in Chrome from `~/kcd1`, the market is complete after 64 s instead of 95–125 s.
 - Chrome at the market afterwards: 132 fps, main thread 6.7 ms (from 119 fps and 7.4 ms).
