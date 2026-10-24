@@ -263,6 +263,21 @@ south-west from the market):
   market: in Chrome from `~/kcd1`, the market is complete after 64 s instead of 95–125 s.
 - Chrome at the market afterwards: 132 fps, main thread 6.7 ms (from 119 fps and 7.4 ms).
 
+## Loading (2026-10-23)
+
+`profile-browser.ts --load-profile`: a CPU profile from opening the world view until the market
+is complete (Chrome, High, from `~/kcd1` through the folder input). The main thread is busy all
+the way (0.5 s idle in 80 s): about 36 s of it is the game running at full speed meanwhile
+(rendering, NPCs), and about 14 s was reading pak entries.
+
+- **One slice per entry:** `readEntry` read the 30-byte local header and the data in two Blob
+  slices; a load reads tens of thousands of entries, and `Blob.slice` alone was 11.5 s. It now
+  reads the header (with room for the name and an extra field) and the data in one, and feeds
+  the bytes straight to the `DecompressionStream` (wrapping them in a Blob cost another 6 s).
+- **Market complete: 74 → 53 s.**
+- The rest of the read cost (a slice per entry, 6 s) is what the region chunks of the compact
+  format (milestone 2) remove: one read per area instead of thousands.
+
 ## Instance clusters (2026-10-23)
 
 Each model's instances are sorted along a Morton curve (8 m cells) when the scene is built, and
