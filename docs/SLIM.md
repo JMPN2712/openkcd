@@ -120,8 +120,7 @@ Packages are built outside the repository (`~/.cache/openkcd-slim/`).
 - **Common chunk:** 649 MiB in 11 pieces (1,624 models placed in more than 6 tiles, and the
   textures they use).
 - **Tile chunks:** 372 pieces, median 1.6 MiB, at most 64 MiB (Rattay's castle tile is 4 of them).
-- **Geometry is stored uncompressed:** the paks deflate it to about half. Compressing model
-  entries is the obvious next size saving (inflating on the read workers); not done yet.
+- **Geometry was stored uncompressed** in this first build: compressed since (below).
 - **15 textures fail to convert:** the same ones that fail from the paks (missing DDS parts).
 
 ### Tile size: 256 m
@@ -171,8 +170,38 @@ From the market, first scene:
   - It decodes what is needed from each piece as it arrives, so no piece stays in memory.
   - Everything else is read entry by entry.
 
+### Compressed geometry (format 2)
+
+Model entries are compressed losslessly: each mesh's vertex streams and indices encoded with
+meshoptimizer (`meshoptimizer` 1.3.0, MIT; the decoder is 29 KB), then the entry deflated.
+
+On a 125 MiB sample of model entries (size against raw):
+
+| | deflate | zstd | meshopt | meshopt + deflate | meshopt + zstd |
+|---|---:|---:|---:|---:|---:|
+| Size | 41% | 36% | 48% | **37%** | 36% |
+
+- **meshopt + deflate**, because Chrome 156's `DecompressionStream` inflates gzip and deflate
+  but not zstd or brotli. zstd would mean a WASM decoder for one percentage point.
+- **Decoding speed (Node):** meshopt decodes at about 2.7 GB/s of output; zlib inflates at about
+  400 MB/s of input.
+- **meshoptimizer's index codec rotates triangles:** (a, b, c) may come back as (b, c, a), with
+  the same winding. Renders are pixel-identical; `test-slim.ts` compares triangles up to rotation.
+- Lossy meshopt filters (quantised positions, octahedral normals) would shrink it further. They
+  are not used.
+
+| Package | Models | Textures inline | Texture packs | **Total** | Before |
+|---|---:|---:|---:|---:|---:|
+| Full | 1.03 GiB | 0.31 GiB | 2.22 GiB | **3.56 GiB** | 5.28 GiB |
+| Potato | 1.03 GiB | 0.31 GiB | 0.62 GiB | **1.96 GiB** | 3.68 GiB |
+
+- **The common chunk** is now 358 MiB (649 before). The median tile piece is 0.4 MiB.
+- **Cost:** in Node, with inflating (zlib) and decoding on the one thread, the cold scene build at
+  the market takes 4.68 s compressed against 2.36 s uncompressed (1.25 s inflating, 1.54 s
+  decoding). Phase 2 runs read, inflate and decode on the browser's read workers, off the main
+  thread; whether that wins it back is measured there, in Chrome.
+
 ## Not decided yet
 
 - **Old packages:** whether a format change rebuilds them, or whether the engine reads older
   versions.
-- **Compressing model entries** (above).

@@ -168,5 +168,10 @@ export function nodeSlimFiles(dir: string): import("../src/slim.ts").SlimFiles {
     async text(file) {
       return (await import("node:fs/promises")).readFile(join(dir, file), "utf8");
     },
+    async inflate(bytes, size) {
+      const out = (await import("node:zlib")).inflateRawSync(bytes);
+      if (out.byteLength !== size) throw new Error(`entry inflates to ${out.byteLength} bytes, not ${size}`);
+      return new Uint8Array(out.buffer, out.byteOffset, out.byteLength);
+    },
   };
 }

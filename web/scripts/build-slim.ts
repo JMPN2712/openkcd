@@ -14,6 +14,11 @@ import { textureFile } from "../src/mtl.ts";
 import { resolveLevelPath } from "../src/world.ts";
 import { COMMON_TILES, INLINE_MAX, SLIM_VERSION, TILE, encodeEntry, tileKey, type SlimIndex, type SlimTexture } from "../src/slim.ts";
 import { openRataje } from "./lib.ts";
+import { deflateRawSync } from "node:zlib";
+import { encodeModel, encoderReady } from "../src/slimWrite.ts";
+
+await encoderReady;
+const deflate = async (b: Uint8Array) => new Uint8Array(deflateRawSync(b, { level: 9 }));
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
@@ -110,7 +115,7 @@ const index: SlimIndex = { version: SLIM_VERSION, variant: potato ? "potato" : "
 const byTile = new Map<string, { models: string[]; textures: string[] }>();
 for (const [p, h] of home) (byTile.get(h) ?? byTile.set(h, { models: [], textures: [] }).get(h)!).models.push(p);
 for (const [k, h] of texHome) (byTile.get(h) ?? byTile.set(h, { models: [], textures: [] }).get(h)!).textures.push(k);
-const sizes = { models: 0, inline: 0, packs: 0, texturesFailed: 0 };
+const sizes = { models: 0, modelsRaw: 0, inline: 0, packs: 0, texturesFailed: 0 };
 let done = 0;
 for (const [key, list] of [...byTile].sort((a, b) => (a[0] === "common" ? -1 : b[0] === "common" ? 1 : a[0].localeCompare(b[0])))) {
   const f = `tiles/${key}.bin`, pf = `packs/${key}.bin`;
@@ -159,9 +164,10 @@ for (const [key, list] of [...byTile].sort((a, b) => (a[0] === "common" ? -1 : b
   for (const p of list.models) {
     const parts = await loadModelParts(vfs, p).catch(() => null);
     if (!parts) continue;
-    const bytes = encodeEntry({ path: parts.path, cgf: { ...parts.cgf, chunks: [] }, skeleton: parts.skeleton, mtlPath: parts.mtlPath, materials: parts.materials });
-    index.models[p] = await put(bytes);
+    const { bytes, raw } = await encodeModel(parts, deflate);
+    index.models[p] = { ...(await put(bytes)), z: raw };
     sizes.models += bytes.byteLength;
+    sizes.modelsRaw += raw;
     for (const s of slots(parts)) {
       const k = `${s.stem}${s.normalMap ? "|n" : ""}`;
       if (own.has(k) && !written.has(k)) { written.add(k); await putTexture(k); }
@@ -178,5 +184,5 @@ await writeFile(join(out, "index.json"), JSON.stringify(index));
 const tileSizes = Object.entries(index.tiles).filter(([k]) => !k.startsWith("common")).map(([, r]) => r.n).sort((a, b) => a - b);
 const G = (n: number) => `${(n / 2 ** 30).toFixed(2)} GiB`, M = (n: number) => `${(n / 2 ** 20).toFixed(1)} MiB`;
 console.log(`${index.variant}: ${Object.keys(index.models).length} models, ${Object.keys(index.textures).length} textures (${sizes.texturesFailed} failed) in ${((performance.now() - t0) / 1000).toFixed(0)} s`);
-console.log(`  models ${G(sizes.models)}, textures inline ${G(sizes.inline)}, packs ${G(sizes.packs)}; total ${G(sizes.models + sizes.inline + sizes.packs)}`);
+console.log(`  models ${G(sizes.models)} (${G(sizes.modelsRaw)} before compression), textures inline ${G(sizes.inline)}, packs ${G(sizes.packs)}; total ${G(sizes.models + sizes.inline + sizes.packs)}`);
 console.log(`  common chunk ${M(Object.entries(index.tiles).filter(([k]) => k.startsWith("common")).reduce((a, [, r]) => a + r.n, 0))} in ${Object.keys(index.tiles).filter((k) => k.startsWith("common")).length} pieces; ${tileSizes.length} tile pieces: median ${M(tileSizes[tileSizes.length >> 1] ?? 0)}, largest ${M(tileSizes[tileSizes.length - 1] ?? 0)}`);
