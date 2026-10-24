@@ -48,8 +48,10 @@ the GOG offline installer into a compact local package (OPFS).
 
 ## License
 
-None yet. A license will be chosen before the repository goes public. Until
-then, all rights are reserved by the contributors.
+OpenKCD is free software under the GNU General Public License, version 3
+(GPL-3.0-only): see `LICENSE`. The license covers this project's code and
+documents only. Kingdom Come: Deliverance and its data belong to their owners;
+OpenKCD contains none of it, and players use their own copy of the game.
 
 ## Repository layout
 
