@@ -12,7 +12,7 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
   Full; the packages end at 12.76 GiB (Potato) and 21.41 GiB (Full).
   Cutscene videos are left out and can be added later. Opus audio, converted
   animations and video transcoding moved to "Later" under milestone 2.
-- **Milestone 3 (release) prep has started:** GPL-3.0-only license added; the
+- **Milestone 3 (release) prep has started:** GPL-3.0-or-later license added; the
   clean-room and history audit's first pass is done, with history findings
   waiting on the user's decision (milestone 3 below). The user makes the
   repository public.
@@ -275,7 +275,7 @@ playable frame rates on the Potato preset.
 The repository is private (it had become public; set back to private on
 2026-10-23). The user makes it public.
 
-- [x] Choose a license: GPL-3.0-only (`LICENSE`; dependencies are MIT,
+- [x] Choose a license: GPL-3.0-or-later (`LICENSE`; dependencies are MIT,
       BSD-3-Clause and Apache-2.0).
 - [x] Clean-room rebuilds of code first written with decompiler output in view: collision
       avoidance (`crowd.ts`) and the navmesh decoder (`navmesh.ts`, `tools/navmesh.py`), now

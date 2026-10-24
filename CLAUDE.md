@@ -2,28 +2,28 @@
 
 Unofficial, open-source browser engine (WebAssembly + WebGPU) that runs
 Kingdom Come: Deliverance 1 from the player's **own legally owned copy**. Not
-affiliated with or endorsed by Warhorse Studios or PLAION. Local folder is
-`~/kcd-web`; GitHub repo is `openkcd` (private until the public release).
+affiliated with or endorsed by Warhorse Studios or PLAION. GitHub repo:
+`openkcd`. Machine-specific paths (this checkout, the installer, the game
+copy, the research repo) are in `CLAUDE.local.md`, which is not committed.
 
 ## Hard rules
 
 - **Game files are read-only.** Never modify, move or delete anything in
-  `~/Downloads/kingdom_come_deliverance` (the GOG installer). Extracted game
-  files live in `~/kcd1` and are read-only.
+  the GOG installer folder or the extracted game folder.
 - **Never commit** game files, extracted assets, converted packages, renders
   of game content or large binaries. `.gitignore` plus `.githooks/pre-commit`
   enforce this. After cloning, run `git config core.hooksPath .githooks`.
 - **Clean room: two kinds of session, never mixed.**
-  - **Research sessions** run in `~/openkcd-research`. They may read
-    `~/tools/ghidra-out` (decompiled output, never committed anywhere), and
+  - **Research sessions** run in the private research repo. They may read
+    the local decompiler-output folder (never committed anywhere), and
     they write plain-language behaviour notes only, to the private
     `openkcd-research` repo. They don't write OpenKCD code.
-  - **Implementation sessions** run in `~/kcd-web` (this repo). They **must
-    not read `~/tools/ghidra-out`**, or run the decompiler. They work from
-    the notes in `~/openkcd-research/notes`, the game's data files and
+  - **Implementation sessions** run in this repo. They **must not read the
+    decompiler-output folder**, or run the decompiler. They work from
+    the research repo's notes, the game's data files and
     open-source libraries (e.g. Recast/Detour, RVO2).
-    `.claude/settings.json` denies the path, and a Bash hook blocks commands
-    that mention it.
+    `.claude/settings.json` denies the folder, and a Bash hook blocks
+    commands that mention it.
   - **When a note is missing or unclear,** stop and ask for a research
     session. Never peek.
   - **In this repo:** no decompiler names (`FUN_…`, addresses).
@@ -61,8 +61,8 @@ See `docs/ROADMAP.md`. In order:
 2. Installer converter and slim format. Done (2026-10-24): the compact
    package is built from the installer, in place or part by part, and runs
    the engine alone (`docs/SLIM.md`). Later items are in the roadmap.
-3. Public GitHub release. **In progress:** GPL-3.0-only; the audit's
-   history findings wait on the user. Ask before rewriting history; the
+3. Public GitHub release. **In progress:** GPL-3.0-or-later; history
+   audited and rewritten (2026-10-24). Ask before rewriting history; the
    user makes the repository public.
 4. Living world (NPC routines; partly done).
 5. Diet planning.
@@ -75,13 +75,12 @@ questlines whole and never cuts anything the main quest depends on.
 
 ## Hardware targets
 
-- **Dev machine:** Kubuntu (Wayland), Ryzen 9 9900X, 64 GB RAM, RTX 5070 Ti
-  plus the CPU's integrated Radeon. The browser is Google Chrome; it needs
-  Vulkan turned on for WebGPU (`chrome://flags/#enable-vulkan`, or
-  `--enable-features=Vulkan`) **and** `--ozone-platform=x11`: Chrome 156 on
-  Wayland logs "not compatible with Vulkan" and glitches until reload. The
-  KDE menu entry (`~/.local/share/applications/google-chrome.desktop`) and
-  the `chrome-webgpu` alias pass both.
+- **Development machine:** Linux (KDE Plasma on Wayland), Ryzen 9 9900X,
+  64 GB RAM, RTX 5070 Ti plus the CPU's integrated Radeon, Google Chrome.
+  Chrome on Linux needs Vulkan turned on for WebGPU
+  (`chrome://flags/#enable-vulkan`, or `--enable-features=Vulkan`) **and**
+  `--ozone-platform=x11`: Chrome 156 on Wayland logs "not compatible with
+  Vulkan" and glitches until reload.
 - **Low end:** AMD Vega 7 laptop with 16 GB RAM. Every feature needs a
   **Potato** preset.
 
@@ -105,7 +104,8 @@ questlines whole and never cuts anything the main quest depends on.
 - **Docs:** `docs/RECON.md`, `LEVELS.md`, `CHARACTERS.md`, `ANIMATION.md`,
   `GAMELOGIC.md`, `INSTALLER.md`, `ROADMAP.md`.
 - **Tests:** headless scripts in `web/scripts/` run with
-  `node scripts/<name>.ts` against `~/kcd1`. Headless WebGPU renders go
+  `node scripts/<name>.ts` against the extracted game folder (`--root`).
+  Headless WebGPU renders go
   through Dawn (`webgpu` npm). The README lists every script.
 - **Checks before committing:** `cd web && npx tsc --noEmit`, plus the
   relevant test scripts.
@@ -113,5 +113,5 @@ questlines whole and never cuts anything the main quest depends on.
 ## Research (private, not in this repo)
 
 Reverse-engineering workflow, tools and behaviour notes live in the private
-`openkcd-research` repo (local: `~/openkcd-research`, see its `CLAUDE.md`).
+`openkcd-research` repo (see its `CLAUDE.md`).
 Read the relevant note before implementing game behaviour.

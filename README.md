@@ -48,8 +48,10 @@ the GOG offline installer into a compact local package (OPFS).
 
 ## License
 
-OpenKCD is free software under the GNU General Public License, version 3
-(GPL-3.0-only): see `LICENSE`. The license covers this project's code and
+OpenKCD is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version (GPL-3.0-or-later): see `LICENSE`. The license covers this project's code and
 documents only. Kingdom Come: Deliverance and its data belong to their owners;
 OpenKCD contains none of it, and players use their own copy of the game.
 
@@ -62,7 +64,7 @@ OpenKCD contains none of it, and players use their own copy of the game.
 - `docs/PERFORMANCE.md`: quality presets and measured frame rates.
 - `docs/PHYSICS.md`: physics geometry in models (MeshPhysicsData), what the player collides with.
 - `docs/GAMELOGIC.md`: where gameplay logic lives (behaviour trees, quests, Lua, WHGame.dll structure) and a porting plan.
-- `tools/`: read-only Python recon scripts (`pe_info.py`, `pak_survey.py`, `pak_report.py`, `pakread.py`, `rtti_survey.py`, `navmesh.py`).
+- `tools/`: read-only Python recon scripts (`pe_info.py`, `pak_survey.py`, `pak_report.py`, `pakread.py`, `navmesh.py`).
 - `docs/ROADMAP.md`: milestones and status.
 - `web/`: the engine (Vite + TypeScript, no backend). Runtime dependency: `wasmoon-lua5.1` (Lua 5.1 VM in WebAssembly).
 
