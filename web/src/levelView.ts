@@ -4,12 +4,11 @@
 // F: free-fly (debug): mouse drag look · WASD / arrows move · Q/E or Space/C down/up · Shift fast ·
 // T puts Henry under the fly camera.
 
-import { dataStart, readCentralDirectory, readEntry } from "./zip.ts";
-import { parseTerrain, heightAt, type Terrain } from "./terrain.ts";
+import { heightAt, type Terrain } from "./terrain.ts";
 import { FOV_Y, TerrainRenderer, type FlyCamera } from "./terrainRenderer.ts";
 import type { PakSource } from "./paks.ts";
-import { parseLevelObjects, type LevelObjects } from "./levelObjects.ts";
-import { parseCover, type Cover } from "./cover.ts";
+import type { LevelObjects } from "./levelObjects.ts";
+import type { Cover } from "./cover.ts";
 import { MergedMeshes } from "./mergedMeshes.ts";
 import { Roads } from "./roads.ts";
 import { Decals } from "./decals.ts";
@@ -17,30 +16,28 @@ import { FarTrees } from "./farTrees.ts";
 import { setGpuBlockCompression } from "./model.ts";
 import { ModelRenderer } from "./renderer.ts";
 import { TexturePool } from "./texturePool.ts";
-import { ReadWorkers } from "./readWorkers.ts";
 import { WaterRenderer } from "./waterRenderer.ts";
 import { buildGrassScene, buildWorldScene, isUberLod, lodItems, newWorldCaches, sceneMatrices, selectLods, trimWorldCaches, type WorldScene } from "./world.ts";
 import { Vfs } from "./vfs.ts";
-import { parseNpcEntities, parseEntityIndex, propEntities, type EntityInfo, type NpcEntity } from "./levelEntities.ts";
+import type { EntityInfo, NpcEntity } from "./levelEntities.ts";
 import { Schedules } from "./schedule.ts";
-import { NavMesh } from "./navmesh.ts";
 import { NpcWorld, npcItems, animateNpcs, updateAi, type WorldNpc } from "./npcs.ts";
 import { createAiWorld } from "./btWorld.ts";
-import { parseLayerNames, defaultHiddenLayers } from "./levelLayers.ts";
 import { NpcAi } from "./npcAi.ts";
 import { AnimLibrary } from "./mannequin.ts";
 import { LuaHost } from "./luaHost.ts";
 // served by Vite with the app (never the package's CDN default)
 import luaWasm from "wasmoon-lua5.1/dist/liblua5.1.wasm?url";
-import { ASSET_RE } from "./assets.ts";
 import { PlayerAvatar } from "./playerAvatar.ts";
 import { PlayerSession } from "./playerSession.ts";
 import { CollisionWorld } from "./collision.ts";
 import { depthClear, depthFormat, type PassSetup } from "./mat4.ts";
-import { parseTimeOfDay, type TimeOfDay } from "./tod.ts";
+import type { TimeOfDay } from "./tod.ts";
 import { SkyRenderer, skyAt, pickProfile, invert } from "./sky.ts";
 import { PRESETS, savedPreset, savePreset, type PresetName } from "./quality.ts";
-import { loadDetailLayers, parseSurfaceTypes } from "./terrainDetail.ts";
+import { loadDetailLayers } from "./terrainDetail.ts";
+import { levelData, levelVfs } from "./levelData.ts";
+import { openSlim } from "./slimView.ts";
 import { ShadowMap } from "./shadow.ts";
 import { ShadowCasters } from "./shadowPass.ts";
 
@@ -52,8 +49,6 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 }
 
 let stopActive: (() => void) | null = null;
-const terrainCache = new Map<string, Promise<{ terrain: Terrain; objects: LevelObjects; cover?: Cover; npcEntities: NpcEntity[]; schedules: Schedules; props: EntityInfo[]; ents: Map<number, EntityInfo>; hiddenLayers: Set<number>; tod: TimeOfDay | null; surfaceTypes: Map<number, string>; merged: MergedMeshes; roads: Roads; decals: Decals }>>();
-const vfsCache = new Map<string, Promise<Vfs>>();
 // model caches per texture size (presets load textures at different sizes)
 const worldCaches = new Map<number, ReturnType<typeof newWorldCaches>>();
 const NPC_RADIUS = 120;
@@ -61,6 +56,8 @@ const SPEEDS: [string, number][] = [["paused", 0], ["×15 (game speed)", 15], ["
 /** Where Henry starts: Rataje's market, under the town wall, facing south. */
 const SPAWN: [number, number, number] = [2577.8, 574, 0];
 const SPAWN_YAW = -Math.PI / 2;
+/** Time between drawn frames while the world is loading (ms): about 15 fps. */
+const LOADING_FRAME = 66;
 
 export async function showLevel(host: HTMLElement, paks: PakSource[], level: string): Promise<void> {
   stopActive?.();
@@ -89,70 +86,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let vfs: Vfs;
   let device: GPUDevice;
   try {
-    let p = terrainCache.get(pakPath);
-    if (!p) {
-      p = (async () => {
-        const blob = await pak.open();
-        const entries = await readCentralDirectory(blob);
-        const entry = entries.find((e) => e.name.toLowerCase() === "terrain/terrain.dat");
-        const ctc = entries.find((e) => e.name.toLowerCase() === "terrain/cover.ctc");
-        if (!entry) throw new Error("terrain/terrain.dat not found in the level pak");
-        status.textContent = `Reading terrain (${Math.round(entry.usize / 2 ** 20)} MiB)…`;
-        const bytes = await readEntry(blob, entry, undefined, false);
-        status.textContent = "Decoding heightmap and object octree…";
-        await new Promise((r) => setTimeout(r, 0));
-        const terrain = parseTerrain(bytes);
-        const objects = parseLevelObjects(bytes, terrain.objectsOffset);
-        status.textContent = "Reading terrain colour…";
-        const cover = ctc ? parseCover(await readEntry(blob, ctc, undefined, false), terrain.size) : undefined;
-        const mission = entries.find((e) => e.name.toLowerCase() === "objects_mission0.xml");
-        status.textContent = "Reading entities (NPCs, furniture)…";
-        const xml = mission ? new TextDecoder().decode(await readEntry(blob, mission, undefined, false)) : "";
-        // editor layers: alternative states and cutscene sets hidden at game start (levelLayers.ts)
-        const ld = entries.find((e) => e.name.toLowerCase() === "leveldata.xml");
-        const ldText = ld ? new TextDecoder().decode(await readEntry(blob, ld, undefined, false)) : "";
-        const hiddenLayers = ld ? defaultHiddenLayers(parseLayerNames(ldText)) : new Set<number>();
-        const surfaceTypes = parseSurfaceTypes(ldText);
-        const npcEntities = parseNpcEntities(xml);
-        const ents = parseEntityIndex(xml);
-        const schedules = new Schedules(npcEntities, ents);
-        // the level's navmesh (recast.pak), for NPC walking routes
-        const recast = paks.find((x) => x.path.toLowerCase() === `data/levels/${level}/recast.pak`);
-        if (recast) {
-          try {
-            const rb = await recast.open();
-            const ne = (await readCentralDirectory(rb)).find((e) => e.name.toLowerCase() === "recast/rdnavmesh_1.nav");
-            if (ne) {
-              status.textContent = `Reading navigation mesh (${Math.round(ne.usize / 2 ** 20)} MiB)…`;
-              schedules.setNavMesh(new NavMesh(await readEntry(rb, ne, undefined, false)));
-            }
-          } catch (err) {
-            console.warn("navmesh:", err);
-          }
-        }
-        // the level's time of day (sun, sky, fog over the day, per weather profile)
-        const me = entries.find((e) => e.name.toLowerCase() === "mission_mission0.xml");
-        const tod = me ? parseTimeOfDay(new TextDecoder().decode(await readEntry(blob, me, undefined, false))) : null;
-        return { terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(blob, entries), roads: new Roads(blob, dataStart(blob, entry), objects.roads), decals: new Decals(objects.decalIndex, terrain) };
-      })();
-      p.catch(() => terrainCache.delete(pakPath));
-      terrainCache.set(pakPath, p);
-    }
-    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, tod, surfaceTypes, merged, roads, decals } = await p);
-    let v = vfsCache.get(pakPath);
-    if (!v) {
-      // assets from every non-level pak, with this level's own files (brush/*.cgf, …) on top
-      v = Vfs.build(paks.filter((x) => !x.path.toLowerCase().startsWith("data/levels/")), {
-        filter: (n) => ASSET_RE.test(n),
-        includeHd: true,
-        onProgress: (d, t) => { status.textContent = `Indexing assets… ${d}/${t}`; },
-      }).then((base) => base.extend(pak, (n) => ASSET_RE.test(n)));
-      v.catch(() => vfsCache.delete(pakPath));
-      vfsCache.set(pakPath, v);
-    }
-    vfs = await v;
-    // large reads (models, textures) inflate on worker threads, off the frame
-    vfs.workers ??= ReadWorkers.browser();
+    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, tod, surfaceTypes, merged, roads, decals } = await levelData(paks, level, (m) => { status.textContent = m; }));
+    vfs = await levelVfs(paks, level, (m) => { status.textContent = m; });
     if (!navigator.gpu) throw new Error("WebGPU is not available in this browser (chrome://flags/#enable-unsafe-webgpu).");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter) throw new Error("No WebGPU adapter.");
@@ -185,6 +120,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const NPC_MAX = q.npcMax;
   let caches = worldCaches.get(q.maxTextureDim);
   if (!caches) worldCaches.set(q.maxTextureDim, (caches = newWorldCaches()));
+  // the compact package, when one is built (docs/SLIM.md): the world's models from it, read and
+  // decoded on the read workers; Potato prefers its own variant
+  if (!caches.slim) caches.slim = (await openSlim(presetName === "potato" ? "potato" : "full", vfs.workers ?? undefined).catch((err) => { console.warn("compact package:", err); return null; })) ?? undefined;
   const canvas = el("canvas", "model-canvas level-canvas");
   canvas.tabIndex = 0;
   const hud = el("p", "note level-hud");
@@ -485,6 +423,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const frame = (now: number) => {
     const t0 = performance.now();
     raf = requestAnimationFrame(frame);
+    // while the world loads, a frame every LOADING_FRAME ms at most: drawing the growing scene at
+    // full speed took about half the main thread from loading
+    if (worldLoading && last && now - last < LOADING_FRAME) return;
     const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
     if (last) fpsAvg += ((now - last) - fpsAvg) * 0.05;
     last = now;

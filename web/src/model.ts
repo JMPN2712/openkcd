@@ -38,6 +38,11 @@ export function setGpuBlockCompression(on: boolean): void {
   gpuBc = on;
 }
 
+/** Whether textures load as BC blocks (setGpuBlockCompression). */
+export function gpuBlockCompression(): boolean {
+  return gpuBc;
+}
+
 /** DDS format name → WebGPU block format (sRGB variants are chosen at upload). */
 const BC_FORMATS: Record<string, string> = { BC1: "bc1-rgba-unorm", BC2: "bc2-rgba-unorm", BC3: "bc3-rgba-unorm", BC5: "bc5-rg-unorm", BC7: "bc7-rgba-unorm" };
 

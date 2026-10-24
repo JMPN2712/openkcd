@@ -10,6 +10,8 @@ parentPort!.on("message", async ({ id, key, src, entry }: ReadRequest) => {
   if (src) paks.set(key, openAsBlob(src as string));
   let reply: ReadReply;
   try {
+    // (compact package pieces are decoded in Node's main thread: nodeSlimFiles)
+    if (!entry) throw new Error("only pak entries are read here");
     reply = { id, out: await readEntry(await paks.get(key)!, entry, undefined, false) };
   } catch (err) {
     reply = { id, error: (err as Error).message };

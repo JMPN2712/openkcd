@@ -6,6 +6,7 @@ import { showPreview, type PreviewHooks } from "./preview.ts";
 import { showTexture, type TextureContext } from "./textureView.ts";
 import { showCharacter, showCharacterBrowser } from "./characterView.ts";
 import { showLevel } from "./levelView.ts";
+import { showSlimBuild } from "./slimView.ts";
 import { ASSET_RE } from "./assets.ts";
 import { Vfs } from "./vfs.ts";
 import { formatCount, formatSize } from "./format.ts";
@@ -23,6 +24,7 @@ const statusEl = $<HTMLSpanElement>("status");
 const paksEl = $<HTMLElement>("pak-groups");
 const charactersBtn = $<HTMLButtonElement>("characters");
 const worldBtn = $<HTMLButtonElement>("world");
+const slimBtn = $<HTMLButtonElement>("slim");
 const treeEl = $<HTMLDivElement>("tree");
 const previewEl = $<HTMLElement>("preview");
 const titleEl = $<HTMLSpanElement>("pak-title");
@@ -126,6 +128,7 @@ async function openGame(root: FileSystemDirectoryHandle, label: string, installe
     textures.hasHd = paks.some((p) => p.path.toLowerCase().includes("_hd"));
     charactersBtn.disabled = false;
     worldBtn.disabled = !paks.some((p) => p.path.toLowerCase() === "data/levels/rataje/level.pak");
+    slimBtn.disabled = worldBtn.disabled;
     renderPakList(paks);
     const total = paks.reduce((s, p) => s + p.size, 0);
     setStatus(`${label}: ${paks.length} archives, ${formatSize(total)}. Read locally, nothing uploaded.`);
@@ -206,6 +209,18 @@ worldBtn.addEventListener("click", () => {
   const body = el("div", "preview-body");
   previewEl.replaceChildren(head, body);
   void showLevel(body, allPaks, "rataje");
+});
+
+// ---------- compact package (docs/SLIM.md) ----------
+
+slimBtn.addEventListener("click", () => {
+  document.querySelectorAll(".pak.active, .side-action.active").forEach((b) => b.classList.remove("active"));
+  slimBtn.classList.add("active");
+  const head = el("div", "preview-head");
+  head.append(el("div", "preview-path", "Compact package: Rataje's world in region chunks"));
+  const body = el("div", "preview-body");
+  previewEl.replaceChildren(head, body);
+  showSlimBuild(body, allPaks);
 });
 
 // ---------- characters (game database) ----------
