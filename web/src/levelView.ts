@@ -276,6 +276,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   // NPCs (loading them, their behaviour trees, crowd and animation) wait until the first streamed
   // scene is complete: running them meanwhile took about half the main thread while the market loaded
   let worldLoading = true;
+  /** the first NPCs have been assembled (until then frames stay capped too, see LOADING_FRAME) */
+  let npcsLoaded = false;
   let npcInfo = `NPCs: ${npcEntities.length} in level`;
   let minute = 10 * 60; // game time of day, minutes
   let simSeconds = 0; // simulation clock (real seconds at ×15)
@@ -296,10 +298,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       npcR.setModels(npcItems(next));
       npcR.setShadow(shadowMap);
       npcs = next;
+      npcsLoaded = true;
       npcKey = key;
       npcInfo = `${next.length} NPCs within ${NPC_RADIUS} m`;
     } catch (err) {
       npcInfo = `NPCs: ${(err as Error).message}`;
+      npcsLoaded = true;
     } finally {
       npcBusy = false;
     }
@@ -423,9 +427,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const frame = (now: number) => {
     const t0 = performance.now();
     raf = requestAnimationFrame(frame);
-    // while the world loads, a frame every LOADING_FRAME ms at most: drawing the growing scene at
-    // full speed took about half the main thread from loading
-    if (worldLoading && last && now - last < LOADING_FRAME) return;
+    // while the world and then the first NPCs load, a frame every LOADING_FRAME ms at most:
+    // drawing the growing scene at full speed took about half the main thread from loading
+    if ((worldLoading || !npcsLoaded) && last && now - last < LOADING_FRAME) return;
     const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
     if (last) fpsAvg += ((now - last) - fpsAvg) * 0.05;
     last = now;

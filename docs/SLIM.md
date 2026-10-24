@@ -247,8 +247,10 @@ folder input; that copy has the HD texture paks, which the world view uses.
 - **Frame cap while loading:** both now cap frames at about 15 fps while the world loads
   (`LOADING_FRAME`). Drawing the growing scene at full speed took about half the main thread.
   Before the cap, High measured 96 s (paks) and 68 s (package) until the NPCs were complete.
-- **Next cost: the NPCs.** About 35 s on High after the world is complete, assembled from the
-  paks (characters, clothing, textures). Characters go into the package in phase 3.
+- **The NPCs were mostly waiting for frames:** once the world was complete, the frame cap ended
+  and assembly competed with full-speed rendering. The cap now lasts until the first NPCs are
+  assembled. High: NPCs complete at **18 s** from the package (46 before), 23 s from the paks
+  (58 before).
 
 ## Not decided yet
 
