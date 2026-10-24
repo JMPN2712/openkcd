@@ -18,7 +18,7 @@ import { buildWorldScene, lodItems, newWorldCaches, sceneMatrices, selectLods, t
 import { CollisionWorld } from "../src/collision.ts";
 import { depthClear, depthFormat, type PassSetup } from "../src/mat4.ts";
 import { PRESETS, type PresetName } from "../src/quality.ts";
-import { setGpuBlockCompression } from "../src/model.ts";
+import { setAssetPackage, setGpuBlockCompression } from "../src/model.ts";
 import { ShadowMap } from "../src/shadow.ts";
 import { ShadowCasters } from "../src/shadowPass.ts";
 import { nodeReadWorkers, nodeSlimFiles, openRataje } from "./lib.ts";
@@ -54,7 +54,7 @@ const depth = device.createTexture({ size: [W, H], format: depthFormat(pass), sa
 const world = new CollisionWorld((x, y) => heightAt(lvl.terrain, x, y), lvl.terrain.size);
 const caches = newWorldCaches();
 const slimDir = opt("--slim", "");
-if (slimDir) caches.slim = await SlimPackage.open(nodeSlimFiles(slimDir));
+if (slimDir) setAssetPackage((caches.slim = await SlimPackage.open(nodeSlimFiles(slimDir))));
 const step = q.streamRadius * 0.3;
 
 const prof = process.env.PROFILE ? new (await import("node:inspector/promises")).Session() : null;

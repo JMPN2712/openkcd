@@ -6,7 +6,8 @@ import { showPreview, type PreviewHooks } from "./preview.ts";
 import { showTexture, type TextureContext } from "./textureView.ts";
 import { showCharacter, showCharacterBrowser } from "./characterView.ts";
 import { showLevel } from "./levelView.ts";
-import { showSlimBuild } from "./slimView.ts";
+import { openSlim, packageStore, showSlimBuild, type SlimVariant } from "./slimView.ts";
+import { setAssetPackage } from "./model.ts";
 import { ASSET_RE } from "./assets.ts";
 import { Vfs } from "./vfs.ts";
 import { formatCount, formatSize } from "./format.ts";
@@ -149,6 +150,27 @@ async function refreshInstalled(): Promise<FileSystemDirectoryHandle | null> {
   return ok ? game : null;
 }
 
+// the compact package with its file store: the game without any original files (docs/SLIM.md)
+const packageBtn = $<HTMLButtonElement>("package");
+async function refreshPackage(): Promise<{ store: FileSystemDirectoryHandle; variant: SlimVariant } | null> {
+  for (const variant of ["full", "potato"] as SlimVariant[]) {
+    const store = await packageStore(variant).catch(() => null);
+    if (store) {
+      packageBtn.hidden = false;
+      packageBtn.textContent = `Open compact package (${variant})`;
+      return { store, variant };
+    }
+  }
+  packageBtn.hidden = true;
+  return null;
+}
+packageBtn.addEventListener("click", async () => {
+  const p = await refreshPackage();
+  if (!p) return;
+  setAssetPackage(await openSlim(p.variant));
+  await openGame(p.store, `Compact package (${p.variant})`, true);
+});
+
 installedBtn.addEventListener("click", async () => {
   const game = await refreshInstalled();
   if (game) await openGame(game, "Installed copy (browser storage)", true);
@@ -196,6 +218,7 @@ document.addEventListener("drop", async (e) => {
 });
 
 void refreshInstalled();
+void refreshPackage();
 
 // ---------- pak list ----------
 

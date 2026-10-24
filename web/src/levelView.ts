@@ -13,7 +13,7 @@ import { MergedMeshes } from "./mergedMeshes.ts";
 import { Roads } from "./roads.ts";
 import { Decals } from "./decals.ts";
 import { FarTrees } from "./farTrees.ts";
-import { setGpuBlockCompression } from "./model.ts";
+import { setAssetPackage, setGpuBlockCompression } from "./model.ts";
 import { ModelRenderer } from "./renderer.ts";
 import { TexturePool } from "./texturePool.ts";
 import { WaterRenderer } from "./waterRenderer.ts";
@@ -123,6 +123,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   // the compact package, when one is built (docs/SLIM.md): the world's models from it, read and
   // decoded on the read workers; Potato prefers its own variant
   if (!caches.slim) caches.slim = (await openSlim(presetName === "potato" ? "potato" : "full", vfs.workers ?? undefined).catch((err) => { console.warn("compact package:", err); return null; })) ?? undefined;
+  // (and every other model and texture load: characters, props, the far field, terrain detail)
+  setAssetPackage(caches.slim ?? null);
   const canvas = el("canvas", "model-canvas level-canvas");
   canvas.tabIndex = 0;
   const hud = el("p", "note level-hud");

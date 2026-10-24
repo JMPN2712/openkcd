@@ -14,9 +14,9 @@
 
 import { MeshoptDecoder } from "meshoptimizer/decoder";
 import { textureFile } from "./mtl.ts";
-import { withTextures, type LoadedModel, type LoadOptions, type MipChain, type ModelParts, type TextureLoader } from "./model.ts";
+import { withTextures, type AssetPackage, type LoadedModel, type LoadOptions, type MipChain, type ModelParts, type TextureLoader } from "./model.ts";
 
-export const SLIM_VERSION = 2;
+export const SLIM_VERSION = 3;
 /** Region chunk size (metres): chosen by measuring the reads per area, docs/SLIM.md. */
 export const TILE = 256;
 /** Texture levels up to this size are stored with the texture in its tile; larger ones in the tile's pack. */
@@ -50,7 +50,8 @@ export interface SlimTexture {
   bc: { format: string; blockBytes: number } | null;
   full: number;
   normalMap: boolean;
-  levels: { w: number; h: number; data?: Uint8Array | Uint8ClampedArray; po?: number; pn?: number }[];
+  /** po / pn: where a large level is in the pack; pu: its size inflated (it is deflated) */
+  levels: { w: number; h: number; data?: Uint8Array | Uint8ClampedArray; po?: number; pn?: number; pu?: number }[];
   /** where the large levels are (po / pn are relative to it) */
   pack: SlimRef | null;
 }
@@ -186,7 +187,7 @@ export function textureKeys(materials: ModelParts["materials"]): string[] {
   return out;
 }
 
-export class SlimPackage {
+export class SlimPackage implements AssetPackage {
   readonly index: SlimIndex;
   private files: SlimFiles;
   readonly stats = { chunkReads: 0, chunkBytes: 0, singleReads: 0, singleBytes: 0, singleModels: 0, packReads: 0, packBytes: 0, inflateMs: 0, decodeMs: 0, prefetchMs: 0 };
@@ -205,6 +206,10 @@ export class SlimPackage {
 
   hasModel(path: string): boolean {
     return path in this.index.models;
+  }
+
+  hasTexture(stem: string, normalMap: boolean): boolean {
+    return `${stem}${normalMap ? "|n" : ""}` in this.index.textures;
   }
 
   /**
@@ -324,7 +329,11 @@ export class SlimPackage {
       this.stats.packReads++;
       this.stats.packBytes += to - from;
     }
-    const levels = want.map((l) => ({ w: l.w, h: l.h, data: l.data ?? pack!.subarray(l.po! - from, l.po! - from + l.pn!) }));
+    const levels = await Promise.all(want.map(async (l) => {
+      if (l.data) return { w: l.w, h: l.h, data: l.data };
+      const bytes = pack!.subarray(l.po! - from, l.po! - from + l.pn!);
+      return { w: l.w, h: l.h, data: l.pu ? await (this.files.inflate ?? inflate)(bytes, l.pu) : bytes };
+    }));
     return {
       stem: tex.stem, srgb: tex.srgb, levels, bc: tex.bc ?? undefined, full: tex.full, normalMap: tex.normalMap,
       // (looked up again: keeping `tex` would keep what it was read from)

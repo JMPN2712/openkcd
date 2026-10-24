@@ -5,6 +5,7 @@ import { parseSkeleton, type Skeleton } from "./skeleton.ts";
 import { parseMtl, mtlPath, textureFile, type Material } from "./mtl.ts";
 import { decodeMip, mipData, openTexture, type Texture } from "./texture.ts";
 import { mipDims } from "./dds.ts";
+import { decodeBC1, decodeBC2, decodeBC3, decodeBC4, decodeBC5, decodeBC7 } from "./bcn.ts";
 import type { Vfs, VfsHit } from "./vfs.ts";
 
 export const MODEL_RE = /\.(cgf|cga|skin|chr)$/;
@@ -36,6 +37,35 @@ export interface MipChain {
 let gpuBc = false;
 export function setGpuBlockCompression(on: boolean): void {
   gpuBc = on;
+}
+
+/**
+ * A compact package (slim.ts) the loaders take models and textures from before the paks: set by
+ * whoever opened one (the world view, the scripts). Models and textures it holds may be missing
+ * from the paks (a package built to need no original files leaves them out).
+ */
+export interface AssetPackage {
+  hasModel(path: string): boolean;
+  modelParts(path: string): Promise<ModelParts>;
+  hasTexture(stem: string, normalMap: boolean): boolean;
+  textures: TextureLoader;
+}
+let assetPackage: AssetPackage | null = null;
+export function setAssetPackage(p: AssetPackage | null): void {
+  assetPackage = p;
+}
+
+/** Whether a model can be loaded: in the package, or in the paks. */
+export function modelExists(vfs: Vfs, path: string): boolean {
+  return !!assetPackage?.hasModel(path) || !!vfs.lookup(path);
+}
+
+/** A BC chain decoded to RGBA on the CPU (loaders that want RGBA, e.g. the terrain's detail layers). */
+function rgbaChain(chain: MipChain): MipChain {
+  const f = chain.bc!.format;
+  const dec = f.startsWith("bc1") ? decodeBC1 : f.startsWith("bc2") ? decodeBC2 : f.startsWith("bc3") ? decodeBC3 : f.startsWith("bc4") ? decodeBC4 : f.startsWith("bc5") ? decodeBC5 : f.startsWith("bc7") ? decodeBC7 : null;
+  if (!dec) throw new Error(`${chain.stem}: ${f} can't be decoded to RGBA`);
+  return { ...chain, bc: undefined, more: undefined, levels: chain.levels.map((l) => ({ w: l.w, h: l.h, data: dec(l.data as Uint8Array, l.w, l.h) })) };
 }
 
 /** Whether textures load as BC blocks (setGpuBlockCompression). */
@@ -90,6 +120,11 @@ function toSigned(data: Uint8Array): Uint8Array {
 }
 
 export async function loadMipChain(vfs: Vfs, stem: string, maxDim: number, opts: { rgba?: boolean; normalMap?: boolean; texture?: Texture; above?: number } = {}): Promise<MipChain> {
+  // from the compact package when it holds the texture (more levels come through chain.more)
+  if (assetPackage && !opts.texture && !opts.above && assetPackage.hasTexture(stem, !!opts.normalMap)) {
+    const chain = await assetPackage.textures(stem, maxDim, !!opts.normalMap);
+    return opts.rgba && chain.bc ? rgbaChain(chain) : chain;
+  }
   const t = opts.texture ?? await openTexture(vfs, stem);
   const above = opts.above ?? 0;
   if (!t.header.format) throw new Error(`unsupported format ${t.header.formatLabel}`);
@@ -164,6 +199,13 @@ export interface ModelParts {
 
 /** loadModel without the textures: geometry (the first version that has some), skeleton, materials. */
 export async function loadModelParts(vfs: Vfs, path: string, opts: { material?: string | null } = {}): Promise<ModelParts> {
+  // from the compact package when it holds the model; a material given instead of the model's
+  // own (a character part's) is read from the paks
+  if (assetPackage?.hasModel(path)) {
+    const parts = await assetPackage.modelParts(path);
+    if (!opts.material || opts.material === parts.mtlPath) return parts;
+    return withMaterials(vfs, path, null, parts.cgf, parts.skeleton, opts, parts.notes);
+  }
   const notes: string[] = [];
   // The fast-load paks hold stub copies without geometry: take the highest-
   // priority version that actually has a mesh.

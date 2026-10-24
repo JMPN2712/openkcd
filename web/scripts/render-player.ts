@@ -20,6 +20,7 @@ import { type MoveInput } from "../src/player.ts";
 import { CollisionWorld } from "../src/collision.ts";
 import { openRataje, gpuDevice, Offscreen, nodeSlimFiles } from "./lib.ts";
 import { SlimPackage } from "../src/slim.ts";
+import { setAssetPackage } from "../src/model.ts";
 import { loadDetailLayers } from "../src/terrainDetail.ts";
 import { ShadowMap } from "../src/shadow.ts";
 import { ShadowCasters } from "../src/shadowPass.ts";
@@ -59,6 +60,11 @@ const oldWater = args.includes("--old-water") ? (args.splice(args.indexOf("--old
 const noPool = args.includes("--no-pool") ? (args.splice(args.indexOf("--no-pool"), 1), true) : false;
 
 const lvl = await openRataje(root);
+// --slim DIR: models and textures from a compact package (scripts/build-slim.ts), set before
+// anything loads (with --root DIR/store, the package's file store, nothing else is read)
+const slimDir = opt("--slim", "");
+const slim = slimDir ? await SlimPackage.open(nodeSlimFiles(slimDir)) : null;
+setAssetPackage(slim);
 const device = await gpuDevice();
 // streamed textures: each view renders until they have loaded (--no-pool: the first-load sizes only)
 const pool = noPool ? undefined : new TexturePool(device, lvl.vfs, { budget: poolMiB * 2 ** 20, maxDim: poolDim });
@@ -79,10 +85,8 @@ const msaa = device.createTexture({ size: [W, H], format, sampleCount: 4, usage:
 const depth = device.createTexture({ size: [W, H], format: depthFormat(passSetup), sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
 
 const t0 = performance.now();
-// --slim DIR: the world's models from a compact package (scripts/build-slim.ts)
-const slimDir = opt("--slim", "");
 const worldCaches = newWorldCaches();
-if (slimDir) worldCaches.slim = await SlimPackage.open(nodeSlimFiles(slimDir));
+if (slim) worldCaches.slim = slim;
 const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, [ax, ay], radius, { maxModels: 20000, caches: worldCaches, props: lvl.props, hiddenLayers: lvl.hiddenLayers, normalMaps: !args.includes("--no-normal"), ground: args.includes("--no-roads") ? undefined : [lvl.roads, lvl.decals] });
 // debug: HIDE=regex leaves matching models out (e.g. HIDE='^road:|road_side')
 if (process.env.HIDE) scene.models = scene.models.filter((m) => !new RegExp(process.env.HIDE!).test(m.path));

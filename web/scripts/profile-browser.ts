@@ -5,7 +5,7 @@
 // call crosses into the GPU process: this measures what a player gets.
 // Driven over the DevTools protocol (Node's built-in WebSocket); no npm deps.
 // usage: node scripts/profile-browser.ts [--root=GAME_ROOT] [--preset=high] [--settle=30]
-//          [--seconds=8] [--windowed] [--fly=SECONDS [--spikes]] [--build-slim=full|potato] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080]
+//          [--seconds=8] [--windowed] [--fly=SECONDS [--spikes]] [--build-slim=full|potato] [--package] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080]
 //   CHROME=… picks the browser binary, CHROME_FLAGS=… adds flags, PROFILE_DIR=… keeps the profile; --probe stops after naming the
 //   WebGPU adapter; --fly then flies north-west across the map (free-fly, 60 m/s: a streaming
 //   step every few seconds) printing the HUD every 10 s, then profiles there; with --spikes it
@@ -105,10 +105,17 @@ if (process.argv.includes("--probe")) {
   process.exit(0);
 }
 
-// hand the game folder to the input, as picking it would (Chrome fires "change" itself)
-const { root: doc } = await page("DOM.getDocument");
-const { nodeId } = await page("DOM.querySelector", { nodeId: doc.nodeId, selector: "#open-input" });
-await page("DOM.setFileInputFiles", { nodeId, files: [root] });
+if (process.argv.includes("--package")) {
+  // --package: the compact package and its file store in this profile's OPFS (built by an earlier
+  // run with --build-slim, PROFILE_DIR kept): no game files at all
+  await waitFor("the package button", () => evaluate<boolean>(`!document.getElementById("package").hidden`).then((v) => v || undefined), 30000);
+  await evaluate(`document.getElementById("package").click()`);
+} else {
+  // hand the game folder to the input, as picking it would (Chrome fires "change" itself)
+  const { root: doc } = await page("DOM.getDocument");
+  const { nodeId } = await page("DOM.querySelector", { nodeId: doc.nodeId, selector: "#open-input" });
+  await page("DOM.setFileInputFiles", { nodeId, files: [root] });
+}
 const status = await waitFor("the game folder", () => evaluate<string>(`document.getElementById("status").textContent`).then((s) => (/archives|failed|no Data/.test(s) ? s : undefined)), 120000);
 console.log(status);
 // --load-profile: a CPU profile of the loading, from the click until the market is complete
