@@ -10,7 +10,8 @@ import type { SlimSink } from "./slimBuild.ts";
 import { SlimPackage, type SlimFiles } from "./slim.ts";
 import type { ReadWorkers } from "./readWorkers.ts";
 import { planFileStore } from "./slimStore.ts";
-import { repackedPak } from "./repack.ts";
+import { repackedPak, type PakPlan } from "./repack.ts";
+import { readZip } from "./zip.ts";
 
 export type SlimVariant = "full" | "potato";
 const dirName = (v: SlimVariant) => `slim-${v}`;
@@ -118,60 +119,142 @@ export async function packageStore(variant: SlimVariant): Promise<FileSystemDire
   }
 }
 
+/**
+ * The store plan of a part-by-part build that got as far as the file store (store-plan.json,
+ * written once the package is complete): the paks it is made from, by lower-case path, with their
+ * sizes. Those that are gone from the staging copy have their store copy written already.
+ */
+export async function storeInProgress(variant: SlimVariant): Promise<Map<string, number> | null> {
+  try {
+    const dir = await (await opfs()).getDirectoryHandle(dirName(variant));
+    await dir.getFileHandle("index.json");
+    const plan = JSON.parse(await (await (await dir.getFileHandle(STORE_PLAN)).getFile()).text()) as SavedStorePlan;
+    return new Map(plan.sources.map((s) => [s.path.toLowerCase(), s.size]));
+  } catch {
+    return null;
+  }
+}
+
+const STORE_PLAN = "store-plan.json";
+interface SavedStorePlan {
+  /** every pak the build was made from */
+  sources: { path: string; size: number }[];
+  /** the store's paks: the entries left out, as indexes into the pak's central directory */
+  plans: { path: string; dead: number[] }[];
+  keptBytes: number;
+}
+
 /** Build a package into OPFS from the opened game's paks (`store`: and its file store). */
 export async function buildSlimInBrowser(
   paks: PakSource[],
   variant: SlimVariant,
   onProgress: (s: string) => void,
   store = true,
-  /** afterStorePak: called as each pak's store copy is written; workers: false for paks read in place from an installer; language: the voice kept */
-  opts: { afterStorePak?: (source: PakSource) => Promise<void>; workers?: boolean; language?: string } = {},
+  /**
+   * afterStorePak: called as each pak's store copy is written; workers: false for paks read in
+   * place from an installer; language: the voice kept; resumable: the store plan is saved, and a
+   * build that got as far as the store carries on from it (with the paks whose store copy is
+   * written gone); signal: cancels
+   */
+  opts: { afterStorePak?: (source: PakSource) => Promise<void>; workers?: boolean; language?: string; resumable?: boolean; signal?: AbortSignal } = {},
 ): Promise<string> {
   const t0 = performance.now();
-  const data = await levelData(paks, "rataje", onProgress);
-  const vfs = await levelVfs(paks, "rataje", onProgress, opts.workers ?? true);
+  const signal = opts.signal;
   const root = await opfs();
-  await root.removeEntry(dirName(variant), { recursive: true }).catch(() => {});
-  const dir = await root.getDirectoryHandle(dirName(variant), { create: true });
-  let lastShown = 0;
-  // (loaded when building: the meshoptimizer encoder stays out of the start-up bundle)
-  const { buildSlim } = await import("./slimBuild.ts");
-  const { characterParts } = await import("./slimBuild.ts");
-  const characters = await characterParts(vfs);
-  const { index, sizes } = await buildSlim({ vfs, terrain: data.terrain, objects: data.objects, props: data.props, hiddenLayers: data.hiddenLayers, characters }, opfsSink(dir), {
-    potato: variant === "potato",
-    deflate,
-    onProgress: (what, done, total) => {
-      const now = performance.now();
-      if (now - lastShown < 200 && done < total) return;
-      lastShown = now;
-      onProgress(`${what}: ${done}/${total}`);
-    },
-  });
   const G = (n: number) => `${(n / 2 ** 30).toFixed(2)} GiB`;
-  let storeLine = "";
-  if (store) {
-    // the file store: every other file the engine reads, in paks with the original paths (the
-    // "done" file last: a store without it is incomplete)
-    const plan = await planFileStore(paks, index, { textureCap: variant === "potato" ? 512 : undefined, language: opts.language }, (what, done, total) => onProgress(`${what}: ${done}/${total}`));
-    const sdir = await dir.getDirectoryHandle("store", { create: true });
-    let written = 0;
-    for (const [i, p] of plan.plans.entries()) {
-      const { dir: d, name } = await dirOf(sdir, p.pak.path, true);
-      const w = await (await d.getFileHandle(name, { create: true })).createWritable();
+  let summary = "";
+  let plans: PakPlan[] = [];
+  let keptBytes = 0;
+  const resumed = opts.resumable && store && (await storeInProgress(variant));
+  const dir = await root.getDirectoryHandle(dirName(variant), { create: !resumed });
+  if (resumed) {
+    // the package is complete: the store's paks still here are written (again)
+    const saved = JSON.parse(await (await (await dir.getFileHandle(STORE_PLAN)).getFile()).text()) as SavedStorePlan;
+    const byPath = new Map(paks.map((p) => [p.path.toLowerCase(), p]));
+    for (const s of saved.plans) {
+      const pak = byPath.get(s.path.toLowerCase());
+      if (!pak) continue;
+      const { entries, cdOffset } = await readZip(await pak.open());
+      const dead = new Set(s.dead.map((i) => entries[i]));
+      plans.push({ pak, entries, cdOffset, dead, deadBytes: [...dead].reduce((a, e) => a + e.csize, 0) });
+    }
+    keptBytes = saved.keptBytes;
+    summary = `${variant} package`;
+    onProgress(`Carrying on with the file store: ${saved.plans.length - plans.length} of ${saved.plans.length} paks were written`);
+  } else {
+    const data = await levelData(paks, "rataje", onProgress);
+    const vfs = await levelVfs(paks, "rataje", onProgress, opts.workers ?? true);
+    signal?.throwIfAborted();
+    await root.removeEntry(dirName(variant), { recursive: true }).catch(() => {});
+    const fresh = await root.getDirectoryHandle(dirName(variant), { create: true });
+    let lastShown = 0;
+    // (loaded when building: the meshoptimizer encoder stays out of the start-up bundle)
+    const { buildSlim } = await import("./slimBuild.ts");
+    const { characterParts } = await import("./slimBuild.ts");
+    const characters = await characterParts(vfs);
+    const { index, sizes } = await buildSlim({ vfs, terrain: data.terrain, objects: data.objects, props: data.props, hiddenLayers: data.hiddenLayers, characters }, opfsSink(fresh), {
+      potato: variant === "potato",
+      deflate,
+      onProgress: (what, done, total) => {
+        signal?.throwIfAborted();
+        const now = performance.now();
+        if (now - lastShown < 200 && done < total) return;
+        lastShown = now;
+        onProgress(`${what}: ${done}/${total}`);
+      },
+    });
+    summary = `${variant} package: ${Object.keys(index.models).length} models, ${Object.keys(index.textures).length} textures, ${G(sizes.models + sizes.inline + sizes.packs)}`;
+    if (store) {
+      // the file store: every other file the engine reads, in paks with the original paths
+      const plan = await planFileStore(paks, index, { textureCap: variant === "potato" ? 512 : undefined, language: opts.language }, (what, done, total) => {
+        signal?.throwIfAborted();
+        onProgress(`${what}: ${done}/${total}`);
+      });
+      plans = plan.plans;
+      keptBytes = plan.keptBytes;
+      if (opts.resumable) {
+        // before any staged pak is deleted
+        const saved: SavedStorePlan = {
+          sources: paks.map((p) => ({ path: p.path, size: p.size })),
+          plans: plans.map((p) => ({ path: p.pak.path, dead: p.entries.flatMap((e, i) => (p.dead.has(e) ? [i] : [])) })),
+          keptBytes,
+        };
+        await opfsSink(fresh).writeText(STORE_PLAN, JSON.stringify(saved));
+      }
+    }
+  }
+  if (!store) return `${summary}, in ${((performance.now() - t0) / 1000).toFixed(0)} s`;
+  // the "done" file last: a store without it is incomplete
+  const sdir = await dir.getDirectoryHandle("store", { create: true });
+  let written = 0;
+  for (const [i, p] of plans.entries()) {
+    signal?.throwIfAborted();
+    const { dir: d, name } = await dirOf(sdir, p.pak.path, true);
+    const w = await (await d.getFileHandle(name, { create: true })).createWritable();
+    try {
       for await (const chunk of repackedPak(await p.pak.open(), p)) {
+        signal?.throwIfAborted();
         await w.write(chunk as Uint8Array<ArrayBuffer>);
         written += chunk.byteLength;
       }
-      await w.close();
-      // (a compact install deletes each pak it came from here: storage never holds both copies)
-      await opts.afterStorePak?.(p.pak);
-      onProgress(`Writing the file store: ${i + 1}/${plan.plans.length} paks, ${G(written)}`);
+    } catch (e) {
+      await w.abort().catch(() => {});
+      throw e;
     }
-    await (await sdir.getFileHandle("done", { create: true })).createWritable().then((w) => w.close());
-    storeLine = `; file store ${G(plan.keptBytes)} in ${plan.plans.length} paks`;
+    await w.close();
+    // (a compact install deletes each pak it came from here: storage never holds both copies)
+    await opts.afterStorePak?.(p.pak);
+    onProgress(`Writing the file store: ${i + 1}/${plans.length} paks, ${G(written)}`);
   }
-  return `${variant} package: ${Object.keys(index.models).length} models, ${Object.keys(index.textures).length} textures, ${G(sizes.models + sizes.inline + sizes.packs)}${storeLine}, in ${((performance.now() - t0) / 1000).toFixed(0)} s`;
+  await (await sdir.getFileHandle("done", { create: true })).createWritable().then((w) => w.close());
+  await dir.removeEntry(STORE_PLAN).catch(() => {});
+  return `${summary}; file store ${G(keptBytes)} in ${(await storePaks(sdir))} paks, in ${((performance.now() - t0) / 1000).toFixed(0)} s`;
+}
+
+async function storePaks(dir: FileSystemDirectoryHandle): Promise<number> {
+  let n = 0;
+  for await (const [, h] of dir.entries()) n += h.kind === "directory" ? await storePaks(h as FileSystemDirectoryHandle) : h.name.toLowerCase().endsWith(".pak") ? 1 : 0;
+  return n;
 }
 
 /** The builder's view: pick a variant, build, see the result. */
