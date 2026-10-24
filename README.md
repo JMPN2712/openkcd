@@ -102,6 +102,8 @@ node scripts/test-collision.ts                   # collision sources by object t
 node --expose-gc scripts/test-streaming.ts       # two laps through the map's towns: scene rebuild times, memory levels off with cache trimming
 node scripts/test-sky.ts                         # time-of-day profiles, sunrise/sunset, the sun's path, light levels over the day
 node scripts/bench-presets.ts --gpu both         # frame rates per quality preset (Potato/Low/Medium/High), market and fields, each GPU Dawn finds (NO_POOL=1: without texture streaming)
+node scripts/build-slim.ts OUT_DIR [--potato]     # the compact package of Rataje's world (docs/SLIM.md), built from ~/kcd1 into OUT_DIR outside the repo
+node scripts/test-slim.ts PACKAGE_DIR            # the package's codec, and a sample of its models and textures against the paks
 node scripts/bench-streaming.ts --back           # what a streaming step costs: scene build, geometry upload (in slices), the renderer rebuild and the frame after, kept geometry memory
 node scripts/profile-browser.ts --trace          # the world view in headless Chrome on the real GPU (opens ~/kcd1 through the folder input): HUD fps, a CPU profile, and with --trace how busy Chrome's GPU process is
 node scripts/test-texture-pool.ts                # texture streaming: grow, shrink under a budget (read back from the GPU), reads on worker threads

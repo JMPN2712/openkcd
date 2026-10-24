@@ -20,6 +20,7 @@ import { vegetationMatrix, type LevelObjects } from "./levelObjects.ts";
 import type { Terrain } from "./terrain.ts";
 import type { Vfs } from "./vfs.ts";
 import type { MergedMeshes } from "./mergedMeshes.ts";
+import type { SlimPackage } from "./slim.ts";
 
 export interface WorldModel {
   path: string;
@@ -71,6 +72,8 @@ export interface WorldCaches {
   textures: Map<string, Promise<MipChain | null>>;
   /** parsed .cdf of door / AnimObject props */
   cdfs: Map<string, Promise<CharacterSpec | null>>;
+  /** a compact package (slim.ts): models it holds are loaded from it, the rest from the paks */
+  slim?: SlimPackage;
   /** scene builds so far, and the build that last used each model (trimWorldCaches) */
   generation: number;
   usedAt: Map<string, number>;
@@ -129,6 +132,8 @@ async function loadLods(vfs: Vfs, path: string, caches: WorldCaches, maxTextureD
         const ids = p.slice(g[0].length).split(",").map(Number);
         const mtl = `${ground.terrain.materials[src.material(ids[0])] ?? ""}.mtl`.toLowerCase();
         m = src.merged(ids).then((mesh) => meshModel(vfs, p, mesh, mtl, { maxTextureDim, textureCache: caches.textures, normalMaps })).catch(() => null);
+      } else if (caches.slim?.hasModel(file) && !material) {
+        m = caches.slim.model(file, { maxTextureDim, textureCache: caches.textures, normalMaps }).catch(() => null);
       } else m = loadModel(vfs, file, { maxTextureDim, textureCache: caches.textures, material: material || undefined, normalMaps }).catch(() => null);
       caches.models.set(p, m);
       void m.then((x) => { if (caches.models.get(p) === m) caches.loaded.set(p, x); });
@@ -141,7 +146,7 @@ async function loadLods(vfs: Vfs, path: string, caches: WorldCaches, maxTextureD
   const lods = [base];
   for (let k = 1; k < 6; k++) {
     const p = path.replace(/\.(cgf|cga)$/, `_lod${k}.$1`);
-    if (p === path || !vfs.lookup(p)) break;
+    if (p === path || !(caches.slim?.hasModel(p) || vfs.lookup(p))) break;
     const m = await load(p);
     if (!m) break;
     // the last LOD of trees is a ~10-triangle billboard card for the engine's
@@ -314,11 +319,22 @@ async function sceneFromGroups(
   // nearest first (roads, at 0, come first and keep their priority order: the sort is stable)
   const ordered = [...groups.values()].sort((a, b) => a.nearest - b.nearest);
   const max = opts.maxModels ?? 400;
+  const chosen = ordered.slice(0, max);
+  // with a compact package: the region chunks holding much of what isn't loaded yet, in a few
+  // reads first (the rest is read entry by entry); let go once the scene is built
+  if (caches.slim) await caches.slim.prefetch(chosen.map((g) => g.path).filter((p) => !caches.models.has(p)));
+  try {
+    return await sceneModels(vfs, chosen, caches, ordered.length - max, opts);
+  } finally {
+    caches.slim?.release();
+  }
+}
+
+async function sceneModels(vfs: Vfs, chosen: Group[], caches: WorldCaches, skipped: number, opts: Parameters<typeof sceneFromGroups>[3]): Promise<WorldScene> {
   const failed = new Map<string, string>();
   const models: WorldModel[] = [];
   let instances = 0;
   // load eight models at a time (reads and decoding overlap; one at a time left the CPU idle half the time)
-  const chosen = ordered.slice(0, max);
   const lodsOf: Promise<LoadedModel[] | null>[] = new Array(chosen.length);
   let next = 0, loaded = 0;
   const worker = async () => {
@@ -360,7 +376,7 @@ async function sceneFromGroups(
     models.push({ path: g.path, kind: g.kind, lods, center: c, radius: r, count, matrices, spheres, clusters, bound: boundOf(clusters), uber: g.path.startsWith("objects/uberlods/") });
     instances += count;
   }
-  return { models, instances, modelsSkipped: Math.max(0, ordered.length - max), failed };
+  return { models, instances, modelsSkipped: Math.max(0, skipped), failed };
 }
 
 /** Instances per culling cluster (WorldModel.clusters). */

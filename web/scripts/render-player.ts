@@ -18,7 +18,8 @@ import { PlayerAvatar } from "../src/playerAvatar.ts";
 import { PlayerSession } from "../src/playerSession.ts";
 import { type MoveInput } from "../src/player.ts";
 import { CollisionWorld } from "../src/collision.ts";
-import { openRataje, gpuDevice, Offscreen } from "./lib.ts";
+import { openRataje, gpuDevice, Offscreen, nodeSlimFiles } from "./lib.ts";
+import { SlimPackage } from "../src/slim.ts";
 import { loadDetailLayers } from "../src/terrainDetail.ts";
 import { ShadowMap } from "../src/shadow.ts";
 import { ShadowCasters } from "../src/shadowPass.ts";
@@ -78,7 +79,11 @@ const msaa = device.createTexture({ size: [W, H], format, sampleCount: 4, usage:
 const depth = device.createTexture({ size: [W, H], format: depthFormat(passSetup), sampleCount: 4, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
 
 const t0 = performance.now();
-const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, [ax, ay], radius, { maxModels: 20000, caches: newWorldCaches(), props: lvl.props, hiddenLayers: lvl.hiddenLayers, normalMaps: !args.includes("--no-normal"), ground: args.includes("--no-roads") ? undefined : [lvl.roads, lvl.decals] });
+// --slim DIR: the world's models from a compact package (scripts/build-slim.ts)
+const slimDir = opt("--slim", "");
+const worldCaches = newWorldCaches();
+if (slimDir) worldCaches.slim = await SlimPackage.open(nodeSlimFiles(slimDir));
+const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, [ax, ay], radius, { maxModels: 20000, caches: worldCaches, props: lvl.props, hiddenLayers: lvl.hiddenLayers, normalMaps: !args.includes("--no-normal"), ground: args.includes("--no-roads") ? undefined : [lvl.roads, lvl.decals] });
 // debug: HIDE=regex leaves matching models out (e.g. HIDE='^road:|road_side')
 if (process.env.HIDE) scene.models = scene.models.filter((m) => !new RegExp(process.env.HIDE!).test(m.path));
 const items = lodItems(scene);

@@ -22,7 +22,12 @@ export interface MipChain {
   full: number;
   normalMap: boolean;
   /** the opened texture (header and part list), to load more of it without opening it again */
-  texture: Texture;
+  texture?: Texture;
+  /**
+   * Loads more levels of the same texture, up to `maxDim` and only those larger than `above`
+   * (textures from a compact package, slim.ts); without it, loadMipChain with `texture`.
+   */
+  more?: (maxDim: number, above: number) => Promise<MipChain>;
   /** the level data went to a TexturePool's GPU texture and was dropped here (the sizes stay) */
   released?: boolean;
 }
@@ -118,7 +123,7 @@ export async function loadMipChain(vfs: Vfs, stem: string, maxDim: number, opts:
   return { stem, srgb: t.header.srgb, levels, full, normalMap, texture: t };
 }
 
-interface LoadOptions {
+export interface LoadOptions {
   maxTextureDim?: number;
   onStatus?: (s: string) => void;
   /** .mtl path overriding the model's own (CDF / database) */
@@ -130,12 +135,30 @@ interface LoadOptions {
 }
 
 /** A mesh built in code (a road) with a material from the VFS, as a model. */
-export function meshModel(vfs: Vfs, name: string, mesh: CgfMesh, material: string, opts: LoadOptions = {}): Promise<LoadedModel> {
+export async function meshModel(vfs: Vfs, name: string, mesh: CgfMesh, material: string, opts: LoadOptions = {}): Promise<LoadedModel> {
   const cgf: Cgf = { chunks: [], meshes: [mesh], material: null, skippedNodes: [], physics: [] };
-  return withMaterials(vfs, name, null, cgf, null, { ...opts, material }, []);
+  const parts = await withMaterials(vfs, name, null, cgf, null, { material }, []);
+  return withTextures(parts, opts, vfsTextures(vfs, parts.notes, opts));
 }
 
 export async function loadModel(vfs: Vfs, path: string, opts: LoadOptions = {}): Promise<LoadedModel> {
+  const parts = await loadModelParts(vfs, path, opts);
+  return withTextures(parts, opts, vfsTextures(vfs, parts.notes, opts));
+}
+
+/** A model's geometry, skeleton and materials, without textures (what a compact package stores). */
+export interface ModelParts {
+  path: string;
+  hit: VfsHit | null;
+  cgf: Cgf;
+  skeleton: Skeleton | null;
+  mtlPath: string | null;
+  materials: Material[];
+  notes: string[];
+}
+
+/** loadModel without the textures: geometry (the first version that has some), skeleton, materials. */
+export async function loadModelParts(vfs: Vfs, path: string, opts: { material?: string | null } = {}): Promise<ModelParts> {
   const notes: string[] = [];
   // The fast-load paks hold stub copies without geometry: take the highest-
   // priority version that actually has a mesh.
@@ -168,8 +191,8 @@ export async function loadModel(vfs: Vfs, path: string, opts: LoadOptions = {}):
   return withMaterials(vfs, path, hit, cgf, skeleton, opts, notes);
 }
 
-/** Load a model's materials and their textures. */
-async function withMaterials(vfs: Vfs, path: string, hit: VfsHit | null, cgf: Cgf, skeleton: Skeleton | null, opts: LoadOptions, notes: string[]): Promise<LoadedModel> {
+/** A model's materials (from its own .mtl, or `opts.material`). */
+async function withMaterials(vfs: Vfs, path: string, hit: VfsHit | null, cgf: Cgf, skeleton: Skeleton | null, opts: { material?: string | null }, notes: string[]): Promise<ModelParts> {
   let materials: Material[] = [];
   let mpath: string | null = null;
   if (opts.material || cgf.material) {
@@ -187,7 +210,23 @@ async function withMaterials(vfs: Vfs, path: string, hit: VfsHit | null, cgf: Cg
       notes.push(`material ${mpath} not found`);
     }
   }
+  return { path, hit, cgf, skeleton, mtlPath: mpath, materials, notes };
+}
 
+/** Loads a texture's mip chain up to a size (a normal map when `normalMap`). */
+export type TextureLoader = (stem: string, maxDim: number, normalMap: boolean) => Promise<MipChain>;
+
+/** Textures from the VFS (the paks). */
+function vfsTextures(vfs: Vfs, _notes: string[], opts: LoadOptions): TextureLoader {
+  return (stem, maxDim, normalMap) => {
+    opts.onStatus?.(`Decoding ${stem.slice(stem.lastIndexOf("/") + 1)}…`);
+    return loadMipChain(vfs, stem, maxDim, { normalMap });
+  };
+}
+
+/** The texture each material slot uses, at the size the model's materials call for (`load` reads them). */
+export async function withTextures(parts: ModelParts, opts: LoadOptions, load: TextureLoader): Promise<LoadedModel> {
+  const { materials, notes } = parts;
   const cache = opts.textureCache ?? new Map<string, Promise<MipChain | null>>();
   const slot = async (slotName: string, maxDim: number): Promise<(MipChain | null)[]> => {
     const out: (MipChain | null)[] = [];
@@ -204,8 +243,7 @@ async function withMaterials(vfs: Vfs, path: string, hit: VfsHit | null, cgf: Cg
       const key = `${stem}@${dim}`;
       let p = cache.get(key);
       if (!p) {
-        opts.onStatus?.(`Decoding ${stem.slice(stem.lastIndexOf("/") + 1)}…`);
-        p = loadMipChain(vfs, stem, dim, { normalMap: slotName === "Bumpmap" }).catch((err) => {
+        p = load(stem, dim, slotName === "Bumpmap").catch((err) => {
           notes.push(`material ${i} (${m.name}) ${slotName} ${stem}: ${(err as Error).message}`);
           return null;
         });
@@ -219,5 +257,5 @@ async function withMaterials(vfs: Vfs, path: string, hit: VfsHit | null, cgf: Cg
   const diffuse = await slot("Diffuse", maxDim);
   const specular = await slot("Specular", Math.min(512, maxDim));
   const normal = opts.normalMaps === false ? materials.map(() => null) : await slot("Bumpmap", maxDim);
-  return { path, hit, cgf, skeleton, mtlPath: mpath, materials, diffuse, specular, normal, notes };
+  return { path: parts.path, hit: parts.hit, cgf: parts.cgf, skeleton: parts.skeleton, mtlPath: parts.mtlPath, materials, diffuse, specular, normal, notes };
 }

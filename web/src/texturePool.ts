@@ -48,7 +48,9 @@ export class PooledTexture {
   readonly normalMap: boolean;
   /** largest side the texture has, and the opened file (to read more mips without reopening it) */
   readonly full: number;
-  readonly source: Texture;
+  readonly source: Texture | undefined;
+  /** a compact package's loader for more levels (MipChain.more), used instead of source */
+  readonly more: MipChain["more"];
 
   constructor(key: string, chain: MipChain, linear: boolean, device: GPUDevice) {
     this.key = key;
@@ -57,6 +59,7 @@ export class PooledTexture {
     this.normalMap = chain.normalMap;
     this.full = chain.full;
     this.source = chain.texture;
+    this.more = chain.more;
     if (chain.released) {
       // the data is gone (an evicted texture used again): a 1×1 stand-in until a load (dim 0) replaces it
       this.texture = device.createTexture({ size: [1, 1], format: linear ? "rgba8unorm" : "rgba8unorm-srgb", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC });
@@ -362,7 +365,8 @@ export class TexturePool {
     this.stats.loads++;
     // only the levels above what the GPU holds (all of them for a stand-in), in the format it holds
     const top = e.dim > 0;
-    void loadMipChain(this.vfs, e.stem, dim, { normalMap: e.normalMap, rgba: !e.texture.format.startsWith("bc") && e.dim > 0, texture: e.source, above: e.dim })
+    const more = e.more ? e.more(dim, e.dim) : loadMipChain(this.vfs, e.stem, dim, { normalMap: e.normalMap, rgba: !e.texture.format.startsWith("bc") && e.dim > 0, texture: e.source, above: e.dim });
+    void more
       .catch(() => { this.stats.failed++; return null; })
       .then((chain) => {
         this.inFlight--;
