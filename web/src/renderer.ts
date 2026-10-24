@@ -267,6 +267,15 @@ interface DrawItem {
   uvDensity: number;
 }
 
+/**
+ * Resolves once the next frame has run (in a browser; elsewhere on the next task): a loop doing a
+ * slice per await then takes one slice per frame. With a plain setTimeout(0) the browser ran
+ * every ready slice and read before the next frame, and they added up to long frames.
+ */
+function afterNextFrame(): Promise<void> {
+  return new Promise((r) => (typeof requestAnimationFrame === "function" ? requestAnimationFrame(() => setTimeout(r, 0)) : setTimeout(r, 0)));
+}
+
 /** Kept draws' uniforms: 256-byte slots in buffers of 1,024, handed out and taken back. */
 class UniformSlots {
   private device: GPUDevice;
@@ -337,7 +346,10 @@ function uvDensity(mesh: LoadedModel["cgf"]["meshes"][number], first: number, co
   const P = mesh.positions, T = mesh.uvs, I = mesh.indices;
   if (!T) return 0;
   let area = 0, uvArea = 0;
-  for (let t = first; t + 2 < first + count; t += 3) {
+  // (an even sample of at most 4,096 triangles: it only sizes texture requests, and every
+  // triangle of a large merged mesh took tens of ms in a streaming step)
+  const tris = Math.floor(count / 3), step = Math.max(1, Math.floor(tris / 4096)) * 3;
+  for (let t = first; t + 2 < first + count; t += step) {
     const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
     const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2];
     const vx = P[c] - P[a], vy = P[c + 1] - P[a + 1], vz = P[c + 2] - P[a + 2];
@@ -756,7 +768,14 @@ export class ModelRenderer {
       for (const mesh of model.cgf.meshes) {
         if (mesh.boneIds && mesh.boneWeights) continue;
         let geo = this.meshGeo.get(mesh)?.get(0);
-        if (!geo) (this.meshGeo.get(mesh) ?? this.meshGeo.set(mesh, new Map()).get(mesh)!).set(0, (geo = this.uploadMesh(mesh, 0)));
+        if (!geo) {
+          // (large meshes a part per frame)
+          const slice = { t, longest };
+          geo = await this.uploadMeshSliced(mesh, 32768, slice);
+          (this.meshGeo.get(mesh) ?? this.meshGeo.set(mesh, new Map()).get(mesh)!).set(0, geo);
+          t = slice.t;
+          longest = slice.longest;
+        }
         if (!transform && !meshExtents.has(mesh)) meshExtents.set(mesh, meshExtent(mesh, mesh.transform));
         for (const s of mesh.subsets) {
           cachedUvDensity(mesh, s.firstIndex, s.numIndices);
@@ -771,7 +790,7 @@ export class ModelRenderer {
         // (after each mesh: a model can hold several large ones)
         if (performance.now() - t > sliceMs) {
           longest = Math.max(longest, performance.now() - t);
-          await new Promise((r) => setTimeout(r, 0));
+          await afterNextFrame();
           t = performance.now();
         }
       }
@@ -779,7 +798,7 @@ export class ModelRenderer {
       if (keep) this.modelDraws.set(model, { draws, gen: this.generation });
       if (performance.now() - t > sliceMs) {
         longest = Math.max(longest, performance.now() - t);
-        await new Promise((r) => setTimeout(r, 0));
+        await afterNextFrame();
         t = performance.now();
       }
     }
@@ -789,35 +808,61 @@ export class ModelRenderer {
   /** A mesh's vertices in the renderer's layout (bone ids clamped to a palette of `paletteCount`; 0: not skinned), uploaded. */
   private uploadMesh(mesh: CgfMesh, paletteCount: number): { v: Range; i: Range } {
     const nv = mesh.positions.length / 3;
-    const raw = new ArrayBuffer(nv * VERTEX_BYTES);
+    const geo = this.allocMesh(mesh);
+    this.writeVertices(mesh, paletteCount, geo.v, 0, nv);
+    return geo;
+  }
+
+  /** uploadMesh a part at a time, yielding to the frame loop between parts of `part` vertices. */
+  private async uploadMeshSliced(mesh: CgfMesh, part: number, slice: { t: number; longest: number }): Promise<{ v: Range; i: Range }> {
+    const nv = mesh.positions.length / 3;
+    const geo = this.allocMesh(mesh);
+    for (let from = 0; from < nv; from += part) {
+      if (from) {
+        slice.longest = Math.max(slice.longest, performance.now() - slice.t);
+        await afterNextFrame();
+        slice.t = performance.now();
+      }
+      this.writeVertices(mesh, 0, geo.v, from, Math.min(nv, from + part));
+    }
+    return geo;
+  }
+
+  /** Room for a mesh's vertices and indices; the indices are written. */
+  private allocMesh(mesh: CgfMesh): { v: Range; i: Range } {
+    const v = this.vertexStore.alloc((mesh.positions.length / 3) * VERTEX_BYTES);
+    const i = this.indexStore.alloc(Math.ceil(mesh.indices.byteLength / 4) * 4);
+    if (mesh.indices.byteLength) this.device.queue.writeBuffer(i.buf, i.at, mesh.indices);
+    return { v, i };
+  }
+
+  /** Encode vertices [from, to) in the renderer's layout and write them into their range. */
+  private writeVertices(mesh: CgfMesh, paletteCount: number, range: Range, from: number, to: number): void {
+    const raw = new ArrayBuffer((to - from) * VERTEX_BYTES);
     const verts = new Float32Array(raw);
     const ids = new Uint16Array(raw);
     const wts = new Uint8Array(raw);
     const F = VERTEX_BYTES / 4, U = VERTEX_BYTES / 2;
     // (plain indexed copies: a subarray per attribute and vertex made big meshes cost tens of ms)
     const P = mesh.positions, N = mesh.normals, T = mesh.uvs, G = mesh.tangents, C = mesh.colors;
-    for (let i = 0; i < nv; i++) {
-      const o = i * F;
+    for (let i = from; i < to; i++) {
+      const j = i - from, o = j * F;
       verts[o] = P[i * 3]; verts[o + 1] = P[i * 3 + 1]; verts[o + 2] = P[i * 3 + 2];
       if (N) { verts[o + 3] = N[i * 3]; verts[o + 4] = N[i * 3 + 1]; verts[o + 5] = N[i * 3 + 2]; } else verts[o + 5] = 1;
       if (T) { verts[o + 6] = T[i * 2]; verts[o + 7] = T[i * 2 + 1]; }
       if (G) { verts[o + 11] = G[i * 4]; verts[o + 12] = G[i * 4 + 1]; verts[o + 13] = G[i * 4 + 2]; verts[o + 14] = G[i * 4 + 3]; }
-      const w = i * VERTEX_BYTES + 60;
+      const w = j * VERTEX_BYTES + 60;
       if (C) { wts[w] = C[i * 4]; wts[w + 1] = C[i * 4 + 1]; wts[w + 2] = C[i * 4 + 2]; wts[w + 3] = C[i * 4 + 3]; } else { wts[w] = wts[w + 1] = wts[w + 2] = wts[w + 3] = 255; }
       if (paletteCount) {
         for (let k = 0; k < 4; k++) {
-          ids[i * U + 16 + k] = Math.min(mesh.boneIds![i * 4 + k], paletteCount - 1);
-          wts[i * VERTEX_BYTES + 40 + k] = mesh.boneWeights![i * 4 + k];
+          ids[j * U + 16 + k] = Math.min(mesh.boneIds![i * 4 + k], paletteCount - 1);
+          wts[j * VERTEX_BYTES + 40 + k] = mesh.boneWeights![i * 4 + k];
         }
       } else {
-        wts[i * VERTEX_BYTES + 40] = 255; // bone 0 of the identity palette
+        wts[j * VERTEX_BYTES + 40] = 255; // bone 0 of the identity palette
       }
     }
-    const v = this.vertexStore.alloc(raw.byteLength);
-    const i = this.indexStore.alloc(Math.ceil(mesh.indices.byteLength / 4) * 4);
-    this.device.queue.writeBuffer(v.buf, v.at, verts);
-    if (mesh.indices.byteLength) this.device.queue.writeBuffer(i.buf, i.at, mesh.indices);
-    return { v, i };
+    this.device.queue.writeBuffer(range.buf, range.at + from * VERTEX_BYTES, verts);
   }
 
   private vertexState(): GPUVertexState {
@@ -1280,33 +1325,31 @@ export class ModelRenderer {
       off += n;
     }
     if (off) this.device.queue.writeBuffer(v.packed!, 0, v.packedCpu, 0, off * this.instStride);
+    // arguments of the drawn items' draws only: the others' bundles don't run this frame (filling
+    // all 12,000 draws' arguments in each of three views was a large part of every frame)
     let tris = 0, calls = 0;
-    const a = v.args;
-    for (let i = 0; i < this.draws.length; i++) {
-      const d = this.draws[i];
-      const n = d.count ? v.counts[d.item] : 0;
-      a[i * 5] = d.count;
-      a[i * 5 + 1] = n;
-      a[i * 5 + 2] = d.firstIndex;
-      a[i * 5 + 3] = d.baseVertex;
-      a[i * 5 + 4] = v.itemFirst[d.item];
-      if (n) { tris += (d.count / 3) * n; calls++; }
-    }
-    let slots = this.draws.length;
-    if (v !== this.views[0] && this.shadowDraws) {
-      // shadow views: the merged draws' arguments, and their draw count instead
-      calls = 0;
-      for (const [item, l] of this.shadowDraws) {
-        const n = v.counts[item];
-        for (const e of l) {
-          if (n) calls++;
-          if (e.arg < this.draws.length) continue;
+    const a = v.args, starts = this.itemDrawStarts();
+    const shadow = v !== this.views[0] && this.shadowDraws ? this.shadowDraws : null;
+    for (let k = 0; k < v.counts.length; k++) {
+      const n = v.counts[k];
+      if (!n) continue;
+      const first = v.itemFirst[k];
+      if (shadow) {
+        // shadow views: the (merged) shadow draws
+        for (const e of shadow.get(k) ?? []) {
           const o = e.arg * 5;
-          a[o] = e.count; a[o + 1] = n; a[o + 2] = e.firstIndex; a[o + 3] = e.d.baseVertex; a[o + 4] = v.itemFirst[item];
+          a[o] = e.count; a[o + 1] = n; a[o + 2] = e.firstIndex; a[o + 3] = e.d.baseVertex; a[o + 4] = first;
+          tris += (e.count / 3) * n; calls++;
         }
+        continue;
       }
-      slots += this.mergedArgs;
+      for (let i = starts[k]; i < starts[k + 1]; i++) {
+        const d = this.draws[i], o = i * 5;
+        a[o] = d.count; a[o + 1] = d.count ? n : 0; a[o + 2] = d.firstIndex; a[o + 3] = d.baseVertex; a[o + 4] = first;
+        if (d.count) { tris += (d.count / 3) * n; calls++; }
+      }
     }
+    const slots = this.draws.length + (shadow ? this.mergedArgs : 0);
     if (slots) this.device.queue.writeBuffer(v.argsBuf!, 0, a, 0, slots * 5);
     v.triangles = tris;
     v.calls = calls;
@@ -1368,6 +1411,21 @@ export class ModelRenderer {
     }
     return enc.finish();
   }
+
+  /** Where each item's draws start in this.draws (they are contiguous, in item order), and the end. */
+  private itemDrawStarts(): Uint32Array {
+    if (!this.drawStarts) {
+      const st = (this.drawStarts = new Uint32Array(this.itemInst.length + 1));
+      let i = 0;
+      for (let k = 0; k < this.itemInst.length; k++) {
+        st[k] = i;
+        while (i < this.draws.length && this.draws[i].item === k) i++;
+      }
+      st[this.itemInst.length] = i;
+    }
+    return this.drawStarts;
+  }
+  private drawStarts: Uint32Array | null = null;
 
   /** An item's shadow draws (see shadowDraws), built on first use for every item. */
   private shadowDrawsOf(item: number): { d: DrawItem; arg: number; firstIndex: number; count: number }[] {
@@ -1530,6 +1588,7 @@ export class ModelRenderer {
     this.drawIndex = null;
     this.shadowDraws = null;
     this.mergedArgs = 0;
+    this.drawStarts = null;
     for (const v of this.views) { if (v.camBuf !== this.camBuf) v.camBuf.destroy(); v.packed?.destroy(); v.argsBuf?.destroy(); }
     this.views = [];
     this.palettes = [];

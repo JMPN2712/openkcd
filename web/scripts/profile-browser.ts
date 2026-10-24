@@ -161,7 +161,7 @@ if (fly) {
     const all = frames.slice(1).map((t, i) => t - frames[i]).sort((a, b) => a - b);
     console.log(`\n${frames.length} frames in ${((frames[frames.length - 1] - frames[0]) / 1000).toFixed(0)} s: median ${all[all.length >> 1].toFixed(1)} ms, p99 ${all[Math.floor(all.length * 0.99)].toFixed(1)} ms, ${gaps.length} over 25 ms, worst ${all[all.length - 1].toFixed(0)} ms`);
     // per long frame: the functions sampled in it (each counted once per sample, innermost three of our own)
-    const total = new Map<string, number>();
+    const total = new Map<string, number>(), totalSelf = new Map<string, number>();
     for (const [a, b] of gaps.sort((x, y) => (y[1] - y[0]) - (x[1] - x[0])).slice(0, 12)) {
       const here = new Map<string, number>();
       (p.samples as number[]).forEach((id, i) => {
@@ -177,9 +177,12 @@ if (fly) {
         const k = stage + self;
         here.set(k, (here.get(k) ?? 0) + 0.5);
         total.set(stage, (total.get(stage) ?? 0) + 0.5);
+        const sk = ours[0] ? ours[0].callFrame.functionName || "(anonymous)" : `native ${chain[0]?.callFrame.functionName ?? "?"}`;
+        totalSelf.set(sk, (totalSelf.get(sk) ?? 0) + 0.5);
       });
       console.log(`  ${(b - a).toFixed(0)} ms: ${[...here].sort((x, y) => y[1] - x[1]).slice(0, 5).map(([k, v]) => `${k} ${v.toFixed(0)}`).join(", ")}`);
     }
+    console.log(`in all long frames, innermost: ${[...totalSelf].sort((x, y) => y[1] - x[1]).slice(0, 14).map(([k, v]) => `${k} ${v.toFixed(0)} ms`).join(", ")}`);
     console.log(`in all long frames: ${[...total].sort((x, y) => y[1] - x[1]).slice(0, 14).map(([k, v]) => `${k} ${v.toFixed(0)} ms`).join(", ")}`);
   }
   await sleep(3000);

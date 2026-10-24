@@ -249,6 +249,16 @@ south-west from the market):
   meshes, not only models. Headless steps: geometry 465 → 256 ms in slices of at most 4–8 ms,
   rebuild 44–73 ms. Left in the long frames: the frame after a rebuild records every visible
   item's bundles again, and small pak reads on the main thread.
+- **Per-frame and slice work** (same session, later): `flush` fills indirect arguments only for
+  the drawn items' draws (it filled all 12,000 in each of three views every frame: 93 → 40 ms
+  across the flight's long frames); `selectLods` skips whole models by a bound around their
+  clusters; `prepare` yields until after the next frame (with `setTimeout(0)` the browser ran
+  every ready slice and read before the next frame), uploads a large mesh 32,768 vertices at a
+  time, and `uvDensity` samples at most 4,096 triangles. Headless steps: slices at most about
+  5 ms. In Chrome (flight test, other browsers running): about 65–75 frames over 25 ms in 40 s,
+  p99 23–27 ms, median 4–5 ms; the remaining long frames are loading work (model parsing, small
+  pak reads) and ordinary frames. Small pak reads on the read workers too were worse (92–100
+  long frames against 67–73): they queue behind the large ones and loads arrive in bursts.
 - **Startup:** the free-fly camera starts above Henry's spawn, so the first streamed scene is the
   market: in Chrome from `~/kcd1`, the market is complete after 64 s instead of 95–125 s.
 - Chrome at the market afterwards: 132 fps, main thread 6.7 ms (from 119 fps and 7.4 ms).

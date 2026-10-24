@@ -38,6 +38,8 @@ export interface WorldModel {
    * together: per run, the centre and radius around their centres, and their largest radius.
    */
   clusters: Float32Array; // 5 per run
+  /** around all its clusters, as one: centre, radius around the cluster centres, largest instance radius */
+  bound: Float32Array; // 5
   /** an uber-LOD (town-block stand-in), drawn only from afar */
   uber: boolean;
 }
@@ -354,7 +356,8 @@ async function sceneFromGroups(
       spheres[i * 4 + 2] = m[2] * c[0] + m[6] * c[1] + m[10] * c[2] + m[14];
       spheres[i * 4 + 3] = r * Math.max(Math.hypot(m[0], m[1], m[2]), Math.hypot(m[4], m[5], m[6]), Math.hypot(m[8], m[9], m[10]));
     }
-    models.push({ path: g.path, kind: g.kind, lods, center: c, radius: r, count, matrices, spheres, clusters: clustersOf(spheres, count), uber: g.path.startsWith("objects/uberlods/") });
+    const clusters = clustersOf(spheres, count);
+    models.push({ path: g.path, kind: g.kind, lods, center: c, radius: r, count, matrices, spheres, clusters, bound: boundOf(clusters), uber: g.path.startsWith("objects/uberlods/") });
     instances += count;
   }
   return { models, instances, modelsSkipped: Math.max(0, ordered.length - max), failed };
@@ -380,6 +383,19 @@ function clustersOf(S: Float32Array, count: number): Float32Array {
     out[o] = cx; out[o + 1] = cy; out[o + 2] = cz; out[o + 3] = R; out[o + 4] = rmax;
   }
   return out;
+}
+
+/** A sphere around a model's clusters (same layout as one cluster). */
+function boundOf(C: Float32Array): Float32Array {
+  let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity, rmax = 0;
+  for (let o = 0; o < C.length; o += 5) {
+    const r = C[o + 3];
+    x0 = Math.min(x0, C[o] - r); y0 = Math.min(y0, C[o + 1] - r); z0 = Math.min(z0, C[o + 2] - r);
+    x1 = Math.max(x1, C[o] + r); y1 = Math.max(y1, C[o + 1] + r); z1 = Math.max(z1, C[o + 2] + r);
+    rmax = Math.max(rmax, C[o + 4]);
+  }
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, cz = (z0 + z1) / 2;
+  return new Float32Array([cx, cy, cz, Math.hypot(x1 - cx, y1 - cy, z1 - cz), rmax]);
 }
 
 /** Uber-LODs: simplified stand-ins for whole town blocks (objects/uberlods/<town>/…). */
@@ -449,6 +465,14 @@ export function selectLods(
     const base = item;
     for (let l = 0; l < wm.lods.length; l++) counts[base + l] = 0;
     const S = wm.spheres, M = wm.matrices, C = wm.clusters, nl = wm.lods.length - 1;
+    // the whole model first (most are local: a building, a market stall), as for one cluster
+    {
+      const B = wm.bound, bx = B[0], by = B[1], bz = B[2], R = B[3], rmax = B[4];
+      const near = Math.sqrt((bx - ex) * (bx - ex) + (by - ey) * (by - ey) + (bz - ez) * (bz - ez)) - R - rmax;
+      let outside = rmax < minR || (!wm.uber && near > (80 + 70 * rmax) * distScale) || near > maxD;
+      for (let k = 0; k < 24 && !outside; k += 4) if (P[k] * bx + P[k + 1] * by + P[k + 2] * bz + P[k + 3] < -(R + rmax)) outside = true;
+      if (outside) { stats.culledDistance += wm.count; item += wm.lods.length; first += wm.count; continue; }
+    }
     for (let j = 0, co = 0; j < wm.count; j += CLUSTER, co += 5) {
       const end = Math.min(wm.count, j + CLUSTER);
       // a whole cluster out of reach (every instance is at least D − R away and at most rmax in
