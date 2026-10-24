@@ -84,3 +84,7 @@ __pycache__/
 
 # local scratch files
 /.scratch/
+
+# --- Machine-specific Claude Code files ---
+CLAUDE.local.md
+.claude/settings.local.json
