@@ -102,7 +102,8 @@ slim/
      audio, scripts and tables.
    - **Pak entries are read in stream order** from their local headers (no central directory
      needed); per-asset results are staged in OPFS and assembled into tiles at the end.
-   - **Low-storage, part-by-part mode:** the installer's layout allows it.
+   - **Low-storage, part-by-part mode (a key requirement:** the Vega 7 laptop it is for has
+     little free storage; set by the player, 2026-10-23**):** the installer's layout allows it.
      - Measured on the base game's 15 `.bin` slices: 6,095 of 6,098 file parts are stored in
        slice order, almost every pak's data is contiguous (118 runs for 102 paks), and only 14 parts
        cross into the next slice.
