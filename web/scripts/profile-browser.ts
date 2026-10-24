@@ -103,6 +103,13 @@ const { nodeId } = await page("DOM.querySelector", { nodeId: doc.nodeId, selecto
 await page("DOM.setFileInputFiles", { nodeId, files: [root] });
 const status = await waitFor("the game folder", () => evaluate<string>(`document.getElementById("status").textContent`).then((s) => (/archives|failed|no Data/.test(s) ? s : undefined)), 120000);
 console.log(status);
+// --load-profile: a CPU profile of the loading, from the click until the market is complete
+const loadProfile = process.argv.includes("--load-profile");
+if (loadProfile) {
+  await page("Profiler.enable");
+  await page("Profiler.setSamplingInterval", { interval: 1000 });
+  await page("Profiler.start");
+}
 await evaluate(`document.getElementById("world").click()`);
 const hud = () => evaluate<string>(`document.querySelector(".level-hud")?.textContent ?? ""`);
 await waitFor("Henry", () => hud().then((s) => (/Henry \(/.test(s) ? s : undefined)), 180000);
@@ -114,6 +121,34 @@ const t0 = Date.now();
 let quiet = 0;
 await waitFor("the models", () => hud().then((s) => { quiet = /instances within/.test(s) && !/oading/.test(s) ? quiet + 1 : 0; return quiet >= 20 ? true : undefined; }), 900000);
 console.log(`models loaded in ${((Date.now() - t0) / 1000).toFixed(0)} s; settling ${settle} s…`);
+if (loadProfile) {
+  const { profile: lp } = await page("Profiler.stop");
+  type N = { id: number; callFrame: { functionName: string; url: string }; children?: number[] };
+  const nodes = new Map<number, N>((lp.nodes as N[]).map((n) => [n.id, n]));
+  const parent = new Map<number, number>();
+  for (const n of nodes.values()) for (const c of n.children ?? []) parent.set(c, n.id);
+  const self = new Map<string, number>(), incl = new Map<string, number>();
+  let all = 0, idle = 0;
+  (lp.samples as number[]).forEach((id, i) => {
+    const dt = lp.timeDeltas[i] as number;
+    all += dt;
+    const n = nodes.get(id)!;
+    if (n.callFrame.functionName === "(idle)") { idle += dt; return; }
+    const k = n.callFrame.functionName || "(anonymous)";
+    self.set(k, (self.get(k) ?? 0) + dt);
+    const seen = new Set<string>();
+    for (let j: number | undefined = id; j !== undefined; j = parent.get(j)) {
+      const m = nodes.get(j)!;
+      if (!m.callFrame.url.includes("index")) continue;
+      const kk = m.callFrame.functionName || "(anonymous)";
+      if (!seen.has(kk)) { seen.add(kk); incl.set(kk, (incl.get(kk) ?? 0) + dt); }
+    }
+  });
+  const s = (v: number) => `${(v / 1e6).toFixed(1)} s`;
+  console.log(`loading, main thread: ${s(all)} sampled, idle ${s(idle)}`);
+  console.log(`  self: ${[...self].sort((a, b) => b[1] - a[1]).slice(0, 16).map(([k, v]) => `${k} ${s(v)}`).join(", ")}`);
+  console.log(`  total: ${[...incl].sort((a, b) => b[1] - a[1]).slice(0, 22).map(([k, v]) => `${k} ${s(v)}`).join(", ")}`);
+}
 await sleep(settle * 1000);
 const readings: string[] = [];
 for (let k = 0; k < 3; k++) { readings.push((await hud()).replace(/ · .*?x /, " · x ").slice(0, 260)); await sleep(1000); }

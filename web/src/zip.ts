@@ -123,18 +123,32 @@ export async function dataStart(blob: Blob, e: PakEntry): Promise<number> {
  */
 export async function readEntry(blob: Blob, e: PakEntry, limit?: number, verify = true): Promise<Uint8Array> {
   if (e.flags & 1) throw new Error("encrypted entries are not supported");
-  const start = await dataStart(blob, e);
   const want = limit === undefined ? e.usize : Math.min(limit, e.usize);
+  // the local header and the data in one read (the header's name and extra field are guessed
+  // generously; a second read only if they turn out longer): a load reads tens of thousands of
+  // entries, and two Blob slices each were the largest cost of loading in Chrome
+  const guess = 30 + e.name.length * 3 + LOCAL_EXTRA_SLACK;
+  let buf = new Uint8Array(await blob.slice(e.offset, e.offset + guess + e.csize).arrayBuffer());
+  const lh = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  if (buf.byteLength < 30 || lh.getUint32(0, true) !== SIG_LFH) throw new Error(`bad local header for ${e.name}`);
+  const head = 30 + lh.getUint16(26, true) + lh.getUint16(28, true);
+  if (head + e.csize > buf.byteLength) buf = new Uint8Array(await blob.slice(e.offset, e.offset + head + e.csize).arrayBuffer());
+  const data = buf.subarray(head, head + e.csize);
 
   if (e.method === 0) {
-    const out = new Uint8Array(await blob.slice(start, start + want).arrayBuffer());
+    // (a copy: callers may use out.buffer as the entry's bytes)
+    const out = data.slice(0, want);
     if (limit === undefined && verify) checkCrc(out, e);
     return out;
   }
   if (e.method !== 8) throw new Error(`unsupported compression method ${e.method}`);
 
-  const stream = blob.slice(start, start + e.csize).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-  const reader = stream.getReader();
+  // (the bytes written straight in: wrapping them in a Blob to stream them cost as much as the read)
+  const inflate = new DecompressionStream("deflate-raw");
+  const writer = inflate.writable.getWriter();
+  writer.write(data).catch(() => {});
+  writer.close().catch(() => {});
+  const reader = inflate.readable.getReader();
   const out = new Uint8Array(want);
   let got = 0;
   while (got < want) {
@@ -150,6 +164,9 @@ export async function readEntry(blob: Blob, e: PakEntry, limit?: number, verify 
   if (limit === undefined && verify) checkCrc(out, e);
   return out;
 }
+
+/** Bytes read past the local header's name for its extra field (KCD's paks have none). */
+const LOCAL_EXTRA_SLACK = 256;
 
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
