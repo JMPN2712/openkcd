@@ -46,10 +46,12 @@ affiliated with or endorsed by Warhorse Studios or PLAION. Local folder is
   - region chunks plus an index.
 
   The original installer can then be deleted.
-- **Today:** the installer's paks are copied into OPFS as they are (no slim
-  format yet), and the engine reads them from there. Installed-folder mode
-  (reading the paks of an installed game via the File System Access API)
-  stays as the alternative.
+- **Today:** two install modes from the installer. The paks can be copied
+  into OPFS (repacked without replaced files). Or the compact package
+  (`docs/SLIM.md`) can be built straight from the installer, read in place
+  or part by part; it then runs the engine with no original files.
+  Installed-folder mode (reading the paks of an installed game via the File
+  System Access API) stays as the alternative.
 - **Dropped:** no server or R2 streaming of game files.
 
 ## Milestones
@@ -58,9 +60,9 @@ See `docs/ROADMAP.md`. In order:
 
 1. Walking simulator. Done (follow-ups listed in the roadmap).
 2. Installer converter and slim format. **In progress, not done:** the
-   installer reader and OPFS install work; the compact format (region chunks,
-   `docs/SLIM.md`) is being built. Milestone 3 work waits until the converter
-   is finished.
+   compact package is built from the installer and runs the engine alone
+   (`docs/SLIM.md`, phases 1–4). The open items are in the roadmap.
+   Milestone 3 work waits until the converter is finished.
 3. Public GitHub release.
 4. Living world (NPC routines; partly done).
 5. Diet planning.
@@ -88,7 +90,8 @@ questlines whole and never cuts anything the main quest depends on.
 | Area | Files | State |
 |---|---|---|
 | Paks, VFS | `zip.ts`, `paks.ts`, `vfs.ts`, `tree.ts`, `readWorkers.ts` | Reads all paks in place (Blob.slice); large reads inflate on worker threads |
-| Installer | `inno.ts`, `lzma.ts`, `install.ts`, `installView.ts`, `repack.ts` | Reads GOG's Inno Setup installers in place (base game and DLC), installs their paks into OPFS and repacks them without files later patches replace (52.5 → 38.2 GiB); the engine opens that copy |
+| Installer | `inno.ts`, `lzma.ts`, `install.ts`, `installView.ts`, `repack.ts`, `installerPak.ts` | Reads GOG's Inno Setup installers in place (base game and DLC), installs their paks into OPFS and repacks them without files later patches replace (52.5 → 38.2 GiB), part by part when slices are missing; paks can also be read straight from the installer |
+| Compact package | `slim.ts`, `slimBuild.ts`, `slimStore.ts`, `slimView.ts`, `compactInstall.ts`, `levelData.ts` | Region chunks of converted models and textures plus a file store of everything else; built in the browser from the installer (Full or Potato); the engine runs from it alone |
 | Textures | `dds.ts`, `texture.ts`, `bcn.ts`, `texturePool.ts` | Split DDS assembly, BC1–7 (GPU and CPU); streamed by distance within a budget per preset |
 | Models, materials | `cgf.ts`, `mtl.ts`, `model.ts`, `renderer.ts` | .cgf/.cga/.skin/.chr, WebGPU renderer |
 | Characters | `character.ts`, `skeleton.ts`, `characterView.ts`, `tables.ts` | Souls and clothing presets from the database |

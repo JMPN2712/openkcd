@@ -308,6 +308,14 @@ async function storedBlob(part: Part, slice: (index: number) => Promise<Blob>): 
   return pieces.length === 1 ? pieces[0] : new Blob(pieces);
 }
 
+/** One part's inflated bytes (checked against its size; the stream checks the Adler-32). */
+export async function inflatePart(part: Part, slice: (index: number) => Promise<Blob>): Promise<Uint8Array> {
+  const stored = await storedBlob(part, slice);
+  const out = new Uint8Array(await new Response(stored.stream().pipeThrough(new DecompressionStream("deflate"))).arrayBuffer());
+  if (out.byteLength !== part.size) throw new Error(`part inflated to ${out.byteLength} bytes, expected ${part.size}`);
+  return out;
+}
+
 /**
  * Stream a file's bytes, part by part. Each part is a zlib stream; the
  * browser inflates it and checks its Adler-32. `slice(i)` hands out the

@@ -5,13 +5,12 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
 
 ## Where things stand (2026-10-23)
 
-- **Milestone 2 is in progress, not done.** Installing from the GOG
-  installer into OPFS works, including the repack without replaced files
-  (default install 38.2 GiB). Now: the compact format, designed in
-  `docs/SLIM.md` (region chunks for load speed, full-resolution and Potato
-  packages, and finally a package built straight from the installer that
-  needs no original files). Milestone 3 (release) work is on hold until the
-  converter is finished.
+- **Milestone 2 is in progress, close to done.** The compact package
+  (`docs/SLIM.md`) is built in the browser straight from the GOG installer,
+  in place or part by part, and the engine runs from it alone: Potato
+  12.8 GiB, Full about 21 GiB, against 38.2 GiB for the repacked install.
+  The open items are listed under milestone 2 below. Milestone 3 (release)
+  work is on hold until the converter is finished.
 - **Performance and streaming (2026-10-23):** Chrome on High in the market
   went from 43 fps to about 130; streaming steps no longer stall (2.6 s →
   under 0.1 s, loading in slices of about 5 ms); the market loads in 53 s
@@ -238,15 +237,23 @@ playable frame rates on the Potato preset.
       models and textures from it; textures compressed; a file store
       (everything else, repacked) so the engine runs from the package alone
       (pixel-identical renders). Full 21.7 GiB, Potato 13.1 GiB in all.
-- [ ] Phase 4: the package built straight from the GOG installer in one pass,
-      needing no original files. **Key requirement:** the low-storage,
-      part-by-part mode (convert one `.bin` slice at a time and delete it; the
-      installer's data is in slice order), for the Vega 7 laptop.
-- [ ] One streaming pass into a slim package in OPFS:
-  - compressed textures (GPU formats), compressed meshes, and Opus audio;
-  - region chunks plus an index.
-- [ ] Afterwards the original install or installer can be deleted.
-- [ ] Installed-folder mode stays as an alternative.
+- [x] Phase 4: the package built straight from the GOG installer, needing no
+      original files. The installer is read in place (GOG's 10 MiB parts
+      inflate on their own), so nothing else is copied. In Chrome: Potato
+      ready in 576 s, 12.8 GiB in browser storage. **Part by part** (the
+      low-storage mode): installs what the slices present hold, names the
+      next slice, lists the ones done with (safe to delete), resumes; then
+      builds from that copy and deletes it pak by pak.
+- [ ] Still open in milestone 2:
+  - [ ] The part-by-part path run to the end in Chrome (it needs about
+        40 GiB free; tested in Node and up to the first slice in Chrome).
+  - [ ] Try it on the Vega 7 laptop (memory: the in-place build keeps up to
+        640 MiB of inflated parts).
+  - [ ] Opus audio and converted animations (sizes; they work as they are).
+  - [ ] Cutscene videos, on demand or transcoded.
+  - [ ] Cancel during the build step (only the copy step can be cancelled).
+- [x] Afterwards the original install or installer can be deleted.
+- [x] Installed-folder mode stays as an alternative.
 - [ ] No game data is ever hosted or distributed by the project.
 
 ## 3. Public GitHub release

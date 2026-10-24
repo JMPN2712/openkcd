@@ -5,7 +5,9 @@
 // Paks the install repacked (repacked.json) are checked for their recorded
 // sizes instead; scripts/test-repack.ts checks their contents.
 // Driven over the DevTools protocol (Node's built-in WebSocket); no npm deps.
-// usage: node scripts/test-install-browser.ts INSTALLER_DIR [--root=GAME_ROOT] [--keep]
+// With --compact=full|potato it installs the compact package instead (compactInstall.ts) and
+// checks that only the package and its store are left, and that the page opens them.
+// usage: node scripts/test-install-browser.ts INSTALLER_DIR [--root=GAME_ROOT] [--keep] [--compact=full|potato]
 //   INSTALLER_DIR must hold real files: Chrome's folder upload skips symlinks.
 //   --keep keeps the browser profile (and its OPFS copy) for a later run.
 //   CHROME=… picks the browser binary, PROFILE_DIR=… where the profile goes
@@ -20,6 +22,7 @@ import { join, resolve } from "node:path";
 const dir = resolve(process.argv.slice(2).find((a) => !a.startsWith("--")) ?? "");
 const root = process.argv.find((a) => a.startsWith("--root="))?.slice(7) ?? join(homedir(), "kcd1");
 const keep = process.argv.includes("--keep");
+const compact = process.argv.find((a) => a.startsWith("--compact="))?.slice(10);
 const chrome = process.env.CHROME ?? "google-chrome";
 // a throwaway profile on disk (not tmpdir(): /tmp is often a small tmpfs); with --keep it stays for a later run
 const profile = join(process.env.PROFILE_DIR ?? join(homedir(), ".cache"), "openkcd-test-profile");
@@ -105,6 +108,11 @@ const listed = await waitFor("the installer list", () =>
 console.log(listed);
 if (listed.startsWith("ERROR")) process.exit(1);
 
+if (compact) {
+  await evaluate(`(() => { const m = document.querySelector(".install-mode"); m.value = ${JSON.stringify(compact)}; m.dispatchEvent(new Event("change")); })()`);
+  await new Promise((r) => setTimeout(r, 500));
+  console.log(await evaluate<string>(`[...document.querySelectorAll(".preview-body .note")].map((n) => n.textContent).find((t) => /storage/.test(t)) ?? ""`));
+}
 const t0 = Date.now();
 await evaluate(`document.querySelector(".install-go").click()`);
 let lastLine = "";
@@ -122,6 +130,47 @@ const outcome = await waitFor(
 );
 console.log(`${outcome.result} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
 if (!outcome.cls.includes("ok")) process.exit(1);
+const quit = async (code: number) => {
+  ws.close();
+  // Chrome keeps writing its profile until it has exited
+  await Promise.all(children.map((c) => new Promise((r) => (c.exitCode !== null ? r(null) : (c.once("exit", r), c.kill())))));
+  if (!keep) await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+  process.exit(code);
+};
+if (compact && outcome.cls.includes("part-next")) {
+  // part by part: stopped for the next slice; what was copied so far is staged
+  const staged = await evaluate<string[]>(`(async () => {
+    const out = [];
+    const d = await (await navigator.storage.getDirectory()).getDirectoryHandle("compact-staging");
+    async function walk(d, prefix) { for await (const [n, h] of d.entries()) h.kind === "directory" ? await walk(h, prefix + n + "/") : out.push(prefix + n + " " + (await h.getFile()).size); }
+    await walk(d, "");
+    return out;
+  })()`);
+  console.log(`staged: ${staged.join(", ")}`);
+  await quit(staged.length ? 0 : 1);
+}
+
+if (compact) {
+  // only the package and its store are left in OPFS, and the page opens them
+  const left = await evaluate<{ name: string; bytes: number }[]>(`(async () => {
+    const out = [];
+    async function size(d) { let n = 0; for await (const [, h] of d.entries()) n += h.kind === "directory" ? await size(h) : (await h.getFile()).size; return n; }
+    for await (const [name, h] of (await navigator.storage.getDirectory()).entries()) out.push({ name, bytes: h.kind === "directory" ? await size(h) : (await h.getFile()).size });
+    return out;
+  })()`);
+  console.log(`OPFS: ${left.map((l) => `${l.name} ${(l.bytes / 2 ** 30).toFixed(2)} GiB`).join(", ")}`);
+  let bad = left.some((l) => l.name !== `slim-${compact}`) ? 1 : 0;
+  if (bad) console.log("FAIL something besides the package is left in OPFS");
+  const opened = await evaluate<string>(`(async () => {
+    for (let i = 0; i < 100 && document.getElementById("package").hidden; i++) await new Promise((r) => setTimeout(r, 100));
+    document.getElementById("package").click();
+    for (let i = 0; i < 300 && !/archives/.test(document.getElementById("status").textContent); i++) await new Promise((r) => setTimeout(r, 100));
+    return document.getElementById("status").textContent;
+  })()`);
+  console.log(`status: ${opened}`);
+  if (!/Compact package.*archives/.test(opened)) bad++;
+  await quit(bad ? 1 : 0);
+}
 
 // check the OPFS copy against GAME_ROOT
 const installed = await evaluate<{ path: string; size: number; sha: string }[]>(`(async () => {

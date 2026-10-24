@@ -1,6 +1,8 @@
 // The install view: lists the GOG installers found in the picked or dropped
 // folder, checks the browser's storage quota, and runs the install into
-// OPFS with a progress bar. Resuming is automatic (finished files are skipped).
+// OPFS with a progress bar: the game's archives, or the compact package
+// (compactInstall.ts). Resuming is automatic (finished files are skipped), and
+// so is installing part by part (a .bin slice not in the folder stops it there).
 
 import {
   DEFAULT_OPTIONS,
@@ -16,7 +18,11 @@ import {
   type InstallOptions,
   type PakKind,
   type Progress,
+  SliceNeeded,
+  sliceListing,
 } from "./install.ts";
+import { compactInstall } from "./compactInstall.ts";
+import type { SlimVariant } from "./slimView.ts";
 import { formatSize } from "./format.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -62,7 +68,7 @@ function persistWarning(note: HTMLElement): void {
 }
 
 /** Show the install view for `root` in `body`; `onInstalled` runs after a complete install. */
-export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHandle, onInstalled: () => void): Promise<void> {
+export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHandle, onInstalled: (what: "game" | "package") => void): Promise<void> {
   body.replaceChildren(el("p", "note", `Looking for GOG installers in ${root.name}…`));
   let found: FoundInstaller[];
   try {
@@ -85,8 +91,18 @@ export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHa
   const kindSize = (kind: PakKind, language?: string) =>
     found.reduce((a, ins) => a + ins.installer.files.filter((f) => isPak(f) && pakKind(f.path).kind === kind && (!language || pakKind(f.path).language === language)).reduce((b, f) => b + f.size, 0), 0);
 
-  // options: one voice language and the optional HD packs
+  // options: what to install, one voice language and the optional HD packs
   const opts = el("div", "install-options");
+  const modeLabel = el("label", "ctl", "Install");
+  const mode = el("select", "install-mode");
+  for (const [v, text] of [["game", "the game's archives"], ["full", "compact package, Full (no original files; textures at full resolution)"], ["potato", "compact package, Potato (no original files; textures up to 512 px, for low-end laptops)"]]) {
+    const o = el("option", undefined, text);
+    o.value = v;
+    mode.append(o);
+  }
+  modeLabel.append(mode);
+  opts.append(modeLabel);
+  const compact = () => (mode.value === "game" ? null : (mode.value as SlimVariant));
   const langLabel = el("label", "ctl", "Voice-over");
   const lang = el("select");
   for (const l of languages) {
@@ -137,6 +153,7 @@ export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHa
     label.append(box, el("span", undefined, f.label), size);
     li.append(label);
     for (const p of f.problems) li.append(el("div", "note warn", p));
+    if (f.missing.length) li.append(el("div", "note", `Not in the folder (yet): ${sliceListing(f, f.missing)}. The install goes as far as the slices here allow; add the next ones and pick the folder again to continue.`));
     list.append(li);
   }
 
@@ -160,21 +177,43 @@ export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHa
       o.size.textContent = formatSize(kindSize(o.kind, o.kind === "hd-voice" ? options.language : undefined));
     }
     found.forEach((f, i) => (sizes[i].textContent = formatSize(installSize(f, options))));
-    const need = selected().reduce((a, f) => a + installSize(f, options), 0);
+    const variant = compact();
+    for (const o of optBoxes) o.box.closest("label")!.hidden = !!variant;
+    repackLabel.hidden = !!variant;
+    const need = selected().reduce((a, f) => a + installSize(f, variant ? { ...options, videos: false, hdTextures: false, hdVoice: false, hdSound: false } : options), 0);
     const est = await navigator.storage.estimate().catch(() => ({ quota: undefined, usage: undefined }));
     const free = est.quota !== undefined ? est.quota - (est.usage ?? 0) : undefined;
+    // the compact package and its store, measured at 0.60 (Full) and 0.36 (Potato) of the
+    // archives they are made from (docs/SLIM.md). With every slice here they are read in place;
+    // part by part, the archives are copied first (and deleted as the store is written).
+    const after = variant ? need * (variant === "full" ? 0.6 : 0.36) : need;
+    const inPlace = selected().every((f) => f.missing.length === 0);
+    const peak = variant && !inPlace ? need + after * 0.3 : after;
     storage.textContent =
-      `Needs up to ${formatSize(need)} of browser storage (less if some files are already installed)` +
+      (variant
+        ? inPlace
+          ? `Needs about ${formatSize(after)} of browser storage (read from the installer in place, nothing else is copied)`
+          : `Part by part: needs up to ${formatSize(peak)} of browser storage while it is built, about ${formatSize(after)} when done`
+        : `Needs up to ${formatSize(need)} of browser storage (less if some files are already installed)`) +
       (free !== undefined ? `; ${formatSize(free)} available to this site.` : ".");
-    storage.className = free !== undefined && free < need ? "note warn" : "note";
+    const need2 = peak;
+    storage.className = free !== undefined && free < need2 ? "note warn" : "note";
     start.disabled = need === 0;
   }
-  for (const c of [...checks, lang, repackBox, ...optBoxes.map((o) => o.box)]) c.addEventListener("change", () => void updateStorage());
+  for (const c of [...checks, lang, repackBox, mode, ...optBoxes.map((o) => o.box)]) c.addEventListener("change", () => void updateStorage());
   await updateStorage();
 
   const persistNote = el("p", "note");
+  const intro = el("p", "note");
+  const showIntro = () => {
+    intro.textContent = compact()
+      ? "The compact package is made from the installers into this browser's private storage: the world's models and textures converted, and the rest of the game's files without what it doesn't need (videos, other languages, files later patches replace). Nothing is uploaded, and no other copy of the game is kept. Afterwards the installer files are no longer needed."
+      : "The game's .pak archives are copied out of the installers into this browser's private storage. Nothing is uploaded. Afterwards the installer files are no longer needed.";
+  };
+  showIntro();
+  mode.addEventListener("change", showIntro);
   body.replaceChildren(
-    el("p", "note", "The game's .pak archives are copied out of the installers into this browser's private storage. Nothing is uploaded. Afterwards the installer files are no longer needed."),
+    intro,
     opts,
     list,
     storage,
@@ -192,7 +231,7 @@ export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHa
     const persisted = await navigator.storage.persist().catch(() => false);
     const ac = new AbortController();
     start.disabled = true;
-    const controls = [lang, repackBox, ...optBoxes.map((o) => o.box)];
+    const controls = [lang, repackBox, mode, ...optBoxes.map((o) => o.box)];
     checks.forEach((c) => (c.disabled = true));
     controls.forEach((c) => (c.disabled = true));
     cancel.hidden = false;
@@ -204,7 +243,6 @@ export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHa
     if (!persisted) persistWarning(persistNote);
 
     const opfs = await navigator.storage.getDirectory();
-    const target = opfsTarget(await opfs.getDirectoryHandle(GAME_DIR, { create: true }));
     const t0 = performance.now();
     let lastPaint = 0;
     const paint = (p: Progress, force = false) => {
@@ -226,14 +264,33 @@ export async function showInstall(body: HTMLElement, root: FileSystemDirectoryHa
       line.textContent = `${formatSize(p.done)} of ${formatSize(p.total)} · ${p.filesDone}/${p.files} files · ${formatSize(rate)}/s · ${duration((p.total - p.done) / rate)} left · ${p.file}`;
     };
     try {
+      const variant = compact();
+      if (variant) {
+        const msg = await compactInstall(chosen, { ...options }, variant, (c) => {
+          if (c.progress) paint(c.progress);
+          else if (c.line) { bar.removeAttribute("value"); line.textContent = c.line; }
+        }, ac.signal);
+        result.className = "note ok";
+        result.textContent = `${msg}. Ready: the game runs from it alone. You can delete the installer files now.`;
+        onInstalled("package");
+        return;
+      }
+      const target = opfsTarget(await opfs.getDirectoryHandle(GAME_DIR, { create: true }));
       const p = await install(chosen, { ...options }, target, paint, ac.signal);
       paint(p, true);
       const secs = (performance.now() - t0) / 1000;
       result.className = "note ok";
       result.textContent = `Installed ${p.files - p.skipped} files in ${duration(secs)}${p.skipped ? ` (${p.skipped} were already there)` : ""}.${p.removed ? ` Left out ${formatSize(p.removed)} of files later patches replace.` : ""} You can delete the installer files now.`;
-      onInstalled();
+      onInstalled("game");
     } catch (err) {
       const e = err as Error;
+      if (e instanceof SliceNeeded) {
+        // part by part: as far as the slices here go
+        result.className = "note ok part-next";
+        result.textContent = `Installed as far as the slices here go. Next, add ${e.slice} (and any after it you have) to the folder, then pick the folder again to continue.` +
+          (e.progress.doneSlices.length ? ` Done with, and safe to delete: ${e.progress.doneSlices.join(", ")}.` : "");
+        return;
+      }
       result.className = e.name === "AbortError" ? "note" : "error";
       result.textContent = e.name === "AbortError" ? "Cancelled. Finished files are kept; Install again to continue." : `Install failed: ${e.message}. Finished files are kept; Install again to continue.`;
       if (e.name === "QuotaExceededError") result.textContent = "The browser's storage is full. Free disk space (the browser allows a share of it), then Install again to continue.";

@@ -39,6 +39,12 @@ export interface LevelData {
 const dataCache = new Map<string, Promise<LevelData>>();
 const vfsCache = new Map<string, Promise<Vfs>>();
 
+/** Forget the level data and asset indexes read (their paks were replaced or deleted). */
+export function clearLevelCaches(): void {
+  dataCache.clear();
+  vfsCache.clear();
+}
+
 const levelPak = (paks: PakSource[], level: string) => {
   const pakPath = `data/levels/${level}/level.pak`;
   const pak = paks.find((p) => p.path.toLowerCase() === pakPath);
@@ -101,8 +107,11 @@ export function levelData(paks: PakSource[], level: string, status: (s: string) 
   return p;
 }
 
-/** The assets of every non-level pak, with this level's own files (brush/*.cgf, …) on top; pak reads on worker threads. */
-export async function levelVfs(paks: PakSource[], level: string, status: (s: string) => void = () => {}): Promise<Vfs> {
+/**
+ * The assets of every non-level pak, with this level's own files (brush/*.cgf, …) on top; pak
+ * reads on worker threads (unless `workers` is false: paks read in place from an installer).
+ */
+export async function levelVfs(paks: PakSource[], level: string, status: (s: string) => void = () => {}, workers = true): Promise<Vfs> {
   const { pak, pakPath } = levelPak(paks, level);
   let v = vfsCache.get(pakPath);
   if (!v) {
@@ -116,6 +125,6 @@ export async function levelVfs(paks: PakSource[], level: string, status: (s: str
   }
   const vfs = await v;
   // large reads (models, textures) inflate on worker threads, off the frame
-  vfs.workers ??= ReadWorkers.browser();
+  if (workers) vfs.workers ??= ReadWorkers.browser();
   return vfs;
 }

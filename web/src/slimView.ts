@@ -119,10 +119,17 @@ export async function packageStore(variant: SlimVariant): Promise<FileSystemDire
 }
 
 /** Build a package into OPFS from the opened game's paks (`store`: and its file store). */
-export async function buildSlimInBrowser(paks: PakSource[], variant: SlimVariant, onProgress: (s: string) => void, store = true): Promise<string> {
+export async function buildSlimInBrowser(
+  paks: PakSource[],
+  variant: SlimVariant,
+  onProgress: (s: string) => void,
+  store = true,
+  /** afterStorePak: called as each pak's store copy is written; workers: false for paks read in place from an installer; language: the voice kept */
+  opts: { afterStorePak?: (source: PakSource) => Promise<void>; workers?: boolean; language?: string } = {},
+): Promise<string> {
   const t0 = performance.now();
   const data = await levelData(paks, "rataje", onProgress);
-  const vfs = await levelVfs(paks, "rataje", onProgress);
+  const vfs = await levelVfs(paks, "rataje", onProgress, opts.workers ?? true);
   const root = await opfs();
   await root.removeEntry(dirName(variant), { recursive: true }).catch(() => {});
   const dir = await root.getDirectoryHandle(dirName(variant), { create: true });
@@ -146,7 +153,7 @@ export async function buildSlimInBrowser(paks: PakSource[], variant: SlimVariant
   if (store) {
     // the file store: every other file the engine reads, in paks with the original paths (the
     // "done" file last: a store without it is incomplete)
-    const plan = await planFileStore(paks, index, { textureCap: variant === "potato" ? 512 : undefined }, (what, done, total) => onProgress(`${what}: ${done}/${total}`));
+    const plan = await planFileStore(paks, index, { textureCap: variant === "potato" ? 512 : undefined, language: opts.language }, (what, done, total) => onProgress(`${what}: ${done}/${total}`));
     const sdir = await dir.getDirectoryHandle("store", { create: true });
     let written = 0;
     for (const [i, p] of plan.plans.entries()) {
@@ -157,6 +164,8 @@ export async function buildSlimInBrowser(paks: PakSource[], variant: SlimVariant
         written += chunk.byteLength;
       }
       await w.close();
+      // (a compact install deletes each pak it came from here: storage never holds both copies)
+      await opts.afterStorePak?.(p.pak);
       onProgress(`Writing the file store: ${i + 1}/${plan.plans.length} paks, ${G(written)}`);
     }
     await (await sdir.getFileHandle("done", { create: true })).createWritable().then((w) => w.close());
