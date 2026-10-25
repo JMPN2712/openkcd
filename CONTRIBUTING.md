@@ -27,7 +27,10 @@ git config core.hooksPath .githooks
 ```
 
 It refuses game file types, files over 1 MB, binaries over 100 KB and
-decompiler output. Never bypass it with `--no-verify`. If it blocks something
+decompiler output. Changes go in through pull requests: before opening
+one, run `tools/audit.sh origin/main`, which checks the whole branch the same
+way (plus commit messages and e-mail addresses); the `checks` workflow runs it
+again on the PR and builds the app. Never bypass it with `--no-verify`. If it blocks something
 legitimate, raise it in an issue.
 
 ## Clean-room rules

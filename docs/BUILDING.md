@@ -15,6 +15,20 @@ repository contains no game data.
   (setup `.exe` and `.bin` files) or an **extracted copy** of it (the folder
   with `Data/` and `bin/`; `innoextract --gog` makes one).
 
+## Contributing changes
+
+Work on a branch and open a pull request; `main` only takes merged PRs. Before
+opening one, run the clean-room audit over your commits:
+
+```sh
+tools/audit.sh origin/main
+```
+
+It checks the changed files (no game file types, nothing over 1 MB, no
+binaries over 100 KB, no decompiler-style names, no home paths), and the
+commit messages and e-mail addresses. The `checks` workflow runs it again on
+every pull request, with the PR's title and description, and builds the app.
+
 ## Build and run
 
 ```sh
@@ -62,11 +76,12 @@ For example:
 google-chrome --enable-features=Vulkan --ozone-platform=x11 http://localhost:5173/
 ```
 
-Windows and macOS need no flags in current Chrome (untested so far; see
-[COMPATIBILITY.md](COMPATIBILITY.md)).
+Windows and macOS need no flags in current Chrome (macOS on an M3 Pro is
+being tried; Windows is untested; see [COMPATIBILITY.md](COMPATIBILITY.md)).
 
 ## Deploying the hosted player
 
-The production build is a static site of about 1 MB that anyone can host;
-[DEPLOY.md](DEPLOY.md) has the Cloudflare Pages settings. The site never
+The production build is a static site of about 1 MB that anyone can host. The
+official one is a Cloudflare Worker with static assets at
+<https://openkcd.jmpn.workers.dev/>; [DEPLOY.md](DEPLOY.md) has its settings. The site never
 contains game data: each player installs their own copy into their browser.

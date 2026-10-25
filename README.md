@@ -34,7 +34,8 @@ Early development; the walking-simulator and installer milestones are done.
 **Not yet:** talking to NPCs, quests, combat, inventory, horses and saves;
 NPCs don't react to Henry, doors don't open, cutscenes don't play.
 
-To play, see [docs/PLAYING.md](docs/PLAYING.md). What has been tested is in
+**Play it at <https://openkcd.jmpn.workers.dev/>** with your GOG installer:
+see [docs/PLAYING.md](docs/PLAYING.md). What has been tested is in
 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md), building from source in
 [docs/BUILDING.md](docs/BUILDING.md), and the plan in
 [docs/ROADMAP.md](docs/ROADMAP.md).
@@ -68,7 +69,7 @@ OpenKCD contains none of it, and players use their own copy of the game.
 - `docs/PLAYING.md`: for players: requirements, the GOG installer, install modes and space, presets, controls, known issues.
 - `docs/BUILDING.md`: building and running from source.
 - `docs/COMPATIBILITY.md`: browsers, systems and GPUs tried so far.
-- `docs/DEPLOY.md`: hosting the player on Cloudflare Pages.
+- `docs/DEPLOY.md`: hosting the player (a Cloudflare Worker with static assets).
 - `docs/RECON.md`: Phase 1 survey of the install (binaries, middleware, pak format quirks).
 - `docs/CHARACTERS.md`: how NPCs are assembled from the database, .cdf files and clothing materials.
 - `docs/ANIMATION.md`: animation clip format, quaternion decoding, skinning.

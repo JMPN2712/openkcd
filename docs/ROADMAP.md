@@ -12,12 +12,18 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
   Full; the packages end at 12.76 GiB (Potato) and 21.41 GiB (Full).
   Cutscene videos are left out and can be added later. Opus audio, converted
   animations and video transcoding moved to "Later" under milestone 2.
-- **Milestone 3 (release) nearly done:** GPL-3.0-or-later license; the
-  clean-room audit is done and the history rewritten; the repository was
-  recreated (private); the release docs (BUILDING, PLAYING, COMPATIBILITY,
-  DEPLOY) and the README's "Current status" are written. Left: the Vega 7
-  measurement, the Cloudflare Pages deployment, and making the repository
-  public (the user).
+- **Milestone 3 (release) done** except the Vega 7 row in
+  `docs/COMPATIBILITY.md`: GPL-3.0-or-later license; the clean-room audit
+  done and the history rewritten; the release docs (BUILDING, PLAYING,
+  COMPATIBILITY, DEPLOY) and the README's "Current status"; the hosted
+  player live at <https://openkcd.jmpn.workers.dev/> (a Cloudflare Worker
+  with static assets). Tried on the development machine (RTX 5070 Ti) and,
+  in progress, an Apple M3 Pro. The repository stays private until the user
+  makes it public. Changes now go through pull requests, with the
+  clean-room audit (`tools/audit.sh`) and a build in the `checks` workflow.
+- **Milestone 4 (living world) started:** the order is NPC routines end to
+  end, interaction (doors, chests, beds), talking to NPCs, ambient audio,
+  NPC animations; see section 4.
 - **Fixed: furniture turned and moved in houses** (the user's "objects
   completely misarranged" report). A model's main root node transform is
   left out now (`docs/LEVELS.md`); beds had lain 90° across their bedding.
@@ -272,10 +278,10 @@ playable frame rates on the Potato preset.
 - [ ] Converted animations (2.6 GiB of `.caf`/`.dba` in the store).
 - [ ] Cutscene videos transcoded to a format browsers play (`.usm` today).
 
-## 3. Public GitHub release (nearly done)
+## 3. Public GitHub release (done, 2026-10-24, except the Vega 7 row)
 
-The repository is private (it had become public; set back to private on
-2026-10-23). The user makes it public.
+The hosted player is public; the repository is still private, and the user
+makes it public.
 
 - [x] Choose a license: GPL-3.0-or-later (`LICENSE`; dependencies are MIT,
       BSD-3-Clause and Apache-2.0).
@@ -305,24 +311,38 @@ The repository is private (it had become public; set back to private on
       space, presets, controls, known issues), `docs/COMPATIBILITY.md`
       (tested and untested systems), a "Current status" section in the
       README.
-- [x] Hosted player ready for Cloudflare Pages (`docs/DEPLOY.md`,
-      `web/public/_headers`, `web/.node-version`): builds from a clean clone
-      with `npm ci && npm run build`. Not deployed yet; choose the final
-      domain first (players' installs are per origin).
+- [x] Hosted player live at <https://openkcd.jmpn.workers.dev/>
+      (2026-10-24): a Cloudflare Worker with static assets, built with
+      `npm ci && npm run build` (`docs/DEPLOY.md`, `web/public/_headers`,
+      `web/.node-version`). Players' installs are tied to this origin.
+- [x] Pull requests with checks: `tools/audit.sh` (game files, sizes,
+      decompiler-style names, home paths, commit and PR wording, no-reply
+      e-mails) and a type check and build, in `.github/workflows/checks.yml`.
+- [ ] Results from the Apple M3 Pro (being tried) in `docs/COMPATIBILITY.md`.
 - [ ] Measure on the Vega 7 laptop and fill in its row in
       `docs/COMPATIBILITY.md` (the user).
 - [ ] Make the `openkcd` repo public (the user).
 
-## 4. Living world (partly done)
+## 4. Living world (in progress)
+
+In this order, checking in with the user between steps. Each step reports
+its cost on Potato with a full market.
 
 - [x] Behaviour-tree interpreter, smart objects, work routines.
 - [x] Daily schedules, collision avoidance.
-- [ ] Route search matching the game's.
-- [ ] Remaining world-side nodes:
-  - helpers, messaging between NPCs, semaphores, teleport;
-  - smart-object init behaviours.
-- [ ] Meal, leisure and sleep routines.
-- [ ] Dialogue barks.
+- [ ] **1. NPC daily routines end to end:** the smart-object graph and the
+      game's route search (GraphSearch); first the tailor's full day, then
+      the rest of Rataje's market.
+  - [ ] Remaining world-side nodes: helpers, messaging between NPCs,
+        semaphores, teleport; smart-object init behaviours.
+  - [ ] Meal, leisure and sleep routines.
+- [ ] **2. Interaction:** doors (animated, with collision), chests, beds.
+- [ ] **3. Talking to NPCs:** voice lines, subtitles, the dialogue camera
+      and response choices from the game's dialogue data; no quest
+      consequences yet.
+- [ ] **4. Ambient audio:** footsteps per surface, town and nature
+      ambience, NPC barks.
+- [ ] **5. NPC animations:** walking, working, sitting.
 
 ## 5. Diet planning
 
