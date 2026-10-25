@@ -176,12 +176,15 @@ check against the game later.
   `GetSpatialInfo`, `Teleport`, `TurnBody`, `SmartObjSetBehaviorState` /
   `SmartObjSetBehaviorMaxInstances`, `RangeFilter` / `RangeSorter`, NPC
   messages (traced; `daycycle:change` goes to the NPC's daily cycle);
-- **locks:** Global, Intellect (per NPC) and Local, which is the smart
-  object or area whose behaviour runs, shared by every NPC using it
-  (CityWalk's lock per walk point; a bench's `<npc>_kickFromBench` gate,
-  which another sitter opens). External locks start closed until a tree
-  opens them; the queue in `entityUtils.xml` opens its own first. Both
-  are ASSUMPTIONs that make the shipped trees work as the notes describe;
+- **locks** (research notes, `bt-rules.md`): Global, Intellect (per NPC)
+  and Local, which is the smart object or area instance whose behaviour
+  runs, shared by its own brain and every NPC using it (CityWalk's lock
+  per walk point; a bench's `<npc>_kickFromBench` gate, which another
+  sitter opens). External locks start closed. Semaphores and
+  synchronize locks are one counted lock: created free, waiters admitted
+  in arrival order, and once the holders reach the count no one is
+  admitted until all have left (batches; count 1 is a mutex, a
+  two-party `Synchronize` a pairing barrier);
 - **behaviour filters:** `HasBehaviorFilter` reads a smart object's type
   or a smart area's template (a shop's `customer`). Requestable means
   enabled with an instance free; Available means not disabled. Links
@@ -209,9 +212,11 @@ graph filters `AnyLinkFilter`, `ExistPath`, `OrByRandomOp`. A behaviour
 that returns early after reaching one of these is held (below), not
 treated as the game ending the activity.
 
-**Loop** runs its count whatever its child returns (ASSUMPTION; `LoopUntil`
-is the result-driven loop). The daily-cycle note has CityWalk end only when
-the time changes, though a round's shop visit can fail.
+**Loops** follow `bt-rules.md`: `Loop count=N` repeats until N successes
+and fails on the first failing child (−1, nearly every loop in the data,
+repeats until a failure); `While` restarts its child whatever it returns
+unless `propagateChildFail` is set; `LoopUntil` counts every result as an
+attempt.
 
 ### In the world view (`web/src/npcAi.ts`, `web/src/mannequin.ts`)
 

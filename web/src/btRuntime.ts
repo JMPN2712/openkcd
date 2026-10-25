@@ -518,26 +518,24 @@ export class Runner {
         };
       }
       case "While": case "Loop": {
+        // the rules from the research notes (bt-rules.md): Loop count=N repeats until N successes
+        // and fails on the first failing child (N = 0 succeeds at once; -1 repeats until a failure);
+        // While checks its condition before the first run and after every result, restarting the
+        // child whatever it returned unless propagateChildFail is set
         const body = only(kids[0]);
         let iterations = 0;
         return {
           tick: () => {
-            // a few iterations per tick: a body that finishes at once (a failed search, …) would
-            // otherwise spin every frame; the loop yields and continues next tick
             for (let guard = 0; guard < LOOP_BUDGET; guard++) {
               if (!body?.active) {
-                const go = n.tag === "While" ? truthy(c.eval("condition", false)) : (() => { const cnt = num(c.eval("count", -1)); return cnt < 0 || iterations < cnt; })();
+                const go = n.tag === "While" ? truthy(c.eval("condition", false)) : num(c.eval("count", -1)) !== iterations;
                 if (!go) { iterations = 0; return n.tag === "While" && flag("doFail") ? "failure" : "success"; }
               }
               if (!body) return "running";
               const s = body.tick();
               if (s === "running") return s;
+              if (s === "failure" && (n.tag === "Loop" || flag("propagateChildFail"))) { iterations = 0; return "failure"; }
               iterations++;
-              // ASSUMPTION: Loop runs its count whatever the child returns (LoopUntil is the
-              // result-driven loop); the daily-cycle note has CityWalk's Loop(-1) end only when the
-              // time changes, though a round's shop visit can fail. While stops on a failing child
-              // only with propagateChildFail
-              if (s === "failure" && n.tag === "While" && flag("propagateChildFail")) { iterations = 0; return "failure"; }
             }
             return "running"; // an instant loop: yield for this tick
           },
@@ -697,7 +695,7 @@ export class Runner {
       case "LoopUntil": {
         // repeats its child until it ends with `until` (Success/Failure); attemptCount 0 or -1: no limit
         const body = only(kids[0]);
-        const until: Status = text("until") === "Failure" ? "failure" : "success";
+        const until: Status = /^fail/i.test(text("until")) ? "failure" : "success"; // "Fail" in the data
         let attempts = 0;
         return {
           tick: () => {

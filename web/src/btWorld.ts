@@ -173,14 +173,39 @@ const wuid = (v: Value | undefined): number | null => {
   return null;
 };
 
+/** A named, counted lock (bt-rules.md): holders, a waiting queue in arrival order, and a full flag. */
+interface CountedLock { holders: object[]; waiting: object[]; full: boolean }
+
+/**
+ * Asks for a place: granted when the asker's place in the queue falls inside the free slots
+ * (count 0: unlimited) and the lock isn't full. A lock that fills stays full until every holder
+ * has left, so a count above 1 admits in batches.
+ */
+function acquireLock(l: CountedLock, me: object, count: number): boolean {
+  if (l.holders.includes(me)) return true;
+  if (!l.waiting.includes(me)) l.waiting.push(me);
+  const place = l.waiting.indexOf(me);
+  if (l.full || (count > 0 && place >= count - l.holders.length)) return false;
+  l.waiting.splice(place, 1);
+  l.holders.push(me);
+  if (count > 0 && l.holders.length >= count) l.full = true;
+  return true;
+}
+
+function releaseLock(l: CountedLock, me: object): void {
+  const h = l.holders.indexOf(me);
+  if (h >= 0) l.holders.splice(h, 1);
+  const w = l.waiting.indexOf(me);
+  if (w >= 0) l.waiting.splice(w, 1);
+  if (!l.holders.length) l.full = false;
+}
+
 export class AiWorld {
   readonly o: WorldOptions;
   readonly runner: Runner;
   /** debugging (runner.debug): per NPC, the deepest chain of nodes running after its last tick */
   readonly stuckAt = new Map<number, string[]>();
   private brains = new Map<number, Scope>();
-  /** first-come-first-served queues (Synchronize with SemaphoreCount 1), by semaphore key */
-  private queues = new Map<string, object[]>();
   /** reverse links (for "parent" edges) */
   private parents = new Map<number, { target: number; name: string }[]>();
   /** active behaviour instances per "entity/behaviour" (max_instances) */
@@ -201,17 +226,20 @@ export class AiWorld {
   private gaps = new Set<number>();
   /** where each NPC is (updated by moves); starts at the entity position */
   readonly positions = new Map<number, [number, number, number]>();
-  /** semaphores and external locks by scoped name */
-  private semaphores = new Map<string, Set<object>>();
-  private locks = new Map<string, boolean>();
   /**
-   * External locks start closed until a tree opens them: so_bench.xml#use waits on its
-   * `<npc>_kickFromBench` gate, which nothing touches until someone kicks the sitter; the queue
-   * (entityUtils.xml) opens its own lock before running under it; the daycycle root closes
-   * `timeChanged` again at each activity (beginActivity).
+   * Counted locks (Semaphore, InstantSemaphore, Synchronize) by scoped name, created free on first
+   * use, and external locks' closed flags, created closed (research notes, bt-rules.md). The two
+   * kinds are separate locks even under one name.
    */
+  private semaphores = new Map<string, CountedLock>();
+  private locks = new Map<string, boolean>();
   private locked(key: string): boolean {
     return this.locks.get(key) ?? true;
+  }
+  private counted(key: string): CountedLock {
+    let l = this.semaphores.get(key);
+    if (!l) { l = { holders: [], waiting: [], full: false }; this.semaphores.set(key, l); }
+    return l;
   }
 
   constructor(o: WorldOptions) {
@@ -623,8 +651,8 @@ export class AiWorld {
    * Scope a lock/semaphore name: Global; Intellect (this NPC); Local, the smart object or area
    * whose behaviour runs, shared by the NPCs using it: CityWalk_walking's per-point locks keep two
    * walkers from one point, and so_bench.xml#use's `<npc>_kickFromBench` lock is how another sitter
-   * moves this one on. ASSUMPTION (the note implies sharing, not the scope): without an object or
-   * area, the tree instance.
+   * moves this one on (bt-rules.md: Local is the hosting smart area or object instance).
+   * ASSUMPTION: a Local lock in a tree with neither (none seen in the data) is the tree instance's.
    */
   private lockKey(n: BtNode, c: Context, nameProp: string): string {
     const kind = this.prop(n, "LockManagerType");
@@ -687,78 +715,32 @@ export class AiWorld {
           }
           return "success";
         });
-      case "Synchronize": case "InstantSynchronize": {
-        // SemaphoreCount 1: a first-come-first-served queue (entityUtils.xml#queue): the head runs the
-        // child, the others wait, their place in OutsideQueuePosVariable (0 = inside; -1 before joining)
-        if (Number(c.eval("SemaphoreCount", 2)) === 1) {
-          const me = {};
-          let key: string | null = null;
-          let body: Task | null = null;
-          const leave = () => {
-            if (!key) return;
-            const q = this.queues.get(key);
-            if (q) { const i = q.indexOf(me); if (i >= 0) q.splice(i, 1); }
-            key = null;
-          };
-          return {
-            tick: () => {
-              if (!body) {
-                key ??= this.lockKey(n, c, "SemaphoreName");
-                const q = this.queues.get(key) ?? [];
-                this.queues.set(key, q);
-                if (!q.includes(me)) q.push(me);
-                const pos = q.indexOf(me);
+      case "Synchronize": case "InstantSynchronize": case "InstantSemaphore": {
+        // a counted lock (bt-rules.md): Synchronize waits for a place, then until SemaphoreCount
+        // participants hold the lock, and runs its child with them (count 1: a first-come-first-served
+        // queue, entityUtils.xml#queue, the place in OutsideQueuePosVariable, 0 = inside);
+        // InstantSemaphore fails at once when there is no place (CityWalk_walking's lock per point)
+        const me = {};
+        let lock: CountedLock | null = null;
+        let body: Task | null = null;
+        const leave = () => { if (lock) releaseLock(lock, me); lock = null; };
+        const instant = n.tag === "InstantSemaphore";
+        return {
+          tick: () => {
+            if (!body) {
+              const count = Number(c.eval("SemaphoreCount", instant ? 1 : 2));
+              lock ??= this.counted(this.lockKey(n, c, "SemaphoreName"));
+              const inside = acquireLock(lock, me, count);
+              if (!instant) {
+                const pos = inside ? 0 : lock.holders.length + lock.waiting.indexOf(me);
                 setVar("OutsideQueuePosVariable", pos);
                 setVar("InsidePosVariable", pos);
-                if (pos > 0) return this.prop(n, "RunLogic") === "Halt" ? (leave(), "failure") : "running";
-                body = kids[0] ? this.runner.make(kids[0], c.scope) : null;
-                if (!body) { leave(); return "success"; }
               }
-              const s = body.tick();
-              if (s !== "running") { body = null; leave(); }
-              return s;
-            },
-            abort: () => { body?.abort(); body = null; leave(); },
-          };
-        }
-        // a barrier: running until SemaphoreCount participants are inside, then the child runs
-        const me = {};
-        let key: string | null = null;
-        let body: Task | null = null;
-        const leave = () => { if (key) this.semaphores.get(key)?.delete(me); key = null; };
-        return {
-          tick: () => {
-            if (!body) {
-              key ??= this.lockKey(n, c, "SemaphoreName");
-              const set = this.semaphores.get(key) ?? new Set<object>();
-              set.add(me);
-              this.semaphores.set(key, set);
-              if (set.size < Number(c.eval("SemaphoreCount", 2))) return this.prop(n, "RunLogic") === "Halt" ? (leave(), "failure") : "running";
-              body = kids[0] ? this.runner.make(kids[0], c.scope) : null;
-              if (!body) { leave(); return "success"; }
-            }
-            const s = body.tick();
-            if (s !== "running") { body = null; leave(); }
-            return s;
-          },
-          abort: () => { body?.abort(); body = null; leave(); },
-        };
-      }
-      case "InstantSemaphore": {
-        // a lock for SemaphoreCount holders that fails at once when full (CityWalk_walking's lock
-        // per walk point, note section 6)
-        const me = {};
-        let key: string | null = null;
-        let body: Task | null = null;
-        const leave = () => { if (key) this.semaphores.get(key)?.delete(me); key = null; };
-        return {
-          tick: () => {
-            if (!body) {
-              key = this.lockKey(n, c, "SemaphoreName");
-              const set = this.semaphores.get(key) ?? new Set<object>();
-              this.semaphores.set(key, set);
-              if (set.size >= Number(c.eval("SemaphoreCount", 1))) { key = null; return "failure"; }
-              set.add(me);
+              if (!inside) {
+                if (instant || this.prop(n, "RunLogic") === "Halt") { leave(); return "failure"; }
+                return "running";
+              }
+              if (!instant && count > 0 && lock.holders.length < count) return "running"; // waiting for the others
               body = kids[0] ? this.runner.make(kids[0], c.scope) : null;
               if (!body) { leave(); return "success"; }
             }
@@ -836,21 +818,16 @@ export class AiWorld {
         };
       }
       case "Semaphore": {
-        // a mutex for SemaphoreCount holders: others wait (outside timers not modelled)
+        // holds a counted lock around its child; others wait in arrival order (outside timers not modelled)
         const me = {};
-        let key: string | null = null;
+        let lock: CountedLock | null = null;
         let body: Task | null = null;
-        const leave = () => { if (key) this.semaphores.get(key)?.delete(me); key = null; };
+        const leave = () => { if (lock) releaseLock(lock, me); lock = null; };
         return {
           tick: () => {
             if (!body) {
-              key ??= this.lockKey(n, c, "SemaphoreName");
-              const set = this.semaphores.get(key) ?? new Set<object>();
-              this.semaphores.set(key, set);
-              if (!set.has(me)) {
-                if (set.size >= Number(c.eval("SemaphoreCount", 1))) return "running";
-                set.add(me);
-              }
+              lock ??= this.counted(this.lockKey(n, c, "SemaphoreName"));
+              if (!acquireLock(lock, me, Number(c.eval("SemaphoreCount", 1)))) return "running";
               body = kids[0] ? this.runner.make(kids[0], c.scope) : null;
               if (!body) { leave(); return "success"; }
             }

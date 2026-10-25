@@ -391,10 +391,12 @@ its cost on Potato with a full market.
   - [ ] Messaging between NPCs and areas (`ProcessMessage`): garrison
         guards get no post and hold their spot; shops' merchants and
         customers don't meet. Area brains (`CitySA_onUpdate`).
-  - [ ] Research note needed: the Loop and external-lock semantics the
-        trees assume (Loop runs its count whatever the child returns;
-        locks start closed; Local locks shared per smart object). These
-        are ASSUMPTIONs in `btRuntime.ts` / `btWorld.ts`.
+  - [x] Loops and locks from the research note `bt-rules.md`
+        (2026-10-25): `Loop` fails on the first failing child (the guess
+        had it run on); external locks start closed, semaphores free;
+        semaphores and synchronize share one counted lock that admits in
+        arrival order and in batches; Local is the hosting smart area or
+        object instance.
   - [ ] Pub lunch (10% of men whose social class has `lunchInPub`):
         needs where that flag comes from.
   - [ ] Sleep through the home's `Sleeper` tree (beds are placed directly).
