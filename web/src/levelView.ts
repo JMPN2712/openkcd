@@ -157,7 +157,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const chestPanel = el("div", "level-chest");
   chestPanel.hidden = true;
   const fade = el("div", "level-fade");
-  stage.append(canvas, fullBtn, marketBtn, clockBar, hud, chestPanel, fade);
+  // what E does at the door, chest or bed Henry faces
+  const prompt = el("div", "level-prompt");
+  prompt.hidden = true;
+  let promptText = "";
+  stage.append(canvas, fullBtn, marketBtn, clockBar, hud, chestPanel, prompt, fade);
   host.replaceChildren(
     el("p", "scene-title", `${level}: ${terrain.size} × ${terrain.size} m terrain, ${objects.brushName.length.toLocaleString()} brushes, ${objects.vegGroup.length.toLocaleString()} vegetation instances`),
     stage,
@@ -669,12 +673,19 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     device.queue.submit([enc.finish()]);
     cpuAvg += (performance.now() - t0 - cpuAvg) * 0.05;
     const pc = player?.controller;
-    const doorText = mode !== "player" ? ""
-      : chestHint ? { open: "E: open the chest · ", close: "E: close the chest · ", locked: "the chest is locked · ", busy: "" }[chestHint.act]
-      : doorHint ? { open: "E: open the door · ", close: "E: close the door · ", locked: "the door is locked · ", busy: "" }[doorHint.act]
-      : bedHint ? (bedHint.taken ? "someone is sleeping here · " : `E: sleep until morning${bedHint.bed.legal ? "" : " (not your bed)"} · `) : "";
+    // [key, action]: key "" for a message without one
+    const hint: readonly [string, string] | null = mode !== "player" || sleeping ? null
+      : chestHint ? ({ open: ["E", "Open the chest"], close: ["E", "Close the chest"], locked: ["", "The chest is locked"], busy: null } as const)[chestHint.act]
+      : doorHint ? ({ open: ["E", "Open the door"], close: ["E", "Close the door"], locked: ["", "The door is locked"], busy: null } as const)[doorHint.act]
+      : bedHint ? (bedHint.taken ? ["", "Someone is sleeping here"] : ["E", `Sleep until morning${bedHint.bed.legal ? "" : " (not your bed)"}`]) : null;
+    const promptKey = hint ? hint.join("|") : "";
+    if (promptKey !== promptText) {
+      promptText = promptKey;
+      prompt.hidden = !hint;
+      if (hint) prompt.replaceChildren(...(hint[0] ? [el("kbd", undefined, hint[0])] : []), hint[1]);
+    }
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
-    hud.textContent = `${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${doorText}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
+    hud.textContent = `${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();
