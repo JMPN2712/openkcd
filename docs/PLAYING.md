@@ -126,7 +126,7 @@ Click the view to capture the mouse; Esc releases it.
 | Space | jump |
 | V | first / third person |
 | Mouse wheel | third-person camera distance (1–8 m) |
-| E | open or close the door or chest you face (the HUD says when one is in reach; locked ones stay shut); an open chest lists what it holds |
+| E | open or close the door or chest you face (the HUD says when one is in reach; locked ones stay shut); an open chest lists what it holds; on a bed, sleep until 7:00 |
 | F | free-fly camera (debugging): drag to look, W A S D to move, Space/E up, C/Q down, Shift faster |
 | T | in free-fly: put Henry under the camera |
 

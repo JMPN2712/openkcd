@@ -34,6 +34,7 @@ import { CollisionWorld } from "./collision.ts";
 import { Doors, type Door } from "./doors.ts";
 import { Chests, type Chest } from "./chests.ts";
 import { Localization } from "./localization.ts";
+import { Beds, sleepMinutes, WAKE_MINUTE, type Bed } from "./beds.ts";
 import { depthClear, depthFormat, type PassSetup } from "./mat4.ts";
 import type { TimeOfDay } from "./tod.ts";
 import { SkyRenderer, skyAt, pickProfile, invert } from "./sky.ts";
@@ -155,7 +156,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   // an open chest's contents
   const chestPanel = el("div", "level-chest");
   chestPanel.hidden = true;
-  stage.append(canvas, fullBtn, marketBtn, clockBar, hud, chestPanel);
+  const fade = el("div", "level-fade");
+  stage.append(canvas, fullBtn, marketBtn, clockBar, hud, chestPanel, fade);
   host.replaceChildren(
     el("p", "scene-title", `${level}: ${terrain.size} × ${terrain.size} m terrain, ${objects.brushName.length.toLocaleString()} brushes, ${objects.vegGroup.length.toLocaleString()} vegetation instances`),
     stage,
@@ -260,6 +262,31 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   void text.load(paks, ["text_ui_items"]).catch(() => false);
   const showChest = (id: number) => { for (const { index, m } of chests.matrices(id)) models.setSceneMatrix(index, m); };
   let chestHint: { chest: Chest; act: ReturnType<Chests["action"]> } | null = null;
+  // beds: E sleeps until morning (beds.ts)
+  const beds = new Beds(vfs, props);
+  let bedHint: { bed: Bed; taken: boolean } | null = null;
+  let sleeping = false;
+  const sleepIn = (bed: Bed) => {
+    if (!player || sleeping) return;
+    sleeping = true;
+    const hours = Math.round(sleepMinutes(minute) / 60);
+    fade.textContent = `Sleeping until ${String(WAKE_MINUTE / 60).padStart(2, "0")}:00 (${hours} h)…`;
+    fade.classList.add("on");
+    setTimeout(() => {
+      // asleep: the night passes, the town moves on, and Henry gets up beside the bed
+      minute = WAKE_MINUTE;
+      clockRange.value = String(minute);
+      npcCheckedAt = -Infinity;
+      const nav = schedules.navMesh;
+      const spot = beds.wakeSpot(bed, nav ? (p) => { const hit = nav.findPoly(p, 0.4); return hit?.point && Math.abs(hit.point[2] - p[2]) < 0.8 ? hit.point[2] : null; } : undefined);
+      if (player) {
+        player.controller.pos = [...spot.pos];
+        player.controller.vel = [0, 0, 0];
+        player.controller.yaw = spot.yaw;
+      }
+    }, 700);
+    setTimeout(() => { fade.classList.remove("on"); sleeping = false; }, 1900);
+  };
   /** the chest whose contents are shown */
   let openChest: Chest | null = null;
   const fillChestPanel = async (c: Chest) => {
@@ -427,6 +454,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       if (e.code === "KeyE" && player && mode === "player" && chestHint) {
         if (chestHint.act === "close") closeChest();
         else if (chests.use(chestHint.chest)) { openChest = chestHint.chest; void fillChestPanel(openChest); }
+      } else if (e.code === "KeyE" && player && mode === "player" && !doorHint && bedHint && !bedHint.taken) {
+        sleepIn(bedHint.bed);
       } else if (e.code === "KeyE" && player && mode === "player" && doorHint && doors.use(doorHint.door, player.controller.pos)) {
         const to = doors.clearSpot(doorHint.door, player.controller.pos);
         if (to) stepAside = { from: [...player.controller.pos], to, t: 0 };
@@ -514,6 +543,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       const fwd: [number, number, number] = [Math.cos(cam.yaw) * Math.cos(cam.pitch), Math.sin(cam.yaw) * Math.cos(cam.pitch), Math.sin(cam.pitch)];
       const target = doors.target(feet, cam.pos, fwd);
       doorHint = target ? { door: target, act: doors.action(target) } : null;
+      const bed = beds.target(feet, cam.pos, fwd);
+      bedHint = bed ? { bed, taken: npcs.some((n) => n.placement.pose === "sleep" && n.placement.bed?.id === bed.entity.id) } : null;
       const chest = chests.target(feet, cam.pos, fwd);
       chestHint = chest ? { chest, act: chest === openChest ? "close" : chests.action(chest) } : null;
       // walking away from an open chest closes it
@@ -640,7 +671,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const pc = player?.controller;
     const doorText = mode !== "player" ? ""
       : chestHint ? { open: "E: open the chest · ", close: "E: close the chest · ", locked: "the chest is locked · ", busy: "" }[chestHint.act]
-      : doorHint ? { open: "E: open the door · ", close: "E: close the door · ", locked: "the door is locked · ", busy: "" }[doorHint.act] : "";
+      : doorHint ? { open: "E: open the door · ", close: "E: close the door · ", locked: "the door is locked · ", busy: "" }[doorHint.act]
+      : bedHint ? (bedHint.taken ? "someone is sleeping here · " : `E: sleep until morning${bedHint.bed.legal ? "" : " (not your bed)"} · `) : "";
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
     hud.textContent = `${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${doorText}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
   };

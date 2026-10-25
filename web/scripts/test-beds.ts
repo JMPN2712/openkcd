@@ -6,6 +6,7 @@
 // - the pelvis is over the bed;
 // - the pelvis is no higher than 0.35 m above the bed's top.
 // With --no-align (the poses before the Align bone was used), sleepers lie across their beds.
+// Henry: his wake-up spot (beds.ts) is beside each bed, on the navmesh's floor (all 1,302).
 // usage: node scripts/test-beds.ts [--no-align] [--root GAME_ROOT]
 
 import { homedir } from "node:os";
@@ -21,6 +22,9 @@ import { poseMatrix } from "../src/character.ts";
 import { multiply } from "../src/mat4.ts";
 import { lyingTag } from "../src/schedule.ts";
 import { alignOffset, lieAt } from "../src/npcs.ts";
+import { Beds, sleepMinutes } from "../src/beds.ts";
+import { NavMesh } from "../src/navmesh.ts";
+import { readCentralDirectory, readEntry } from "../src/zip.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
@@ -131,5 +135,25 @@ console.log(`${checked} of ${beds.length} beds checked (with a helper and a mode
 for (const [kind, k] of [...byKind].sort((a, b) => b[1].n - a[1].n)) console.log(`  ${kind}: ${k.n}${k.bad ? `, ${k.bad} wrong` : ""}`);
 const bad = [...byKind.values()].reduce((s, k) => s + k.bad, 0);
 for (const [p, f] of fails) console.log(`FAIL ${p}: ${f.n} beds, e.g. ${f.example}`);
-console.log(bad ? `FAIL: ${bad} of ${checked} sleepers misplaced` : `OK: all ${checked} sleepers lie along their beds`);
-if (bad) process.exit(1);
+console.log(bad ? `FAIL: ${bad} of ${checked} sleepers misplaced` : `ok   all ${checked} sleepers lie along their beds`);
+
+// Henry sleeping (beds.ts): he gets up beside the bed, on walkable floor; the night ends at 7:00
+const henry = new Beds(vfs, lvl.props);
+await henry.ready();
+const rb = await lvl.sources.find((x) => x.path.toLowerCase().endsWith("levels/rataje/recast.pak"))!.open();
+const nav = new NavMesh(await readEntry(rb, (await readCentralDirectory(rb)).find((e) => e.name.toLowerCase() === "recast/rdnavmesh_1.nav")!));
+const floorAt = (p: [number, number, number]) => { const hit = nav.findPoly(p, 0.4); return hit && Math.abs(hit.point![2] - p[2]) < 0.8 ? hit.point![2] : null; };
+let onFloor = 0, aside = 0;
+for (const b of henry.beds.values()) {
+  const w = henry.wakeSpot(b, floorAt);
+  const d = Math.hypot(w.pos[0] - b.entity.pos[0], w.pos[1] - b.entity.pos[1]);
+  if (d > 0.5 && d < 2.5) aside++;
+  const hit = nav.findPoly(w.pos, 0.5);
+  if (hit && Math.abs(hit.point![2] - w.pos[2]) < 0.8) onFloor++;
+}
+const n = henry.beds.size, wakeOk = aside === n && onFloor >= n * 0.9;
+console.log(`${wakeOk ? "ok  " : "FAIL"} Henry wakes beside the bed (0.5–2.5 m) for ${aside} of ${n} beds, on the navmesh's floor for ${onFloor}`);
+const nightOk = sleepMinutes(23 * 60) === 480 && sleepMinutes(3 * 60) === 240 && sleepMinutes(7 * 60) === 1440;
+console.log(`${nightOk ? "ok  " : "FAIL"} sleeping from 23:00 lasts 8 h, from 03:00 4 h, from 07:00 a day`);
+if (bad || !wakeOk || !nightOk) process.exit(1);
+console.log("OK");

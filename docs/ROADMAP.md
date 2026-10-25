@@ -26,9 +26,11 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
   take it: black where the game's are black, invisible where they are
   invisible walls (still colliding). Other material overrides (texture swaps
   on 16,143 brushes) are not applied yet (`docs/LEVELS.md`).
-- **Chests (2026-10-25):** E opens a chest's lid with the game's animation
-  and lists its contents (fixed items, and what its presets may add; how the
-  game rolls presets needs a research note). Beds next.
+- **Chests and beds (2026-10-25):** E opens a chest's lid with the game's
+  animation and lists its contents (fixed items, and what its presets may
+  add; how the game rolls presets needs a research note). E on a bed sleeps
+  until 7:00. Step 2 is done apart from Henry's own animations; step 3
+  (talking to NPCs) next.
 - **Doors (2026-10-25), checked by the user:** E opens and closes doors with the game's clips,
   the leaves collide, and Henry can walk into houses: invisible horse-only
   blockers in doorways had stopped him (`docs/PHYSICS.md`). Chests and beds
@@ -378,7 +380,7 @@ its cost on Potato with a full market.
   - [ ] Remaining world-side nodes: helpers, messaging between NPCs,
         semaphores, teleport; smart-object init behaviours.
   - [ ] Meal, leisure and sleep routines.
-- [ ] **2. Interaction:** doors (animated, with collision), chests, beds.
+- [x] **2. Interaction:** doors (animated, with collision), chests, beds.
   - [x] Doors (2026-10-25, `web/src/doors.ts`): E opens or closes the door
         Henry faces within its use distance, with the game's clip for its
         side and approach (`door_<r|l>_<f|b>_<o|c>_player`); the leaf moves
@@ -404,7 +406,11 @@ its cost on Potato with a full market.
   - [ ] Research note needed: how an inventory's presets are rolled
         (`max_items`, priorities, `amount_random_add`), for real loot.
   - [ ] Taking items (with the inventory, core gameplay).
-  - [ ] Beds.
+  - [x] Beds (2026-10-25, `web/src/beds.ts`): E sleeps until 7:00 in the
+        bed Henry faces (not one an NPC sleeps in); he gets up at the bed's
+        wake-up helper, or the nearest floor beside it; the HUD says when
+        a bed isn't his. Sitting (a press on beds and benches in the game)
+        and the hours dialogue wait for Henry's animations and the UI.
 - [ ] **3. Talking to NPCs:** voice lines, subtitles, the dialogue camera
       and response choices from the game's dialogue data; no quest
       consequences yet.
