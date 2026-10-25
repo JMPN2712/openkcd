@@ -35,6 +35,12 @@ copy, the research repo) are in `CLAUDE.local.md`, which is not committed.
 - **Pace.** Work in small steps, run what you build, and check in between
   phases.
 - **Commits** end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- **Pull requests, not pushes to `main`.** Work on a feature branch, run
+  `tools/audit.sh origin/main`, open a PR with `gh`, and merge it yourself
+  once the `checks` workflow passes, unless the user says otherwise.
+- **Commits, PRs and issues in this repo never mention** decompiled code,
+  the game's DLL or its names, or the decompiler by name. The audit checks
+  commit messages and the PR text. Say "research notes" instead.
 
 ## Distribution model
 
@@ -52,6 +58,9 @@ copy, the research repo) are in `CLAUDE.local.md`, which is not committed.
   Installed-folder mode (reading the paks of an installed game via the File
   System Access API) stays as the alternative.
 - **Dropped:** no server or R2 streaming of game files.
+- **Hosted player:** <https://openkcd.jmpn.workers.dev/> serves the app only
+  (static assets; `docs/DEPLOY.md`). Players' installs are tied to that
+  origin, so the address must not change lightly.
 
 ## Milestones
 
@@ -61,10 +70,13 @@ See `docs/ROADMAP.md`. In order:
 2. Installer converter and slim format. Done (2026-10-24): the compact
    package is built from the installer, in place or part by part, and runs
    the engine alone (`docs/SLIM.md`). Later items are in the roadmap.
-3. Public GitHub release. **In progress:** GPL-3.0-or-later; history
-   audited and rewritten (2026-10-24). Ask before rewriting history; the
-   user makes the repository public.
-4. Living world (NPC routines; partly done).
+3. Public GitHub release. **Done (2026-10-24)** except the Vega 7 row in
+   `docs/COMPATIBILITY.md`: GPL-3.0-or-later, history audited and
+   rewritten, release docs, the hosted player live at
+   <https://openkcd.jmpn.workers.dev/> (a Cloudflare Worker with static
+   assets, `docs/DEPLOY.md`). The repository itself is still **private**;
+   the user makes it public. Ask before rewriting history.
+4. Living world. **In progress** (NPC routines partly done).
 5. Diet planning.
 6. Core gameplay.
 7. Diet playthrough.

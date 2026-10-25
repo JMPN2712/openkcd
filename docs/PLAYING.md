@@ -39,9 +39,11 @@ afterwards.
 
 ## Installing
 
-1. Open the OpenKCD page. Installing it as an app (Chrome's install button in
-   the address bar) is recommended: Chrome then keeps its storage, instead of
-   clearing it when the disk runs low.
+1. Open the OpenKCD page: <https://openkcd.jmpn.workers.dev/> (or your own
+   build, see [BUILDING.md](BUILDING.md)). The installed game is kept for
+   that address, in your browser. Installing it as an app (Chrome's install
+   button in the address bar) is recommended: Chrome then keeps its storage,
+   instead of clearing it when the disk runs low.
 2. Click **Install from GOG installer** and pick the installer folder, or drop
    the folder onto the page.
 3. Choose what to install:
@@ -143,7 +145,7 @@ Click the view to capture the mouse; Esc releases it.
 - **First load:** opening the world takes a while (about 10 to 20 s for the
   world from a compact package, longer from the game's archives).
 - **The Potato preset hasn't been measured on its target** (a Vega 7 laptop)
-  yet. See [COMPATIBILITY.md](COMPATIBILITY.md) for what has been tested.
+  yet, and macOS is still being tried (an Apple M3 Pro). See [COMPATIBILITY.md](COMPATIBILITY.md) for what has been tested.
 
 Please report problems with the issue form, saying where in the world it
 happened (the HUD shows the coordinates). Don't attach game files.
