@@ -34,6 +34,7 @@ import { CollisionWorld } from "./collision.ts";
 import { Doors, type Door } from "./doors.ts";
 import { Chests, type Chest } from "./chests.ts";
 import { Localization } from "./localization.ts";
+import { DialogueHost } from "./dialogueView.ts";
 import { Beds, sleepMinutes, WAKE_MINUTE, type Bed } from "./beds.ts";
 import { depthClear, depthFormat, type PassSetup } from "./mat4.ts";
 import type { TimeOfDay } from "./tod.ts";
@@ -57,9 +58,10 @@ let stopActive: (() => void) | null = null;
 const worldCaches = new Map<number, ReturnType<typeof newWorldCaches>>();
 const NPC_RADIUS = 120;
 const SPEEDS: [string, number][] = [["paused", 0], ["×15 (game speed)", 15], ["×60", 60], ["×720 (1 h per 5 s)", 720]];
-/** Where Henry starts: Rataje's market, under the town wall, facing south. */
-const SPAWN: [number, number, number] = [2577.8, 574, 0];
-const SPAWN_YAW = -Math.PI / 2;
+/** Where Henry starts: Rataje's market, under the town wall, facing south; `?at=x,y[,yaw°]` in the address moves it (debugging). */
+const SPAWN_AT = (typeof location !== "undefined" ? new URLSearchParams(location.search).get("at") : null)?.split(",").map(Number).filter(Number.isFinite);
+const SPAWN: [number, number, number] = SPAWN_AT && SPAWN_AT.length >= 2 ? [SPAWN_AT[0], SPAWN_AT[1], 0] : [2577.8, 574, 0];
+const SPAWN_YAW = SPAWN_AT && SPAWN_AT.length >= 3 ? (SPAWN_AT[2] * Math.PI) / 180 : -Math.PI / 2;
 /** Time between drawn frames while the world is loading (ms): about 15 fps. */
 const LOADING_FRAME = 66;
 
@@ -153,6 +155,15 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   for (const [k, v] of Object.entries(PRESETS)) presetSel.append(new Option(`Quality: ${v.label}`, k, k === presetName, k === presetName));
   presetSel.addEventListener("change", () => { savePreset(presetSel.value as PresetName); void showLevel(host, paks, level); });
   clockBar.append(presetSel);
+  // debug: play a dialogue sequence by id with the NPCs around Henry (how conversations start
+  // waits for a research note); 46319 is the tailor's gossip about the baths
+  const dlgId = el("input", "level-dialogue-id");
+  dlgId.type = "number";
+  dlgId.value = "46319";
+  dlgId.title = "Dialogue sequence id (debug)";
+  const dlgBtn = el("button", undefined, "▶ Dialogue");
+  dlgBtn.type = "button";
+  clockBar.append(dlgId, dlgBtn);
   // an open chest's contents
   const chestPanel = el("div", "level-chest");
   chestPanel.hidden = true;
@@ -161,7 +172,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const prompt = el("div", "level-prompt");
   prompt.hidden = true;
   let promptText = "";
-  stage.append(canvas, fullBtn, marketBtn, clockBar, hud, chestPanel, prompt, fade);
+  const dialogue = new DialogueHost(vfs, paks);
+  let dialogueInfo = "";
+  stage.append(canvas, fullBtn, marketBtn, clockBar, hud, chestPanel, prompt, dialogue.subtitle, fade);
   host.replaceChildren(
     el("p", "scene-title", `${level}: ${terrain.size} × ${terrain.size} m terrain, ${objects.brushName.length.toLocaleString()} brushes, ${objects.vegGroup.length.toLocaleString()} vegetation instances`),
     stage,
@@ -324,6 +337,19 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     playerInfo = "";
   }).catch((err) => { playerInfo = `Henry: ${(err as Error).message}`; });
   const npcWorld = new NpcWorld(vfs, npcEntities, schedules, (x, y) => heightAt(terrain, x, y));
+  dlgBtn.addEventListener("click", () => {
+    // the cast: NPCs within 30 m of Henry (or the camera), nearest first
+    const at = player && mode === "player" ? player.controller.pos : cam.pos;
+    const near = npcs
+      .map((n) => { const p = (npcWorld.drawn(n.entity.id) ?? n.placement).pos; return { n, d: Math.hypot(p[0] - at[0], p[1] - at[1]) }; })
+      .filter((x) => x.d < 30)
+      .sort((a, b) => a.d - b.d);
+    dialogueInfo = "Loading the dialogue tables…";
+    void dialogue.play(Number(dlgId.value), near.map((x) => x.n.soul))
+      .then((s) => { dialogueInfo = s; })
+      .catch((err) => { dialogueInfo = `Dialogue: ${(err as Error).message}`; });
+    canvas.focus();
+  });
   // NPCs stand on the same surfaces as Henry: within 0.5 m up (steps) and 1.5 m down of their planned height,
   // else up to 1 m up (navmesh routes run up to 0.85 m under the ground in places)
   npcWorld.surface = (x, y, z) => (surroundings.ground(x, y, z + 0.5, z - 1.5) ?? surroundings.ground(x, y, z + 1, z - 1.5))?.z ?? null;
@@ -527,6 +553,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const doorsMoved = doors.step(dt);
     for (const id of doorsMoved) showDoor(id);
     for (const id of chests.step(dt)) showChest(id);
+    dialogue.update(dt);
     if (mode === "player" && player) {
       player.update(dt, player.input(keys));
       if (stepAside) {
@@ -685,13 +712,14 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       if (hint) prompt.replaceChildren(...(hint[0] ? [el("kbd", undefined, hint[0])] : []), hint[1]);
     }
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
-    hud.textContent = `${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
+    hud.textContent = `${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}${dialogueInfo ? ` · ${dialogueInfo}` : ""}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();
 
   stopActive = () => {
     stopped = true;
+    dialogue.stop();
     gpuDevice.removeEventListener("uncapturederror", onGpuError);
     cancelAnimationFrame(raf);
     models.destroy();

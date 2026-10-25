@@ -5,7 +5,7 @@
 // call crosses into the GPU process: this measures what a player gets.
 // Driven over the DevTools protocol (Node's built-in WebSocket); no npm deps.
 // usage: node scripts/profile-browser.ts [--root=GAME_ROOT] [--preset=high] [--settle=30]
-//          [--seconds=8] [--windowed] [--fly=SECONDS [--spikes]] [--build-slim=full|potato] [--package] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080]
+//          [--seconds=8] [--windowed] [--dialogue=SEQUENCE_ID] [--at=x,y[,yaw°]] [--fly=SECONDS [--spikes]] [--build-slim=full|potato] [--package] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080]
 //   CHROME=… picks the browser binary, CHROME_FLAGS=… adds flags, PROFILE_DIR=… keeps the profile; --probe stops after naming the
 //   WebGPU adapter; --fly then flies north-west across the map (free-fly, 60 m/s: a streaming
 //   step every few seconds) printing the HUD every 10 s, then profiles there; with --spikes it
@@ -93,7 +93,9 @@ async function evaluate<T>(expression: string): Promise<T> {
 }
 await page("Runtime.enable");
 await page("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceScaleFactor: 1, mobile: false });
-await page("Page.navigate", { url: `http://localhost:${PORT}/` });
+// --at=x,y[,yaw°]: Henry starts there (the page's ?at= option)
+const at = arg("at", "");
+await page("Page.navigate", { url: `http://localhost:${PORT}/${at ? `?at=${at}` : ""}` });
 await waitFor("the page", () => evaluate<boolean>(`document.readyState === "complete" && !!document.getElementById("open-input")`).then((v) => v || undefined));
 await evaluate(`localStorage.setItem("openkcd.quality", ${JSON.stringify(preset)})`);
 const adapter = await evaluate<string>(`navigator.gpu ? navigator.gpu.requestAdapter().then((a) => a ? a.info.vendor + " " + a.info.architecture + " " + a.info.description : "no adapter") : "no WebGPU"`);
@@ -191,6 +193,24 @@ await sleep(settle * 1000);
 const readings: string[] = [];
 for (let k = 0; k < 3; k++) { readings.push((await hud()).replace(/ · .*?x /, " · x ").replace(/ · (terrain|textures)[^·]*/g, "").slice(0, 300)); await sleep(1000); }
 console.log(readings.join("\n"));
+
+// --dialogue=ID: play a dialogue sequence with the NPCs near Henry (the debug control) and print
+// its subtitles as they appear, and how many of its lines decoded to audio
+const dialogueId = arg("dialogue", "");
+if (dialogueId) {
+  await evaluate(`(() => { const i = document.querySelector(".level-dialogue-id"); i.value = ${JSON.stringify(dialogueId)}; [...document.querySelectorAll("button")].find((b) => /Dialogue/.test(b.textContent)).click(); })()`);
+  const td = Date.now();
+  const started = await waitFor("the dialogue", () => hud().then((s) => /Dialogue \d+:|Dialogue: |No dialogue/.test(s) ? s.slice(s.lastIndexOf(" · ") + 3) : undefined), 120000);
+  console.log(`${started} (${((Date.now() - td) / 1000).toFixed(1)} s to load and start)`);
+  let last = "", quietFor = 0;
+  while (quietFor < 6) {
+    const sub = await evaluate<string>(`(() => { const s = document.querySelector(".level-subtitle"); return s && !s.hidden ? s.textContent : ""; })()`);
+    if (sub && sub !== last) console.log(`  ${((Date.now() - td) / 1000).toFixed(1).padStart(5)} s  ${sub}`);
+    quietFor = sub ? 0 : quietFor + 1;
+    last = sub;
+    await sleep(500);
+  }
+}
 
 const fly = Number(arg("fly", "0"));
 if (fly) {

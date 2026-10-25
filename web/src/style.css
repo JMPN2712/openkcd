@@ -267,6 +267,15 @@ details.part p { margin: 4px 0; }
   display: inline-block; min-width: 1.3em; margin-right: 8px; padding: 0 5px; border-radius: 3px; text-align: center;
   font: inherit; font-weight: 700; color: #111; background: #f2ead8;
 }
+/* dialogue subtitles (dialogueView.ts) */
+.level-subtitle {
+  position: absolute; left: 50%; bottom: 9%; transform: translateX(-50%); z-index: 2; pointer-events: none;
+  max-width: min(80%, 900px); padding: 6px 14px; border-radius: 5px; text-align: center; font-size: 17px;
+  background: rgba(0, 0, 0, 0.5); color: #f2ead8; text-shadow: 0 1px 2px #000;
+}
+.level-subtitle[hidden] { display: none; }
+.level-subtitle b { color: #e3c27a; font-weight: 600; }
+.level-dialogue-id { width: 6em; }
 /* sleeping (beds.ts): the view fades to black while time passes */
 .level-fade {
   position: absolute; inset: 0; z-index: 3; display: flex; align-items: center; justify-content: center;

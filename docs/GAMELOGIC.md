@@ -274,6 +274,60 @@ NotNearPlayer, IsLoadedGate, RemoveLink.
   errors. The only engine call still stubbed on those paths is
   `EntityModule.GetSlotHand` (item slots).
 
+## Dialogue (`Libs/Tables/text`, `web/src/dialogue.ts`)
+
+- **The tables.** 52,415 sequences hold 201,190 lines.
+  - `topic2sequence` lists a topic's sequences, each with entry conditions
+    (expressions such as `var('3') AND var('4')`, not evaluated yet).
+  - `sequence_line` orders a sequence's lines (`order_by`) and types them.
+    Type 1 is a response, 84,632 of them, with a row in `response`: the
+    speaking role, a `text_ui_dialog` key, camera mode and volume. Type 5
+    is a command, 82,657 of them, in `v_dialogue_commands`. Types 2 and 4
+    (2,618 and 31,281) have no table of their own.
+  - `sequence` gives `next`, `type`, `flags`, `priority`, `timeout`,
+    `speech_coef`, a Lua `script` and a `ui_prompt` per sequence. What
+    these mean for the flow waits on a research note.
+- **Commands.** Each has who and target (role ids), a type, `int_param`,
+  `char_param` and a `delay` in seconds. Two types read plainly from the
+  data:
+  - type 1 sets a mood: `int_param` is a `dialogue_mood` id, e.g. 20 =
+    `thinking1`;
+  - type 3 plays a dialogue animation fragment, e.g. `char_param`
+    `ADLG_Nod`.
+
+  Type 8's `int_param` matches `dialogue_hearing` (bark ranges). The player
+  reports commands but doesn't act on them yet: that waits for the
+  dialogue animations (step 5).
+- **The cast.** `soul2role` gives the roles a soul can play (the tailor has
+  98). `v_soul_character_data` gives each soul's voice and its name key in
+  `text_ui_soul`. Henry is role 3 (`HENRY`, metarole `PLAYER`); his lines
+  are recorded in voice 108 (`tmck`).
+- **Voices.** `v_response_wave_file_recorded` lists the recorded
+  (line, voice) pairs, 156,884 of them. The file is always
+  `Dialog/<path as six digits>/<voice abbreviation>_<text key>.ogg`
+  (`v_voice_abbreviation`): Ogg Vorbis, mono, 48 kHz, in
+  `Localization/<Language>*.pak`. Patches replace files in order, then
+  the HD packs (`web/src/voice.ts`). Many lines were never recorded (most
+  of the tailor's merchant topics, for one).
+- **Playing (`web/src/dialoguePlayer.ts`).** A sequence becomes a timeline.
+  Each response lasts as long as its recording in the speaker's voice
+  (the Ogg's last granule position). A line with no recording stays up
+  for a reading time we chose (0.06 s a character, at least 1.5 s); it is
+  not the game's. The world view (`web/src/dialogueView.ts`) decodes the
+  recordings with Web Audio and shows subtitles. It casts the first NPC
+  near Henry that can play each role.
+- **Cost.** Loaded on first use, about 1.5 s in Chrome. Kept in memory:
+  64 MiB of tables, 11 MiB of text and a 49 MiB index of 148k recordings.
+- **Waiting on research notes:** how a conversation starts (approach,
+  greeting, topic choice by condition and priority), how choices are
+  offered (`type`, `flags`, `next`, timeouts), how entry conditions
+  evaluate, and the dialogue camera's shot choice. The camera rig itself
+  is in the data: `dialog_cameras.chr` has `master`, `close_shot`,
+  `close_up` and `medium` camera bones with targets, attached at Henry's
+  `Align`. Its 3D blendspace `3d_ad_cameras_base.bspace` is laid out by
+  the partner's angle (−180°…180°), distance (80–250 cm) and height
+  (−45…45 cm).
+
 ## Quests (`Libs/Quests/flowgraphs`)
 
 - **Scope.** 287 graphs, one per quest, using only 16 node classes:

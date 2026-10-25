@@ -123,6 +123,7 @@ node scripts/test-player.ts                      # player controller on Rataje: 
 node scripts/test-collision.ts                   # collision sources by object type around the market, random runs: no penetration, no falling through
 node scripts/test-chests.ts                      # chest lids open with their .anm (10–20°), and a chest near the tailor's lists its contents by name
 node scripts/test-doors.ts                       # doors near the tailor's house swing on their hinges; E opens and closes his door; the leaf blocks only when shut
+node scripts/test-dialogue.ts                    # dialogue tables → sequences; the tailor and a townsman cast in a recorded gossip, every line with its subtitle and recording, played to the end
 node scripts/test-beds.ts                        # every bed in Rataje: the sleeper lies along it, over it, at its height (--no-align: the old poses); Henry wakes beside it on the floor
 node scripts/test-interiors.ts                   # interior placement: sampled beds line up with the bedding brushed on them; every model in their scenes matches its LODs
 node --expose-gc scripts/test-streaming.ts       # two laps through the map's towns: scene rebuild times, memory levels off with cache trimming
@@ -131,6 +132,7 @@ node scripts/bench-presets.ts --gpu both         # frame rates per quality prese
 node scripts/build-slim.ts OUT_DIR [--potato] [--store]   # the compact package (docs/SLIM.md), built from ~/kcd1 into OUT_DIR outside the repo; --store: with the file store (run with render-player --root OUT_DIR/store --slim OUT_DIR)
 node scripts/test-slim.ts PACKAGE_DIR            # the package's codec, and a sample of its models and textures against the paks
 node scripts/bench-streaming.ts --back           # what a streaming step costs: scene build, geometry upload (in slices), the renderer rebuild and the frame after, kept geometry memory
+node scripts/profile-browser.ts --at=2522,545 --dialogue=46319   # the same, Henry by the tailor's shop: plays the gossip there and prints its subtitles as Chrome shows them
 node scripts/profile-browser.ts --trace          # the world view in headless Chrome on the real GPU (opens ~/kcd1 through the folder input): HUD fps, a CPU profile, and with --trace how busy Chrome's GPU process is
 node scripts/test-texture-pool.ts                # texture streaming: grow, shrink under a budget (read back from the GPU), reads on worker threads
 node scripts/render-player.ts /tmp/p --walk "1:;2:w;1.5:w+shift;1:"   # headless walk as Henry with scripted input, a frame per segment (--textures 1024,1024 or --no-pool)

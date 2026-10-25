@@ -58,6 +58,8 @@ const WALK_SPEED = { male: 1.40, female: 1.29 };
 
 export interface WorldNpc {
   entity: NpcEntity;
+  /** soul id (uuid, Libs/Tables/rpg/soul) */
+  soul: string;
   placement: Placement;
   schedule: ScheduleItem[];
   character: LoadedCharacter;
@@ -433,6 +435,7 @@ export class NpcWorld {
       if (!rig) continue;
       out.push({
         entity: e,
+        soul: souls.get(e.name)!.id,
         placement,
         schedule: souls.get(e.name)!.schedule,
         character,

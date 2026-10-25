@@ -130,10 +130,18 @@ Click the view to capture the mouse; Esc releases it.
 | F | free-fly camera (debugging): drag to look, W A S D to move, Space/E up, C/Q down, Shift faster |
 | T | in free-fly: put Henry under the camera |
 
+**Debugging extras.** *▶ Dialogue* in the bar under the view plays a
+dialogue sequence by its id with the NPCs near Henry as its cast (voices
+and subtitles; 46319 is a gossip the tailor and his neighbour can play, by
+the tailor's shop at 10:00). Adding `?at=x,y` (and optionally `,yaw°`) to
+the address starts Henry there, e.g. `?at=2522,545` by the tailor's shop.
+
 ## Known issues
 
-- **No gameplay yet:** no combat, dialogue, quests, inventory or saves. NPCs
-  follow their daily routines but don't react to Henry.
+- **No gameplay yet:** no combat, quests, inventory or saves. NPCs follow
+  their daily routines but don't react to Henry. Dialogue plays (voices and
+  subtitles) only from the debug control: nobody starts a conversation yet,
+  and there are no response choices or dialogue camera.
 - **Doors:** Henry opens and closes them (E) without his hand animation;
   locked doors can't be opened yet (no keys or lockpicking); NPCs walk
   through closed doors; no door sounds.

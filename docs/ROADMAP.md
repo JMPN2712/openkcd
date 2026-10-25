@@ -414,6 +414,21 @@ its cost on Potato with a full market.
 - [ ] **3. Talking to NPCs:** voice lines, subtitles, the dialogue camera
       and response choices from the game's dialogue data; no quest
       consequences yet.
+  - [x] Dialogue data to sequences, voices and subtitles (2026-10-25,
+        `web/src/dialogue.ts`, `voice.ts`, `dialoguePlayer.ts`,
+        `dialogueView.ts`, `docs/GAMELOGIC.md`). A sequence plays with
+        the NPCs near Henry as its cast, each line in its speaker's
+        recorded voice with its English subtitle; started by id from a
+        debug control. `scripts/test-dialogue.ts` plays the tailor's
+        gossip 46319 end to end; checked in headless Chrome by the
+        tailor's shop (all 6 lines voiced). Cost: about 1.5 s to load on
+        first use, about 125 MiB kept.
+  - [ ] Dialogue camera: the rig and its blendspace are in the data; the
+        shot for each line needs a research note.
+  - [ ] Research note needed (`notes/dialogue.md`): conversation starts,
+        choice lists, entry conditions, sequence flow (`next`, `type`,
+        `flags`, timeouts).
+  - [ ] Command lines: moods and `ADLG_*` fragments (with step 5).
 - [ ] **4. Ambient audio:** footsteps per surface, town and nature
       ambience, NPC barks.
 - [ ] **5. NPC animations:** walking, working, sitting.

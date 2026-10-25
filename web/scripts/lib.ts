@@ -36,6 +36,16 @@ async function findPaks(dir: string): Promise<string[]> {
   return out;
 }
 
+/** Every pak under the game root, as sources (paths relative to the root). */
+export async function gameSources(root: string): Promise<PakSource[]> {
+  const sources: PakSource[] = [];
+  for (const p of await findPaks(root)) {
+    const blob = await openAsBlob(p);
+    sources.push({ path: relative(root, p), size: blob.size, open: async () => blob });
+  }
+  return sources;
+}
+
 export interface Level {
   sources: PakSource[];
   vfs: Vfs;
@@ -56,11 +66,7 @@ export interface Level {
 
 /** Rataje with the asset VFS (level files on top), like the world view. */
 export async function openRataje(root: string, opts: { cover?: boolean; hd?: boolean } = {}): Promise<Level> {
-  const sources: PakSource[] = [];
-  for (const p of await findPaks(root)) {
-    const blob = await openAsBlob(p);
-    sources.push({ path: relative(root, p), size: blob.size, open: async () => blob });
-  }
+  const sources = await gameSources(root);
   const level = sources.find((s) => s.path.toLowerCase() === "data/levels/rataje/level.pak")!;
   const base = await Vfs.build(sources.filter((s) => !s.path.toLowerCase().startsWith("data/levels/")), { filter: (n) => ASSET_RE.test(n), includeHd: opts.hd ?? false });
   const vfs = await base.extend(level, (n) => ASSET_RE.test(n));
