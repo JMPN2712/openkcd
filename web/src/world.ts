@@ -66,6 +66,20 @@ interface Group {
 /** Editor-only geometry that the game never draws (helper boxes, test sky). */
 const HIDDEN_BRUSH = /^objects\/editor\/|_nodraw\.cgf$|\/sky\//;
 
+/**
+ * Brush material overrides (the level's material table, per brush) applied so far:
+ * - on editor primitives (objects/default/: box.cgf, primitive_cube…), always: their own
+ *   editorprimitive.mtl is a plain light grey, and the override is their look. Uzhitz's outhouse
+ *   has two black cubes (materials/color/dark), and 160 more serve as invisible walls (Nodraw,
+ *   collision proxies); all were drawn as white cubes;
+ * - on any brush, the overrides that make it invisible: Nodraw-shader materials and the collision
+ *   proxies. They keep colliding.
+ * Other overrides (texture swaps on 16,143 brushes, mostly rocks and ground pieces) are not
+ * applied yet.
+ */
+const INVISIBLE_OVERRIDE = /^(objects\/editor\/nodraw|materials\/special\/|materials\/material_rain_occluder)/;
+const EDITOR_PRIMITIVE = /^objects\/default\//;
+
 /** "%level%/brush/x.cgf" -> "brush/x.cgf" (resolved through the level pak overlay). */
 export function resolveLevelPath(name: string): string {
   return name.replace(/^%level%\//, "");
@@ -236,7 +250,11 @@ export async function buildWorldScene(
     if (Math.abs(m[12] - center[0]) > radius || Math.abs(m[13] - center[1]) > radius) continue;
     if (opts.hiddenLayers?.has(objects.brushLayer[i])) continue;
     const name = terrain.brushNames[objects.brushName[i]];
-    if (name && !HIDDEN_BRUSH.test(name) && (!opts.onlyBrushes || opts.onlyBrushes(name))) add(resolveLevelPath(name), "brush", m, m[12], m[13]);
+    if (!name || HIDDEN_BRUSH.test(name) || (opts.onlyBrushes && !opts.onlyBrushes(name))) continue;
+    const override = objects.brushMaterial[i] >= 0 ? (terrain.materials[objects.brushMaterial[i]] ?? "").toLowerCase() : "";
+    const path = resolveLevelPath(name);
+    const apply = override && override !== "default" && (INVISIBLE_OVERRIDE.test(override) || EDITOR_PRIMITIVE.test(path.toLowerCase()));
+    add(apply ? `${path}|${override}.mtl` : path, "brush", m, m[12], m[13]);
   }
   // ground meshes (roads, then decals), merged by (priority, material, GROUND_TILE tile), lowest
   // priority first so higher ones blend over them. Whole tiles (any part within the radius): a

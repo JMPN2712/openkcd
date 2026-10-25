@@ -21,6 +21,11 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
   in progress, an Apple M3 Pro. The repository stays private until the user
   makes it public. Changes now go through pull requests, with the
   clean-room audit (`tools/audit.sh`) and a build in the `checks` workflow.
+- **Fixed (2026-10-25): white cubes** (the user's report, Uzhitz's outhouse):
+  editor-primitive brushes drawn without their material override. They now
+  take it: black where the game's are black, invisible where they are
+  invisible walls (still colliding). Other material overrides (texture swaps
+  on 16,143 brushes) are not applied yet (`docs/LEVELS.md`).
 - **Doors (2026-10-25), checked by the user:** E opens and closes doors with the game's clips,
   the leaves collide, and Henry can walk into houses: invisible horse-only
   blockers in doorways had stopped him (`docs/PHYSICS.md`). Chests and beds

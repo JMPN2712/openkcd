@@ -71,7 +71,8 @@ function physicalisedSubsets(mesh: LoadedModel["cgf"]["meshes"][number]): number
 export function collisionShape(wm: Pick<WorldModel, "path" | "kind" | "lods">): CollisionShape {
   const none: CollisionShape = { source: "none", positions: new Float32Array(0), indices: new Uint32Array(0) };
   const base = wm.lods[0];
-  if (NO_COLLISION.test(wm.path) || wm.path.includes("|") || wm.path.endsWith(".skin")) return none;
+  // (".skin|mtl": .cdf parts; a brush with its material override, "x.cgf|y.mtl", collides)
+  if (NO_COLLISION.test(wm.path) || /\.skin(\||$)/.test(wm.path)) return none;
   if (base.materials.length && base.materials.every((m) => PLAYER_PASSES.has(m.surfaceType.toLowerCase()))) return none;
   const physical = transformed(base, physicalisedSubsets);
   if (base.cgf.physics.length) {
@@ -89,10 +90,12 @@ export function collisionShape(wm: Pick<WorldModel, "path" | "kind" | "lods">): 
   if (wm.kind === "vegetation") return none;
   // no physics data: the simplified visible mesh, opaque subsets
   const m = wm.lods[1] ?? base;
+  // (a brush made invisible by its material override, world.ts, is an invisible wall: it collides)
+  const invisibleWall = wm.path.includes("|");
   const opaque = (mesh: LoadedModel["cgf"]["meshes"][number]) => mesh.subsets
     .filter((s) => {
       const mat = m.materials[m.materials.length === 1 ? 0 : s.matId];
-      return !mat?.nodraw && !(mat?.alphaTest && mat.alphaTest > 0) && !mat?.genMask.includes("%DECAL");
+      return (invisibleWall || !mat?.nodraw) && !(mat?.alphaTest && mat.alphaTest > 0) && !mat?.genMask.includes("%DECAL");
     })
     .map((s) => [s.firstIndex, s.numIndices]);
   const vis = transformed(m, opaque);

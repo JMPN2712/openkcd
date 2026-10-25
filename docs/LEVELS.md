@@ -120,7 +120,17 @@ The octree follows the terrain tree and runs exactly to the end of
     `u32 renderFlags`;
   - **`u16 nameIndex`** into the 12,437-name table, `u8`, `u8`;
   - `Matrix34` (rotation·scale | translation, row-major), `u32`,
-    `i32 material`, `u32`.
+    `i32 material` (+92: index into the material name table, −1 none: the
+    brush's material override), `u32`.
+  - **Material overrides:** 110,112 brushes carry one; 16,143 of them name a
+    material other than the model's own (mostly rocks and ground pieces).
+    Applied so far (`world.ts`): on editor primitives (`objects/default/`:
+    `box.cgf`, `primitive_cube*.cgf`, 176 brushes), always, since their own
+    `editorprimitive.mtl` is a plain light grey and the override is their
+    look (Uzhitz's outhouse has two black cubes, `materials/color/dark`;
+    most others are invisible walls); and on any brush, when it makes the
+    brush invisible (Nodraw shader, `materials/special/`, the rain
+    occluder). Unapplied, those drew as white cubes.
   - **How the index was identified:** transforming each candidate model's
     bounding box by the matrix reproduces the stored AABB for 2,150 of 2,150
     sampled records with the u16 at +36, against 26 with the u32 at +28.
