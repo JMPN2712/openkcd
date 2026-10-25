@@ -35,6 +35,10 @@ interface Driven {
   task: Task;
   state: AiState;
   done: boolean;
+  /** how the tree ended (when done) */
+  status?: "success" | "failure";
+  /** AI clock time by which a winding-down tree is stopped (windDown) */
+  deadline?: number;
   /** AI clock time of the tree's next tick */
   due: number;
 }
@@ -69,6 +73,16 @@ export class NpcAi {
     const d = this.driven.get(a.npc);
     if (!d) return 1;
     const st = d.state;
+    if (a.kind === "teleport" && typeof a.target !== "string") {
+      Object.assign(st, { mode: "idle", pos: [...a.target], route: undefined, clip: null, fragment: "", since: this.now });
+      return 0;
+    }
+    if (a.kind === "turn" && typeof a.target !== "string") {
+      const yaw = Math.atan2(a.target[1] - st.pos[1], a.target[0] - st.pos[0]) - Math.PI / 2;
+      if (Math.hypot(a.target[0] - st.pos[0], a.target[1] - st.pos[1]) > 0.05) st.rot = yawQuat(yaw);
+      if (st.mode !== "act") st.mode = "idle";
+      return 0.6;
+    }
     if (a.kind === "move" && typeof a.target !== "string") {
       const to = a.target;
       const straight = Math.hypot(to[0] - st.pos[0], to[1] - st.pos[1]);
@@ -101,6 +115,7 @@ export class NpcAi {
     this.stop(npc.id);
     this.female.set(npc.id, npc.female);
     this.world.positions.set(npc.id, [...pos]);
+    this.world.beginActivity(npc.id);
     const task = this.world.startAreaBehaviour(npc.id, area, behaviour);
     if (!task) return false;
     this.driven.set(npc.id, { task, state: { pos: [...pos], rot: [...rot], mode: "idle", clip: null, fragment: "", since: this.now }, done: false, due: this.now + ((this.started++ * 0.37) % 1) * TICK });
@@ -121,6 +136,29 @@ export class NpcAi {
 
   has(id: number): boolean {
     return this.driven.has(id);
+  }
+
+  /** How an NPC's tree ended: undefined while it runs (or without one). */
+  result(id: number): "success" | "failure" | undefined {
+    const d = this.driven.get(id);
+    return d?.done ? d.status : undefined;
+  }
+
+  /**
+   * The NPC's activity is over (the time changed): its behaviours see the gate open and finish
+   * their step (stand up, walk off). A tree still running after `grace` real seconds is stopped.
+   */
+  windDown(id: number, grace: number): void {
+    const d = this.driven.get(id);
+    if (!d || d.deadline !== undefined) return;
+    this.world.endActivity(id);
+    d.deadline = this.now + grace;
+  }
+
+  /** Whether the NPC's tree is winding down (windDown) and not finished yet. */
+  windingDown(id: number): boolean {
+    const d = this.driven.get(id);
+    return !!d && d.deadline !== undefined && !d.done;
   }
 
   ids(): number[] {
@@ -145,9 +183,12 @@ export class NpcAi {
         if (seg > 0.05) st.rot = yawQuat(Math.atan2(b[1] - a[1], b[0] - a[0]) - Math.PI / 2);
         if (walked >= total) { st.mode = "idle"; if (st.endRot) st.rot = [...st.endRot]; }
       }
-      if (d.done || this.now < d.due) continue;
+      if (d.done) continue;
+      if (d.deadline !== undefined && this.now >= d.deadline) { d.task.abort(); d.done = true; d.status = "success"; continue; }
+      if (this.now < d.due) continue;
       d.due = Math.max(d.due + TICK, this.now);
-      if (d.task.tick() !== "running") d.done = true;
+      const s = d.task.tick();
+      if (s !== "running") { d.done = true; d.status = s; }
     }
   }
 

@@ -115,6 +115,9 @@ node scripts/test-navmesh.ts                     # Rataje navmesh: routes stay o
 node scripts/test-bt.ts                          # parse all 4,911 behaviour trees and their expressions, resolve includes
 node scripts/test-btrun.ts                       # behaviour-tree interpreter: node semantics + a real game tree
 node scripts/test-btworld.ts                     # Rataje's tailor at work: area behaviour → work spot → table's use behaviour → move + animation (trace)
+SEED=1 node scripts/test-btworld.ts ~/kcd1 rat_tailor cityWalk sa_rat_city   # his free time: benches, shops, walk points (DEBUG=n: running nodes)
+node scripts/test-daycycle.ts                    # daily cycle: schedule store rules, patches, the tailor's day, hobby draws and areas in Rataje
+node scripts/sim-daycycle.ts --clock 18:27 --minutes 15   # the market across an activity change: trees start/wind down/end, per-frame cost (--max 60, --list)
 node scripts/test-lua.ts                         # Lua 5.1 (WebAssembly): semantics, tree data round trip, boot Scripts/main.lua
 node scripts/bench-npcs.ts                       # CPU benchmark: NPC loading and per-frame cost in Rataje's market (--decode: CPU texture decoding)
 node scripts/render-world.ts /tmp/w --at-npc rat_baker --npc-dist 6 --npcs --clock 12:00   # world with NPCs placed by their schedules, framed on one

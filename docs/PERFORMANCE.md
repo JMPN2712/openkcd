@@ -294,6 +294,31 @@ per-instance plane tests for a run inside every plane. The drawn set is unchange
 The world view's HUD shows the main thread's time per frame next to the fps (`cpu … ms`): fps well
 below 1000 / cpu means the GPU, not JavaScript, sets the frame rate.
 
+## NPC daily cycles (2026-10-25)
+
+`scripts/sim-daycycle.ts`, headless Node on the Ryzen 9 9900X (CPU only, no
+rendering): Rataje's market, 15 game minutes across the tailor's 18:31 change
+(Potato's 8 NPCs) and 10 minutes from 19:00 with 60 shown (High's limit, the
+full market). Behaviour trees tick at 10 Hz, staggered.
+
+| Per frame (30 fps) | Potato, 8 NPCs | High, 60 NPCs |
+|---|---:|---:|
+| Behaviour trees | 0.12–0.14 ms | 0.55 ms |
+| Crowd (collision avoidance) | 0.03–0.04 ms | 0.31 ms |
+| Placement and animation | 0.40 ms | 1.82 ms |
+
+- **NPC check, every 0.5 s** (selection over all 952 NPCs' daily cycles,
+  then `updateAi`): median 3.8 ms on Potato, 4.2 ms with 60 shown.
+  `bench-npcs.ts` at 10:00 (40 NPCs): 3.0 ms against 2.4 ms before the
+  daily cycle.
+- **The first check after loading creates every NPC's cycle and routes:**
+  about 0.5 s without the hobby data and 1.0–1.3 s with it. That is one
+  stall, after the world has loaded. The same first selection took 1.5 s
+  before this change (routes for walks long finished are no longer
+  searched). Spreading it over frames is a candidate for the Vega 7.
+- Free-time searches are cached per settlement and hobby; containment
+  tests check bounding boxes first.
+
 ## Next
 
 - **Terrain detail layers** are still 256–512 px and blurry up close (the ground under Henry's

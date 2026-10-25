@@ -23,6 +23,7 @@ import type { EntityInfo, NpcEntity } from "./levelEntities.ts";
 import { Schedules } from "./schedule.ts";
 import { NpcWorld, npcItems, animateNpcs, updateAi, type WorldNpc } from "./npcs.ts";
 import { createAiWorld } from "./btWorld.ts";
+import { cycleData } from "./daycycle.ts";
 import { NpcAi } from "./npcAi.ts";
 import { AnimLibrary } from "./mannequin.ts";
 import { LuaHost } from "./luaHost.ts";
@@ -377,8 +378,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     await lua.preloadTables();
     const w = await createAiWorld(vfs, {
       ents, lua, realTime: () => npcAi?.now ?? 0, worldTime: () => (npcAi?.now ?? 0) * 15, act: (a) => npcAi?.act(a) ?? 1,
+      daycycleChange: (npc, f) => schedules.cycleOf(npc)?.change(f, minute),
     });
     if (!lua.boot()) console.warn("Lua start-up:", lua.errors.slice(0, 3));
+    // free time: hobbies by soul and the areas offering them (daycycle.ts)
+    schedules.setCycleData(await cycleData(vfs, w));
     return w;
   })().then((w) => {
     if (stopped) return;

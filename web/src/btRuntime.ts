@@ -130,6 +130,11 @@ function compile(src: string): Expr {
   return e;
 }
 
+/** Evaluate an expression source in a scope (message field values: `'hideFromRain'`, `$__land`, `30`). */
+export function evalExpression(src: string, scope: Scope, host: Host): Value | undefined {
+  try { return evaluate(compile(src), scope, host); } catch { return undefined; }
+}
+
 const truthy = (v: Value | undefined) => v !== null && v !== undefined && v !== false && v !== 0;
 // durations are often stored as strings ('10s', '1m 30s'): numeric contexts read them as seconds
 const DUR_UNIT: Record<string, number> = { ms: 0.001, s: 1, m: 60, h: 3600, d: 86400 };
@@ -528,8 +533,11 @@ export class Runner {
               const s = body.tick();
               if (s === "running") return s;
               iterations++;
-              // ASSUMPTION: Loop stops on a failing child; While only with propagateChildFail
-              if (s === "failure" && (n.tag === "Loop" || flag("propagateChildFail"))) { iterations = 0; return "failure"; }
+              // ASSUMPTION: Loop runs its count whatever the child returns (LoopUntil is the
+              // result-driven loop); the daily-cycle note has CityWalk's Loop(-1) end only when the
+              // time changes, though a round's shop visit can fail. While stops on a failing child
+              // only with propagateChildFail
+              if (s === "failure" && n.tag === "While" && flag("propagateChildFail")) { iterations = 0; return "failure"; }
             }
             return "running"; // an instant loop: yield for this tick
           },
@@ -852,6 +860,8 @@ export class Runner {
       case "Find": { const a = arg(); scope.set(target, arr.findIndex((x) => eq(x, a))); return "success"; }
       case "Erase": { const a = arg(); scope.set(name, arr.filter((x) => !eq(x, a))); return "success"; }
       case "Clear": scope.set(name, []); return "success";
+      // to `argument` items, new ones false (so_bench.xml#use's free-seat flags: Resize to $benchSize)
+      case "Resize": { const k = Math.max(0, Math.floor(Number(arg()) || 0)); scope.set(name, Array.from({ length: k }, (_, i) => (i < arr.length ? arr[i] : false))); return "success"; }
     }
     this.report(`VarOperation ${op}`);
     void n;

@@ -21,6 +21,7 @@ import { parseNpcEntities, parseEntityIndex, propEntities } from "../src/levelEn
 import { Schedules } from "../src/schedule.ts";
 import { NavMesh } from "../src/navmesh.ts";
 import { createAiWorld } from "../src/btWorld.ts";
+import { cycleData } from "../src/daycycle.ts";
 import { parseLayerNames, defaultHiddenLayers } from "../src/levelLayers.ts";
 import { NpcAi } from "../src/npcAi.ts";
 import { AnimLibrary } from "../src/mannequin.ts";
@@ -152,6 +153,7 @@ if (aiSeconds > 0 && npcWorld) {
   });
   lua!.boot();
   lua!.calls.clear();
+  schedules?.setCycleData(await cycleData(vfs, world));
   npcAi = new NpcAi(world, { male: new AnimLibrary(vfs, "male"), female: new AnimLibrary(vfs, "female") });
   Object.defineProperty(clock, "now", { get: () => npcAi!.now });
   npcWorld.ai = npcAi;

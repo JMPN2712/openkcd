@@ -16,7 +16,7 @@
 import { parseTreeFile, type BtNode, type BtTree, type BtVariable } from "./bt.ts";
 import type { Vfs } from "./vfs.ts";
 import { readTable } from "./tables.ts";
-import { MAX_NESTING, Runner, Scope, type Context, type Host, type Status, type Task, type Value } from "./btRuntime.ts";
+import { MAX_NESTING, Runner, Scope, evalExpression, type Context, type Host, type Status, type Task, type Value } from "./btRuntime.ts";
 import { entityProperties, type EntityInfo } from "./levelEntities.ts";
 import type { Row } from "./tables.ts";
 import { setTypeDefs } from "./btRuntime.ts";
@@ -62,19 +62,23 @@ export interface Behaviour {
   file: string;
   tree: string;
   maxInstances: number;
+  /** so_behaviour_tag initial_state: 0 for nearly all (4,911 of 4,919); ASSUMPTION: others start closed to requests */
+  initialState?: number;
 }
 
 /** AI tables: behaviours of smart-object types and smart-area templates. */
 export class AiDb {
   readonly so = new Map<string, Behaviour[]>();
   readonly sa = new Map<string, Behaviour[]>();
-  constructor(t: { soTag: Row[]; so2tag: Row[]; saTag: Row[]; sa2tag: Row[] }) {
+  /** per smart-object type: its brain's update tree (subbrain_smart_object), whose OnInit sets the object up */
+  readonly soBrain = new Map<string, { file: string; tree: string }>();
+  constructor(t: { soTag: Row[]; so2tag: Row[]; saTag: Row[]; sa2tag: Row[]; so?: Row[]; brain2sub?: Row[]; subSo?: Row[] }) {
     const soTags = new Map(t.soTag.map((r) => [r.so_behaviour_tag_id, r]));
     for (const r of t.so2tag) {
       const tag = soTags.get(r.so_behaviour_tag_id);
       if (!tag) continue;
       const list = this.so.get(r.so_smart_object_id) ?? [];
-      list.push({ name: tag.so_behaviour_tag_name, file: tag.tree_file.toLowerCase().replaceAll("\\", "/"), tree: tag.tree_name.toLowerCase(), maxInstances: Number(tag.max_instances || -1) });
+      list.push({ name: tag.so_behaviour_tag_name, file: tag.tree_file.toLowerCase().replaceAll("\\", "/"), tree: tag.tree_name.toLowerCase(), maxInstances: Number(tag.max_instances || -1), initialState: Number(tag.initial_state || 0) });
       this.so.set(r.so_smart_object_id, list);
     }
     const saTags = new Map(t.saTag.map((r) => [r.sa_behaviour_tag_id, r]));
@@ -85,15 +89,35 @@ export class AiDb {
       list.push({ name: tag.sa_behaviour_tag_name, file: tag.tree_file.toLowerCase().replaceAll("\\", "/"), tree: tag.tree_name.toLowerCase(), maxInstances: -1 });
       this.sa.set(r.sa_smart_area_id, list);
     }
+    // smart-object type → brain → its (first) subbrain → the smart-object subbrain's update tree
+    const sub = new Map<string, string>();
+    for (const r of t.brain2sub ?? []) if (!sub.has(r.brain_id)) sub.set(r.brain_id, r.subbrain_id);
+    const trees = new Map((t.subSo ?? []).filter((r) => r.on_update_tree).map((r) => [r.subbrain_id, { file: r.file_name.toLowerCase().replaceAll("\\", "/"), tree: r.on_update_tree.toLowerCase() }]));
+    for (const r of t.so ?? []) {
+      const tree = r.brain_id ? trees.get(sub.get(r.brain_id) ?? "") : undefined;
+      if (tree) this.soBrain.set(r.so_smart_object_id, tree);
+    }
   }
-  static TABLES = { soTag: "ai/so_behaviour_tag", so2tag: "ai/so_smart_object2so_behaviour_tag", saTag: "ai/sa_behaviour_tag", sa2tag: "ai/sa_smart_area2sa_behaviour_tag" } as const;
+  private offered = new Map<string, Set<string>>();
+  /** Behaviour names (lower case) an area template offers. */
+  areaBehaviours(template: string): Set<string> | undefined {
+    let o = this.offered.get(template);
+    if (!o) {
+      const list = this.sa.get(template);
+      if (!list) return undefined;
+      o = new Set(list.map((b) => b.name.toLowerCase()));
+      this.offered.set(template, o);
+    }
+    return o;
+  }
+  static TABLES = { soTag: "ai/so_behaviour_tag", so2tag: "ai/so_smart_object2so_behaviour_tag", saTag: "ai/sa_behaviour_tag", sa2tag: "ai/sa_smart_area2sa_behaviour_tag", so: "ai/so_smart_object", brain2sub: "ai/brain2subbrain", subSo: "ai/subbrain_smart_object" } as const;
 }
 
 /** Something a tree asks the world to do. */
 export interface Action {
-  kind: "move" | "animation";
+  kind: "move" | "animation" | "teleport" | "turn";
   npc: number;
-  /** move: target position; animation: fragment name (e.g. "TailorIn") */
+  /** move, teleport: target position; turn: the point to face; animation: fragment name (e.g. "TailorIn") */
   target: [number, number, number] | string;
   /** helper/smart object involved, if any */
   object?: number;
@@ -119,6 +143,26 @@ export interface WorldOptions {
   lua?: LuaHost;
   /** brain variables (Libs/Tables/ai/brain_variable: b_dialogParameters, b_context, …) */
   brainVars?: BtVariable[];
+  /** a `daycycle:change` message to an NPC (its fields: add, handle, name, priority, …), for its daily cycle */
+  daycycleChange?: (npc: number, fields: Record<string, Value>) => void;
+}
+
+/** A message's `values` ("add(true), handle('x'), priority(30)") as fields, each value evaluated. */
+function messageFields(values: string, scope: Scope, host: Host): Record<string, Value> {
+  const out: Record<string, Value> = {};
+  let depth = 0, start = 0;
+  const parts: string[] = [];
+  for (let i = 0; i <= values.length; i++) {
+    const ch = values[i];
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    else if ((ch === "," && depth === 0) || i === values.length) { parts.push(values.slice(start, i)); start = i + 1; }
+  }
+  for (const part of parts) {
+    const m = /^\s*(\w+)\s*\(([\s\S]*)\)\s*$/.exec(part);
+    if (m) out[m[1]] = evalExpression(m[2], scope, host) ?? null;
+  }
+  return out;
 }
 
 const wuid = (v: Value | undefined): number | null => {
@@ -139,16 +183,34 @@ export class AiWorld {
   private parents = new Map<number, { target: number; name: string }[]>();
   /** active behaviour instances per "entity/behaviour" (max_instances) */
   private reservations = new Map<string, number>();
+  /** "npc|entity/behaviour" instances an NPC reserved (ReserveBehavior): its own CallBehavior uses them */
+  private held = new Set<string>();
+  /** per "entity/behaviour": state set by SmartObjSetBehaviorState (Enabled, Disabled, NoRequests) and max instances set by SmartObjSetBehaviorMaxInstances */
+  private states = new Map<string, string>();
+  private maxInstances = new Map<string, number>();
+  /** smart objects whose brain's OnInit has run (initObject) */
+  private initialised = new Set<number>();
   /** TryCatch handlers active during the current tick (innermost last) */
   private catchers: ((reason: string) => void)[] = [];
   private current: { npc: number } = { npc: -1 };
   /** unsupported nodes/features → the NPCs whose trees reached them */
   readonly unsupported = new Map<string, Set<number>>();
+  /** NPCs whose current behaviour reached an unsupported node since it started (gapIn) */
+  private gaps = new Set<number>();
   /** where each NPC is (updated by moves); starts at the entity position */
   readonly positions = new Map<number, [number, number, number]>();
   /** semaphores and external locks by scoped name */
   private semaphores = new Map<string, Set<object>>();
   private locks = new Map<string, boolean>();
+  /**
+   * External locks start closed until a tree opens them: so_bench.xml#use waits on its
+   * `<npc>_kickFromBench` gate, which nothing touches until someone kicks the sitter; the queue
+   * (entityUtils.xml) opens its own lock before running under it; the daycycle root closes
+   * `timeChanged` again at each activity (beginActivity).
+   */
+  private locked(key: string): boolean {
+    return this.locks.get(key) ?? true;
+  }
 
   constructor(o: WorldOptions) {
     this.o = o;
@@ -169,6 +231,7 @@ export class AiWorld {
         for (const [k, v] of Object.entries(changed)) scope.set(k, v);
       } : undefined,
       report: (w) => {
+        this.gaps.add(this.current.npc);
         const set = this.unsupported.get(w) ?? new Set<number>();
         if (!set.has(this.current.npc)) { set.add(this.current.npc); o.trace?.(`[unsupported] ${w}`); }
         this.unsupported.set(w, set);
@@ -225,6 +288,36 @@ export class AiWorld {
     return g;
   }
 
+  /**
+   * The daycycle root's side of an activity (research note daily-cycle.md, section 4): starting one
+   * locks the NPC's `timeChanged` gate and clears $t_timeChanged; when the time changes the gate
+   * opens and the flag is set, and behaviours wind down and return (CityWalk ends on the gate).
+   * $t_fastStart is off: NPCs join the simulation near the player, so they walk rather than
+   * teleport to their places.
+   */
+  beginActivity(npc: number): void {
+    this.locks.set(`I/${npc}/timeChanged`, true);
+    const b = this.brain(npc);
+    b.set("t_timeChanged", false);
+    b.set("t_fastStart", false);
+  }
+
+  endActivity(npc: number): void {
+    this.locks.set(`I/${npc}/timeChanged`, false);
+    this.brain(npc).set("t_timeChanged", true);
+  }
+
+  /** Whether the NPC's behaviour reached a node this interpreter doesn't support since it started. */
+  gapIn(npc: number): boolean {
+    return this.gaps.has(npc);
+  }
+
+  /** Whether an entity offers behaviour `name` with an instance free (searches' "Requestable"). */
+  requestable(target: number, name: string): boolean {
+    const b = this.behaviour(target, name);
+    return !!b && this.available(target, b);
+  }
+
   /** Start an NPC's smart-area behaviour (e.g. its workplace): the area template's behaviour `name`. */
   startAreaBehaviour(npc: number, area: number, name: string): Task | null {
     const a = this.o.ents.get(area);
@@ -232,6 +325,7 @@ export class AiWorld {
     const tree = b && this.o.trees(b.file, b.tree);
     if (!tree) { this.trace(`no area behaviour "${name}" for ${a?.name ?? area}`); return null; }
     this.trace(`npc ${npc}: area ${a!.name} behaviour "${b!.name}" → ${b!.file}#${b!.tree}`);
+    this.gaps.delete(npc);
     const { task } = this.runner.instantiate(tree, this.globals(npc, { __area: { id: area }, __behaviorName: b!.name }));
     return this.bind(npc, task);
   }
@@ -263,7 +357,8 @@ export class AiWorld {
   }
 
   private graphSearch(n: BtNode, c: Context): Status {
-    const origin = wuid(this.ref(n, c, "Origin"));
+    // no Origin: the entity running the tree (so_bench.xml#uInit looks for its own benchSize link)
+    const origin = this.prop(n, "Origin").trim() ? wuid(this.ref(n, c, "Origin")) : this.current.npc;
     if (origin === null) { this.trace("GraphSearch: no origin"); return "failure"; }
     const depth = Number(c.eval("depth", 1));
     const pruned = new Set(String(c.eval("EdgePruning", "")).split(",").map((s) => s.trim()).filter(Boolean));
@@ -277,6 +372,12 @@ export class AiWorld {
     for (let d = 0; (depth < 0 || d < depth) && frontier.length; d++) {
       const next: number[] = [];
       for (const p of frontier) for (const e of this.edges(p, pruned)) {
+        // a link from an entity to itself (a bench's benchSize) is a result, not a way on
+        if (e.to === p && e.tags.length && !e.tags.includes("parent")) {
+          const results = filters.map((f) => this.filter(f, c, p, p, e.tags));
+          if (filters.length === 0 || (or ? results.some(Boolean) : results.every(Boolean))) found.push({ parent: p, child: p });
+          continue;
+        }
         if (seen.has(e.to)) continue;
         seen.add(e.to);
         const results = filters.map((f) => this.filter(f, c, p, e.to, e.tags));
@@ -288,6 +389,17 @@ export class AiWorld {
       frontier = next;
     }
     if (truthyProp(c.eval("includeOrigin", false))) found.unshift({ parent: origin, child: origin });
+    // a RangeSorter under a Nodalyzer orders the results by distance from its point
+    const sorter = nodalyzers.flatMap((z) => z.children).flatMap((k) => (k.tag === "Child0" ? k.children : [k])).find((k) => k.tag === "RangeSorter");
+    if (sorter) {
+      const ref = this.ref(sorter, c, "point");
+      const at = Array.isArray(ref) && ref.length === 3 ? (ref as number[]) : wuid(ref) !== null ? this.pos(wuid(ref)!) : null;
+      if (at) {
+        const d = (id: number) => { const p = this.pos(id); return p ? Math.hypot(p[0] - at[0], p[1] - at[1], p[2] - at[2]) : Infinity; };
+        const sign = this.prop(sorter, "SortOrder") === "Descending" ? -1 : 1;
+        found.sort((a, b) => sign * (d(a.child) - d(b.child)));
+      }
+    }
     for (const z of nodalyzers) {
       const childVar = this.prop(z, "Child"), all = this.prop(z, "Quantifiers") !== "Exists";
       if (childVar) {
@@ -355,10 +467,24 @@ export class AiWorld {
       // no inventories or item slots are modelled yet: item filters match nothing
       case "SlotClassFilter": case "ItemClassFilter": ok = false; break;
       case "HasBehaviorFilter": {
+        // a smart object's type or a smart area's template (a shop's "customer"). Requestable:
+        // enabled with an instance free (or this NPC reserved one); Available: not disabled;
+        // Exists: offered
         const names = evalIn("BehaviorList").split(",").map((s) => s.trim().toLowerCase());
-        const t = this.o.ents.get(subject)?.soType;
-        const bs = t ? this.o.ai.so.get(t) ?? [] : [];
-        ok = bs.some((b) => names.includes(b.name.toLowerCase()) && (this.prop(f, "FilterChoice") !== "Available" || this.available(subject, b)));
+        const e = this.o.ents.get(subject);
+        const bs = [...(e?.soType ? this.o.ai.so.get(e.soType) ?? [] : []), ...(e?.saTemplate ? this.o.ai.sa.get(e.saTemplate) ?? [] : [])];
+        const npc = this.current.npc;
+        const choice = this.prop(f, "FilterChoice");
+        ok = bs.some((b) => names.includes(b.name.toLowerCase()) && (choice === "Requestable" ? this.available(subject, b) || this.held.has(`${npc}|${subject}/${b.name}`) : choice !== "Available" || this.states.get(`${subject}/${b.name}`) !== "Disabled"));
+        break;
+      }
+      case "RangeFilter": {
+        // the subject within [min, max] m of `point` (an entity or a position); excludeRef drops the point's own entity
+        const ref = this.ref(f, c, "point");
+        const at = Array.isArray(ref) && ref.length === 3 ? (ref as number[]) : wuid(ref) !== null ? this.pos(wuid(ref)!) : null;
+        const p = this.pos(subject);
+        const d = at && p ? Math.hypot(p[0] - at[0], p[1] - at[1], p[2] - at[2]) : Infinity;
+        ok = d >= Number(this.prop(f, "min") || 0) && d <= Number(this.prop(f, "max") || Infinity) && !(truthyProp(this.prop(f, "excludeRef")) && wuid(ref) === subject);
         break;
       }
       default:
@@ -403,8 +529,35 @@ export class AiWorld {
     return so ?? (e?.saTemplate ? this.o.ai.sa.get(e.saTemplate)?.find((b) => b.name.toLowerCase() === lower) : undefined);
   }
 
+  /** Requestable: enabled, and an instance free (max instances: the object's own, else its type's). */
   private available(target: number, b: Behaviour): boolean {
-    return b.maxInstances < 0 || (this.reservations.get(`${target}/${b.name}`) ?? 0) < b.maxInstances;
+    this.initObject(target);
+    const k = `${target}/${b.name}`;
+    const state = this.states.get(k) ?? (b.initialState ? "NoRequests" : "Enabled");
+    if (state !== "Enabled") return false;
+    const max = this.maxInstances.get(k) ?? b.maxInstances;
+    return max < 0 || (this.reservations.get(k) ?? 0) < max;
+  }
+
+  /**
+   * A smart object's set-up, once, before its first use: the OnInit of its brain's update tree
+   * (so_bench.xml#bench_onUpdate → uInit counts the bench's Sit helpers into a benchSize link and
+   * sets max instances of `use`). The rest of the update tree (its message loops) doesn't run.
+   */
+  private initObject(id: number): void {
+    if (this.initialised.has(id)) return;
+    this.initialised.add(id);
+    const type = this.o.ents.get(id)?.soType;
+    const ref = type ? this.o.ai.soBrain.get(type) : undefined;
+    const tree = ref && this.o.trees(ref.file, ref.tree);
+    const init = tree?.root?.children.find((k) => k.tag === "OnInit")?.children[0];
+    if (!tree || !init) return;
+    const { task } = this.runner.instantiate({ ...tree, root: init }, this.globals(id, { __object: { id } }));
+    const prev = this.current;
+    this.current = { npc: id };
+    try {
+      for (let i = 0; i < 32 && task.tick() === "running"; i++);
+    } finally { this.current = prev; }
   }
 
   private reserve(target: number, b: Behaviour, delta: number) {
@@ -429,12 +582,18 @@ export class AiWorld {
           const b = target === null ? undefined : this.behaviour(target, name);
           const tree = b && this.o.trees(b.file, b.tree);
           if (target === null || !b || !tree) { this.trace(`npc ${this.current.npc}: CallBehavior "${name}" on ${target === null ? "nothing" : this.name(target)}: not found`); this.emit("NotFound"); return "failure"; }
-          if (!this.available(target, b)) { this.emit("MaxInstance"); return "failure"; }
-          this.reserve(target, b, 1);
-          held = { target, b };
+          // an instance this NPC reserved (ReserveBehavior around this call) is its to use
+          if (!this.held.has(`${this.current.npc}|${target}/${b.name}`)) {
+            if (!this.available(target, b)) { this.emit("MaxInstance"); return "failure"; }
+            this.reserve(target, b, 1);
+            held = { target, b };
+          }
           this.trace(`npc ${this.current.npc}: CallBehavior "${b.name}" on ${this.name(target)} → ${b.file}#${b.tree}`);
           this.emit("RequestOK");
-          inner = this.runner.instantiate(tree, this.globals(this.current.npc, { __object: { id: target }, __behaviorName: b.name, __area: c.scope.get("__area") ?? null }, c.scope)).task;
+          // a smart area's behaviour runs on that area (a shop's "customer" searches the shop); a
+          // smart object's keeps the caller's area
+          const area = this.o.ents.get(target)?.saTemplate ? { id: target } : c.scope.get("__area") ?? null;
+          inner = this.runner.instantiate(tree, this.globals(this.current.npc, { __object: { id: target }, __behaviorName: b.name, __area: area }, c.scope)).task;
         }
         if (this.runner.nesting > MAX_NESTING) { this.runner.report(`CallBehavior: nesting over ${MAX_NESTING} at ${String(c.eval("BehaviorName", ""))}`); inner.abort(); inner = null; release(); this.emit("BehFail"); return "failure"; }
         this.runner.nesting++;
@@ -453,19 +612,29 @@ export class AiWorld {
     return this.positions.get(id) ?? this.o.ents.get(id)?.pos ?? null;
   }
 
-  /** Scope a lock/semaphore name: Local (this tree instance), Intellect (this NPC), Global. */
+  /**
+   * Scope a lock/semaphore name: Global; Intellect (this NPC); Local, the smart object or area
+   * whose behaviour runs, shared by the NPCs using it: CityWalk_walking's per-point locks keep two
+   * walkers from one point, and so_bench.xml#use's `<npc>_kickFromBench` lock is how another sitter
+   * moves this one on. ASSUMPTION (the note implies sharing, not the scope): without an object or
+   * area, the tree instance.
+   */
   private lockKey(n: BtNode, c: Context, nameProp: string): string {
     const kind = this.prop(n, "LockManagerType");
     const name = String(c.eval(nameProp, ""));
-    return kind === "Global" ? `G/${name}` : kind === "Local" ? `L/${scopeId(c.scope)}/${name}` : `I/${this.current.npc}/${name}`;
+    if (kind === "Global") return `G/${name}`;
+    if (kind !== "Local") return `I/${this.current.npc}/${name}`;
+    const owner = wuid(c.scope.get("__object")) ?? wuid(c.scope.get("__area"));
+    return `L/${owner ?? `s${scopeId(c.scope)}`}/${name}`;
   }
 
   /** ActionHelperMapper: the object's helper offering `animation`, as a world transform. */
-  private helperFor(object: number, animation: string): { id: number; pos: [number, number, number]; rot: [number, number, number, number] } | null {
+  private helperFor(object: number, animation: string, index?: number): { id: number; pos: [number, number, number]; rot: [number, number, number, number] } | null {
     const e = this.o.ents.get(object);
     if (!e) return null;
     const list = this.o.helpers?.get((e.soHelpers ?? "").toLowerCase()) ?? [];
-    const k = Math.max(0, list.findIndex((h) => animation && h.description.includes(`'${animation}'`)));
+    // a helper given by index (GetHelper: a bench's Place<n>), else the one offering the animation
+    const k = index !== undefined && index >= 0 && index < list.length ? index : Math.max(0, list.findIndex((h) => animation && h.description.includes(`'${animation}'`)));
     const h = list[k];
     if (!h) return { id: -1, pos: e.pos, rot: e.rot };
     // the object's rotation, turned half round for classes whose markers face the other way
@@ -501,7 +670,16 @@ export class AiWorld {
     const setVar = (prop: string, v: Value) => { const name = this.prop(n, prop); if (name) assignVar(c.scope, name, v); };
     switch (n.tag) {
       case "InstantSendMessageToNPC": case "SendMessageToNPC": case "InstantMultiSendMessageToNPC":
-        return leaf(() => { this.trace(`npc ${this.current.npc}: message ${n.props.type ?? ""} to ${n.props.target ?? ""}`); return "success"; });
+        return leaf(() => {
+          const type = n.props.type ?? "";
+          this.trace(`npc ${this.current.npc}: message ${type} to ${n.props.target ?? ""}`);
+          // patches for the NPC's daily cycle (note section 4); other messages aren't delivered yet
+          if (type === "daycycle:change" && this.o.daycycleChange) {
+            const to = wuid(this.lookupValue(c.scope, (n.props.target ?? "").replace(/^"|"$/g, "").replace(/^\$/, "")));
+            if (to !== null) this.o.daycycleChange(to, messageFields(n.props.values ?? "", c.scope, this.runner.host));
+          }
+          return "success";
+        });
       case "Synchronize": case "InstantSynchronize": {
         // SemaphoreCount 1: a first-come-first-served queue (entityUtils.xml#queue): the head runs the
         // child, the others wait, their place in OutsideQueuePosVariable (0 = inside; -1 before joining)
@@ -559,6 +737,97 @@ export class AiWorld {
           abort: () => { body?.abort(); body = null; leave(); },
         };
       }
+      case "InstantSemaphore": {
+        // a lock for SemaphoreCount holders that fails at once when full (CityWalk_walking's lock
+        // per walk point, note section 6)
+        const me = {};
+        let key: string | null = null;
+        let body: Task | null = null;
+        const leave = () => { if (key) this.semaphores.get(key)?.delete(me); key = null; };
+        return {
+          tick: () => {
+            if (!body) {
+              key = this.lockKey(n, c, "SemaphoreName");
+              const set = this.semaphores.get(key) ?? new Set<object>();
+              this.semaphores.set(key, set);
+              if (set.size >= Number(c.eval("SemaphoreCount", 1))) { key = null; return "failure"; }
+              set.add(me);
+              body = kids[0] ? this.runner.make(kids[0], c.scope) : null;
+              if (!body) { leave(); return "success"; }
+            }
+            const s = body.tick();
+            if (s !== "running") { body = null; leave(); }
+            return s;
+          },
+          abort: () => { body?.abort(); body = null; leave(); },
+        };
+      }
+      case "GetHelper":
+        // one helper of the object by name (policy Name: a bench's "Place2"), as its index
+        return leaf(() => {
+          const obj = wuid(this.ref(n, c, "smartObjectName"));
+          const e = obj === null ? undefined : this.o.ents.get(obj);
+          const want = String(c.eval("helperName", "")).toLowerCase();
+          const i = (this.o.helpers?.get((e?.soHelpers ?? "").toLowerCase()) ?? []).findIndex((h) => h.name.toLowerCase() === want);
+          if (i < 0) return "failure";
+          setVar("targetVar", i);
+          return "success";
+        });
+      // tags on entities (onBench, isSitting) aren't modelled: the child runs as is
+      case "TagIt":
+        return kids[0] ? this.runner.make(kids[0], c.scope) : leaf(() => "success");
+      case "GetHelpers":
+        // the object's helpers of a category (description "…;Category(Sit)"), by index
+        return leaf(() => {
+          const obj = wuid(this.ref(n, c, "smartObject"));
+          const e = obj === null ? undefined : this.o.ents.get(obj);
+          const cat = String(c.eval("categoryName", "")).toLowerCase();
+          const list = this.o.helpers?.get((e?.soHelpers ?? "").toLowerCase()) ?? [];
+          const out = list.map((h, i) => ({ h, i })).filter(({ h }) => !cat || h.description.toLowerCase().includes(`category(${cat})`)).map(({ i }) => i);
+          setVar("targetVar", out);
+          return "success";
+        });
+      case "SmartObjSetBehaviorState": case "SmartObjSetBehaviorMaxInstances":
+        // on the entity running the tree (a smart object's own brain)
+        return leaf(() => {
+          const id = this.current.npc;
+          for (const b of String(c.eval("behaviors", "")).split(",").map((x) => x.trim()).filter(Boolean)) {
+            const name = this.behaviour(id, b)?.name ?? b;
+            if (n.tag === "SmartObjSetBehaviorState") this.states.set(`${id}/${name}`, String(c.eval("state", "Enabled")));
+            else this.maxInstances.set(`${id}/${name}`, Number(c.eval("maxInstances", -1)));
+          }
+          return "success";
+        });
+      case "Teleport":
+        return leaf(() => {
+          const v = this.ref(n, c, "Position");
+          const p = Array.isArray(v) && v.length === 3 ? (v as number[]) : wuid(v) !== null ? this.pos(wuid(v)!) : null;
+          const npc = wuid(this.ref(n, c, "Target")) ?? this.current.npc;
+          if (!p) return "failure";
+          this.trace(`npc ${npc}: teleport to ${p.map((x) => x.toFixed(1)).join(",")}`);
+          this.o.act?.({ kind: "teleport", npc, target: [p[0], p[1], p[2]] });
+          this.positions.set(npc, [p[0], p[1], p[2]]);
+          return "success";
+        });
+      case "TurnBody": {
+        // face an entity or a point (the turn itself takes a moment: TURN_SECONDS)
+        let until: number | null = null;
+        return {
+          tick: () => {
+            if (until === null) {
+              const v = this.ref(n, c, "destinationSpecification");
+              const p = Array.isArray(v) && v.length === 3 ? (v as number[]) : wuid(v) !== null ? this.pos(wuid(v)!) : null;
+              if (!p) return truthyProp(this.prop(n, "allowInstantSuccess")) ? "success" : "failure";
+              const d = this.o.act?.({ kind: "turn", npc: this.current.npc, target: [p[0], p[1], p[2]] });
+              until = this.o.realTime() + (typeof d === "number" ? d : TURN_SECONDS);
+            }
+            if (this.o.realTime() < until) return "running";
+            until = null;
+            return "success";
+          },
+          abort: () => { until = null; },
+        };
+      }
       case "Semaphore": {
         // a mutex for SemaphoreCount holders: others wait (outside timers not modelled)
         const me = {};
@@ -592,17 +861,21 @@ export class AiWorld {
           const e = from === null ? undefined : this.o.ents.get(from);
           if (!e || to === null || !tag) return this.prop(n, "LinkOpHandleMode") === "Fail" ? "failure" : "success";
           e.links ??= [];
-          const same = (l: { target: number; name: string }) => l.target === to && l.name === tag;
+          // the link's data goes in brackets, as in the level's links (benchSize[4], benchUser[0]);
+          // links match by tag, whatever their data
+          const data = this.prop(n, "Data").trim() ? c.eval("Data", "") : "";
+          const name = data === "" || data === null || data === undefined ? tag : `${tag}[${String(data)}]`;
+          const same = (l: { target: number; name: string }) => l.target === to && l.name.replace(/\[.*$/, "") === tag;
           if (n.tag === "AddLink") {
             if (!e.links.some(same)) {
-              e.links.push({ target: to, name: tag });
+              e.links.push({ target: to, name });
               const back = this.parents.get(to) ?? [];
-              back.push({ target: from!, name: tag });
+              back.push({ target: from!, name });
               this.parents.set(to, back);
             }
           } else {
             e.links = e.links.filter((l) => !same(l));
-            this.parents.set(to, (this.parents.get(to) ?? []).filter((l) => !(l.target === from && l.name === tag)));
+            this.parents.set(to, (this.parents.get(to) ?? []).filter((l) => !(l.target === from && l.name.replace(/\[.*$/, "") === tag)));
           }
           this.trace(`npc ${this.current.npc}: ${n.tag} ${this.name(from!)} -${tag}-> ${this.name(to)}`);
           return "success";
@@ -647,7 +920,7 @@ export class AiWorld {
         let body: Task | null = null;
         return {
           tick: () => {
-            const locked = () => !!this.locks.get(this.lockKey(n, c, "SemaphoreName"));
+            const locked = () => this.locked(this.lockKey(n, c, "SemaphoreName"));
             if (locked()) { body?.abort(); body = null; return this.prop(n, "RunLogic") === "Halt" ? "success" : "running"; }
             body ??= kids[0] ? this.runner.make(kids[0], c.scope) : null;
             if (!body) return "success";
@@ -665,7 +938,7 @@ export class AiWorld {
         return {
           tick: () => {
             if (!body) {
-              if (this.locks.get(this.lockKey(n, c, "SemaphoreName"))) return this.prop(n, "RunLogic") === "Halt" ? "failure" : "running";
+              if (this.locked(this.lockKey(n, c, "SemaphoreName"))) return this.prop(n, "RunLogic") === "Halt" ? "failure" : "running";
               body = kids[0] ? this.runner.make(kids[0], c.scope) : null;
               if (!body) return "success";
             }
@@ -689,7 +962,8 @@ export class AiWorld {
       case "ActionHelperMapper":
         return leaf(() => {
           const obj = wuid(this.ref(n, c, "SmartObject"));
-          const h = obj === null ? null : this.helperFor(obj, String(c.eval("animation", "")));
+          const given = this.prop(n, "HelperId") ? this.lookupValue(c.scope, this.prop(n, "HelperId").replace(/^\$/, "")) : undefined;
+          const h = obj === null ? null : this.helperFor(obj, String(c.eval("animation", "")), typeof given === "number" ? given : undefined);
           if (!h) return "failure";
           this.trace(`npc ${this.current.npc}: helper ${h.id} of ${this.name(obj!)} for "${String(c.eval("animation", ""))}" at ${h.pos.map((v) => v.toFixed(1)).join(",")}`);
           setVar("HelperId", h.id);
@@ -737,23 +1011,41 @@ export class AiWorld {
         };
       }
       case "ReserveBehavior": {
+        // the search picks a target (reserveFrom) and a behaviour name; one instance of it is
+        // reserved on the target while Exec runs, so others' searches see it taken (note section 8)
         const search = kids.find((k) => k.tag === "Search")?.children[0];
         const exec = kids.find((k) => k.tag === "Exec")?.children[0];
-        const searchTask = search ? this.runner.make(search.tag === "ReserveBehaviorSearch" ? search.children[0] : search, c.scope) : null;
+        let searchTask: Task | null = null;
         let execTask: Task | null = null;
+        let held: { key: string; target: number; b: Behaviour } | null = null;
+        const release = () => { if (held) { this.reserve(held.target, held.b, -1); this.held.delete(held.key); held = null; } };
         return {
           tick: () => {
             if (!execTask) {
+              searchTask ??= search ? this.runner.make(search.tag === "ReserveBehaviorSearch" ? search.children[0] : search, c.scope) : null;
               const s = searchTask ? searchTask.tick() : "success";
+              if (s === "running") return s;
+              searchTask = null;
               if (s !== "success") return s;
+              const target = wuid(this.ref(n, c, "reserveFrom"));
+              const b = target === null ? undefined : this.behaviour(target, String(c.eval("behaviorName", "")));
+              if (target !== null && b) {
+                const key = `${this.current.npc}|${target}/${b.name}`;
+                if (!this.held.has(key)) {
+                  if (!this.available(target, b)) return "failure";
+                  this.reserve(target, b, 1);
+                  this.held.add(key);
+                  held = { key, target, b };
+                }
+              }
               execTask = exec ? this.runner.make(exec, c.scope) : null;
-              if (!execTask) return "success";
+              if (!execTask) { release(); return "success"; }
             }
             const s = execTask.tick();
-            if (s !== "running") execTask = null;
+            if (s !== "running") { execTask = null; release(); }
             return s;
           },
-          abort: () => { execTask?.abort(); execTask = null; },
+          abort: () => { searchTask?.abort(); searchTask = null; execTask?.abort(); execTask = null; release(); },
         };
       }
       case "Move": case "MoveAndAct": case "ExactMove": case "PlayAnimation": {
@@ -818,6 +1110,9 @@ export class AiWorld {
   }
 }
 
+/** Real seconds a TurnBody takes. ASSUMPTION: about a half turn at the walk's turning rate. */
+const TURN_SECONDS = 0.6;
+
 const truthyProp = (v: Value | undefined) => v === true || v === "true" || (typeof v === "number" && v !== 0);
 
 const scopeIds = new WeakMap<Scope, number>();
@@ -860,7 +1155,7 @@ export async function createAiWorld(vfs: Vfs, opts: Omit<WorldOptions, "ai" | "t
     for (const t of parseTreeFile(xml, rel)) trees.set(`${rel}#${t.name.toLowerCase()}`, t);
   }
   const T = AiDb.TABLES;
-  const ai = new AiDb({ soTag: await readTable(vfs, T.soTag), so2tag: await readTable(vfs, T.so2tag), saTag: await readTable(vfs, T.saTag), sa2tag: await readTable(vfs, T.sa2tag) });
+  const ai = new AiDb({ soTag: await readTable(vfs, T.soTag), so2tag: await readTable(vfs, T.so2tag), saTag: await readTable(vfs, T.saTag), sa2tag: await readTable(vfs, T.sa2tag), so: await readTable(vfs, T.so), brain2sub: await readTable(vfs, T.brain2sub), subSo: await readTable(vfs, T.subSo) });
   const so = vfs.lookup("libs/smartobjects.xml");
   const helpers = so ? parseSmartObjectHelpers(new TextDecoder().decode(await vfs.read(so))) : new Map<string, SoHelper[]>();
   // brain variables, one declaration per name (form ids: 0 single, 1 array, 2 associative, 3 array)

@@ -11,6 +11,7 @@ import type { Clip } from "./anim.ts";
 import type { EntityInfo, NpcEntity } from "./levelEntities.ts";
 import type { Placement, Pose, Schedules } from "./schedule.ts";
 import type { NpcAi } from "./npcAi.ts";
+import type { NpcCycle } from "./daycycle.ts";
 import type { LoadedModel } from "./model.ts";
 import type { Vfs } from "./vfs.ts";
 import { multiply } from "./mat4.ts";
@@ -209,8 +210,23 @@ export class NpcWorld {
   /** NPCs' planned spots moved off one another (key: planned spot), see stepCrowd */
   private freeSpots = new Map<string, Vec3>();
 
-  /** NPCs whose workplace behaviour trees drive them while at work (null = schedule placement only). */
+  /** NPCs' behaviour trees, run near the player (null = schedule placement only). */
   ai: NpcAi | null = null;
+  /** debugging and tests: what updateAi does to each NPC's tree (start, windDown, ended, early, failedStart) */
+  aiLog: ((npc: NpcEntity, event: string, detail: string) => void) | null = null;
+
+  /** An NPC's daily cycle at `minute` (null without schedules). */
+  cycle(e: NpcEntity, schedule: ScheduleItem[], minute: number): NpcCycle | null {
+    return this.schedules?.cycle(e, schedule, minute) ?? null;
+  }
+
+  /** Stop an NPC's tree; its next walk starts where the tree left it. */
+  leaveTree(n: WorldNpc, minute: number): void {
+    const st = this.ai?.state(n.entity.id);
+    if (st) this.schedules?.depart(n.entity, n.schedule, minute, st.pos);
+    this.ai?.stop(n.entity.id);
+    this.running.delete(n.entity.id);
+  }
 
   /** Where an NPC is at `minute`: its behaviour tree's state when one drives it, else the schedule. */
   placeAt(e: NpcEntity, schedule: ScheduleItem[], minute: number): Placement {
@@ -452,50 +468,66 @@ export class NpcWorld {
   }
 }
 
-/**
- * The area behaviour an NPC runs for a schedule activity, as the game's daily cycle maps them
- * (Libs/AI/final/sa_city.xml interpretBehavior): work → the Work link's area and the behaviour
- * its link names (Work[tailor], Work['tailor'], Work[('merchant')]); morning → home
- * "BreakfastEater"; eat → home "Eater" (the game may send them to a pub instead). fun → home
- * "hangingOut" is an APPROXIMATION: the game picks a fun setting (pub, bench, walk) in its "fun"
- * tree. Sleep stays with the schedule's bed placement.
- */
-export function activityBehaviour(e: NpcEntity, activity: string): { area: number; behaviour: string; where: string } | null {
-  const a = activity.toLowerCase();
-  const link = (role: string) => [...e.links].find(([k]) => k.split(",").some((x) => x.trim().startsWith(role)));
-  if (a === "work") {
-    const l = link("Work[") ?? link("Work");
-    const name = l && /Work\[([^\]]+)\]/.exec(l[0])?.[1].replace(/[()'"\s]/g, "");
-    return l && name ? { area: l[1], behaviour: name, where: "work" } : null;
-  }
-  const home = link("Home");
-  if (!home) return null;
-  if (a === "morning") return { area: home[1], behaviour: "BreakfastEater", where: "home" };
-  if (a === "eat") return { area: home[1], behaviour: "Eater", where: "home" };
-  if (a === "fun") return { area: home[1], behaviour: "hangingOut", where: "home" };
-  return null;
-}
+/** Real seconds a tree gets to wind down when its activity ends before it is stopped. */
+const WIND_DOWN_SECONDS = 20;
 
 /**
- * Start or stop the NPCs' area behaviour trees: an NPC that has arrived where its schedule puts it
- * (not walking) runs the behaviour for its current activity (activityBehaviour); when the activity
- * changes, the tree stops and the next one starts on arrival.
+ * Run the NPCs' behaviour trees from their daily cycles (daycycle.ts; research note
+ * daily-cycle.md, section 4): an NPC that has arrived where its activity puts it runs the
+ * activity's behaviour (work at the Work link, BreakfastEater and Eater at home, its hobby in
+ * free time). When the activity changes, the tree winds down (the timeChanged gate opens) and the
+ * NPC walks on from where it stopped. A tree that returns before the time changes ends the
+ * activity early: free time draws the next hobby, anything else is skipped and the next activity
+ * starts.
  */
 export function updateAi(npcs: WorldNpc[], world: NpcWorld, minute: number): void {
   const ai = world.ai;
   if (!ai) return;
   const inView = new Set(npcs.map((n) => n.entity.id));
-  for (const id of ai.ids()) if (!inView.has(id)) ai.stop(id);
+  for (const id of ai.ids()) if (!inView.has(id)) { ai.stop(id); world.running.delete(id); }
   for (const n of npcs) {
+    const id = n.entity.id;
+    const c = world.cycle(n.entity, n.schedule, minute);
+    const t = c?.target;
+    const key = c?.activity && t ? `${c.run}/${t.area}/${t.behaviour}` : "";
+    const cur = world.running.get(id) ?? "";
+    if (ai.has(id)) {
+      const res = ai.result(id);
+      if (cur !== key) {
+        // the time changed under the tree: let it finish its step, then walk on from there
+        if (res === undefined) {
+          if (!ai.windingDown(id)) world.aiLog?.(n.entity, "windDown", cur);
+          // an immediate patch halting fast or instantly drops the tree (note section 4)
+          ai.windDown(id, c?.haltNow ? 0 : WIND_DOWN_SECONDS);
+          continue;
+        }
+        world.aiLog?.(n.entity, "ended", `${cur} ${res}`);
+        world.leaveTree(n, minute);
+        continue;
+      }
+      if (res === undefined) continue;
+      // the behaviour returned before the time changed. If it reached a node this interpreter
+      // lacks (a guard asking its garrison for a post by message), that is our gap, not the game
+      // ending the activity: the NPC holds its spot and the tree isn't restarted
+      if (ai.world.gapIn(id)) {
+        world.aiLog?.(n.entity, "gap", `${cur} ${res}`);
+        world.leaveTree(n, minute);
+        world.running.set(id, `!${key}`);
+        continue;
+      }
+      world.aiLog?.(n.entity, "early", `${cur} ${res}`);
+      c?.behaviourEnded(false, res === "success", minute);
+      world.leaveTree(n, minute);
+      continue;
+    }
+    if (!key || !t) { world.running.delete(id); continue; }
     const p = world.scheduled(n.entity, n.schedule, minute);
-    const want = p.pose === "stand" ? activityBehaviour(n.entity, p.activity) : null;
-    const key = want && want.where === p.where ? `${want.area}/${want.behaviour}` : "";
-    if (!key) { ai.stop(n.entity.id); world.running.delete(n.entity.id); continue; }
-    if (ai.has(n.entity.id) && world.running.get(n.entity.id) === key) continue;
+    if (p.pose !== "stand" || p.where !== t.where) { if (cur !== `!${key}`) world.running.delete(id); continue; }
     // a tree that could not start (no such behaviour in the area) is not retried every check
-    if (world.running.get(n.entity.id) === `!${key}`) continue;
-    const ok = ai.start(n.entity, want!.area, want!.behaviour, p.pos, p.rot);
-    world.running.set(n.entity.id, ok ? key : `!${key}`);
+    if (cur === `!${key}`) continue;
+    const ok = ai.start(n.entity, t.area, t.behaviour, p.pos, p.rot);
+    world.running.set(id, ok ? key : `!${key}`);
+    world.aiLog?.(n.entity, ok ? "start" : "failedStart", `${key} ${t.behaviour}`);
   }
 }
 

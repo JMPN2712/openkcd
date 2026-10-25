@@ -374,12 +374,32 @@ its cost on Potato with a full market.
         (2026-10-25).
   - [x] Sleeping: lying clip by bed kind, aligned to the bed's helper
         (2026-10-25).
-  - [ ] Research note needed: how the daily-cycle brain
-        (`sb_daycycles.xml#root`) picks an activity's behaviour (mailboxes,
-        priorities, keep/drop/overridable) and its activity nodes.
-  - [ ] Remaining world-side nodes: helpers, messaging between NPCs,
-        semaphores, teleport; smart-object init behaviours.
-  - [ ] Meal, leisure and sleep routines.
+  - [x] Daily cycle from the research note `daily-cycle.md` (2026-10-25,
+        `web/src/daycycle.ts`, `docs/GAMELOGIC.md`): the schedule store
+        (base windows, patches by priority, skips until midnight,
+        `daycycle:change` messages), activities resolved as the land's
+        trees do, free time as weighted hobbies on the nearest area of the
+        home's settlement. The old guess (free time standing at home) is
+        gone. The tailor works until 18:31, finishes his step, and walks
+        the town (benches 5–10 min, shops as a customer, walk points)
+        until 23:15; his wife prays or walks. `scripts/test-daycycle.ts`,
+        `scripts/sim-daycycle.ts`.
+  - [x] World-side nodes for it: the timeChanged gate, InstantSemaphore,
+        Teleport, TurnBody, GetHelper(s), RangeFilter/RangeSorter,
+        behaviour states and max instances, reservations, smart-object
+        brains' OnInit (benches).
+  - [ ] Messaging between NPCs and areas (`ProcessMessage`): garrison
+        guards get no post and hold their spot; shops' merchants and
+        customers don't meet. Area brains (`CitySA_onUpdate`).
+  - [ ] Research note needed: the Loop and external-lock semantics the
+        trees assume (Loop runs its count whatever the child returns;
+        locks start closed; Local locks shared per smart object). These
+        are ASSUMPTIONs in `btRuntime.ts` / `btWorld.ts`.
+  - [ ] Pub lunch (10% of men whose social class has `lunchInPub`):
+        needs where that flag comes from.
+  - [ ] Sleep through the home's `Sleeper` tree (beds are placed directly).
+  - [ ] Home hobbies for non-residents (`hangingOut` in the nearest
+        home): open point of the note.
 - [x] **2. Interaction:** doors (animated, with collision), chests, beds.
   - [x] Doors (2026-10-25, `web/src/doors.ts`): E opens or closes the door
         Henry faces within its use distance, with the game's clip for its

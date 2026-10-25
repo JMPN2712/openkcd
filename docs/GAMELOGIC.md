@@ -142,8 +142,23 @@ check against the game later.
   180°, for `TailorIn` / `Tailor` / `TailorOut` (Mannequin fragment names).
 - **Daily-cycle brain.** Area behaviours read `t_*` parameters
   (`$t_timeChanged`, …) owned by the NPC's daily-cycle brain
-  `final/sb_daycycles.xml#root`. Until that brain runs here, its declared
-  variables are provided with their initial values.
+  `final/sb_daycycles.xml#root`. Its declared variables are provided with
+  their initial values; the brain's own logic (schedule, activities,
+  hobbies) is reimplemented in `web/src/daycycle.ts` from the research
+  notes (see Daily schedules). Its side of each activity is
+  `AiWorld.beginActivity` / `endActivity`: the NPC's `timeChanged` gate
+  (an Intellect lock) is closed while an activity runs and opened, with
+  `$t_timeChanged` set, when it ends. Behaviours wait on that gate to wind
+  down (CityWalk's main loop runs in parallel with it). `$t_fastStart` is
+  off: NPCs join the simulation near the player, so they walk rather than
+  teleport.
+- **Smart-object brains.** A smart-object type's `brain_id` →
+  `brain2subbrain` → `subbrain_smart_object.on_update_tree` names its
+  update tree (benches: `final/so_bench.xml#bench_onUpdate`). Its OnInit
+  runs once before the object's first use: `uInit` counts the bench's
+  `Sit` helpers into a `benchSize` self-link and sets the `use`
+  behaviour's max instances. The rest of the update tree (message loops)
+  doesn't run yet.
 
 **World nodes.** The host implements:
 
@@ -153,9 +168,25 @@ check against the game later.
 - `CallBehavior` (runs the target object's behaviour tree with `__object`,
   respecting `max_instances`, and raises `RequestOK` / `MaxInstance` /
   `BehSucces` / `BehFail` to `TryCatch` / `BehaviorTagCatch`);
-- `ReserveBehavior`, `LODGuardian` (Detail by default), `Synchronize`
-  semaphores and external locks (Local / Intellect / Global scopes),
-  `ActionHelperMapper`, `GetSpatialInfo`, NPC messages (traced);
+- `ReserveBehavior` (reserves one instance of the found behaviour while its
+  Exec runs; the NPC's own `CallBehavior` uses it), `LODGuardian` (Detail
+  by default), `Synchronize`, `Semaphore` and `InstantSemaphore` (fails at
+  once when full), external locks, `ActionHelperMapper` (a given helper
+  index, else the helper offering the animation), `GetHelper(s)`,
+  `GetSpatialInfo`, `Teleport`, `TurnBody`, `SmartObjSetBehaviorState` /
+  `SmartObjSetBehaviorMaxInstances`, `RangeFilter` / `RangeSorter`, NPC
+  messages (traced; `daycycle:change` goes to the NPC's daily cycle);
+- **locks:** Global, Intellect (per NPC) and Local, which is the smart
+  object or area whose behaviour runs, shared by every NPC using it
+  (CityWalk's lock per walk point; a bench's `<npc>_kickFromBench` gate,
+  which another sitter opens). External locks start closed until a tree
+  opens them; the queue in `entityUtils.xml` opens its own first. Both
+  are ASSUMPTIONs that make the shipped trees work as the notes describe;
+- **behaviour filters:** `HasBehaviorFilter` reads a smart object's type
+  or a smart area's template (a shop's `customer`). Requestable means
+  enabled with an instance free; Available means not disabled. Links
+  carry their data in brackets (`benchSize[4]`, `benchUser[0]`), and a
+  link from an entity to itself is a search result;
 - `Move` / `MoveAndAct` / `PlayAnimation` as timed actions: walking at
   1.4 m/s, animations 4 s for now. `MoveAndAct` without a destination goes
   to the object's helper.
@@ -170,16 +201,32 @@ the game's trees find the table, call its `use` behaviour, walk 2.9 m to
 its `entry` helper, hand over to `use_default` and play `Tailor`, then take
 the configured break at the area's bench.
 
-**Still missing:** Lua, the daily-cycle brain itself, Mannequin fragment →
-clip mapping, inventories and items, and HandCheck, For, LODLock / LODCheck,
-NotNearPlayer, IsLoadedGate, RemoveLink.
+**Still missing:** messages between NPCs and areas (`ProcessMessage`,
+`ReadMessage`, `ClearInbox`: a garrison handing guards their posts, a
+shop's merchant meeting customers), area brains (`CitySA_onUpdate`),
+inventories and items, entity tags (`TagIt` runs its child), and the
+graph filters `AnyLinkFilter`, `ExistPath`, `OrByRandomOp`. A behaviour
+that returns early after reaching one of these is held (below), not
+treated as the game ending the activity.
+
+**Loop** runs its count whatever its child returns (ASSUMPTION; `LoopUntil`
+is the result-driven loop). The daily-cycle note has CityWalk end only when
+the time changes, though a round's shop visit can fail.
 
 ### In the world view (`web/src/npcAi.ts`, `web/src/mannequin.ts`)
 
-- **When trees run.** NPCs that have arrived at work (their schedule says
-  "work" and they've finished walking) run their work area's behaviour,
-  named by their Work link (`Work['tailor']` → `tailor`). The tree stops
-  when the activity changes.
+- **When trees run.** NPCs near the player that have arrived where their
+  daily cycle puts them (`updateAi` in `npcs.ts`) run their activity's
+  behaviour: work at the Work link (`Work['tailor']` → `tailor`),
+  `BreakfastEater` and `Eater` at home, the hobby drawn for free time
+  (`cityWalk` on the city, `pray` at the church). When the activity
+  changes, the tree winds down (the `timeChanged` gate opens) and is
+  stopped after 20 s at most; the NPC walks on from where it stopped. A
+  tree that returns before the time changes ends the activity early, as
+  in the game: free time draws the next hobby, anything else is skipped
+  until midnight and the next activity starts. If that tree reached a
+  node this interpreter lacks, the NPC holds its spot instead (`gap` in
+  `sim-daycycle.ts`).
 - **Actions.**
   - **Moves:** a straight walk at 1.4 m/s that ends in the helper's
     orientation.
@@ -445,20 +492,51 @@ phase. Test: `web/scripts/test-npcs.ts`.
     their beds, over them, no more than 0.35 m above the top (three ground
     cloths that their data calls benches are not checked for height).
     Without the Align bone, 1,296 lie across.
-- **The viewer's approximation** (`web/src/schedule.ts`):
-  - activity from the soul schedule;
+- **The daily cycle** (`web/src/daycycle.ts`, from the research note
+  `daily-cycle.md`; `scripts/test-daycycle.ts`):
+  - **Schedule store.** Each NPC's base windows from the soul
+    (`work_0_GH`, `fun_1_GH`, …; a window across midnight is one window),
+    with patches laid over them by priority (the newest wins among
+    overlapping equals). Skipping a window starts the next base entry
+    early; skips last until midnight; once patches go when their
+    behaviour succeeds. Trees add and remove patches with
+    `daycycle:change` messages (now-or-never, cutscene priorities, times
+    relative to now, immediate patches covering the day).
+  - **Activities.** work → the Work link's area and behaviour; morning →
+    home `BreakfastEater`; eat → home `Eater` (the game's 10% pub lunch
+    for some men waits for a note on where the social class's
+    `lunchInPub` comes from); sleep → home `Sleeper` (the bed placement
+    below); fun → a hobby.
+  - **Hobbies** (`soul2hobby.xml`, `hobby.xml`): drawn by mass and run on
+    the nearest area offering them that the home's settlement reaches:
+    the settlement containing the home (areas contain one another by
+    position; the level has no parent links), its contained areas and
+    `nearbyFun` links, less `suppressSearchHobby` ones. A hobby with no
+    area is dropped for the window; with none left, fun ends and the NPC
+    goes on to the next activity (bed, for most). Homes are left out but
+    the NPC's own: whether a home offers its behaviours to strangers is
+    an open point of the note. In Rataje at 19:00 the market's free-time
+    NPCs walk the town (`cityWalk`: benches for 5–10 minutes, shops as
+    customers, walk points), pray at the church, visit the bathhouse or
+    the pub. NPCs have no needs: eating and sleeping happen because the
+    schedule says so.
+  - **cityWalk** starts where the NPC stands (the tailor leaves his shop
+    at 18:31 and walks from its door), as its `_data` tree sets.
+- **Where that puts them** (`web/src/schedule.ts`):
   - sleep → own bed (explicit links, then the beds inside the home polygon
     shared out among its residents: 651 of 952 NPCs get a bed);
-  - work → work area;
-  - morning, eat, fun → home area;
+  - work, morning, eat and hobbies → their area;
+  - a hobby that starts where the NPC stands → where the last activity
+    left it;
   - inside an area, use the spawn point if it lies in that area (about
     half do), else a stable pseudo-random point with walkable floor near
     the area's height, standing on it. An area can reach past its floor:
     the tailor's home is upstairs, but its polygon also covers the shop
     below, where he had stood 3.4 m up in the air.
 
-  Rataje at 03:00: 577 in bed, 204 at work (night shifts). At 12:00: 637
-  at work, 188 at home.
+  Rataje at 03:00: 577 in bed, 204 at work (night shifts). At 12:00: 643
+  at work, 160 at home (`test-schedule.ts`, without the hobby data: free
+  time then stays where work left the NPC).
 - **Walking.** Each activity starts with a walk from the previous
   activity's place:
   - along the level's own navmesh (`web/src/navmesh.ts`, format in
@@ -475,7 +553,9 @@ phase. Test: `web/scripts/test-npcs.ts`.
   - the clip plays in place (root translation dropped) while the entity
     moves, facing the direction of travel.
 
-  At 08:05, 49 of Rataje's NPCs are on their way to work. Placement is
+  A walk long finished (even by a route four times the straight line) is
+  not searched again: selection places every NPC of the level twice a
+  second. At 08:05, 49 of Rataje's NPCs are on their way to work. Placement is
   recomputed every frame. The NPC set is re-streamed only when NPCs enter
   or leave the 40 nearest within 120 m.
 

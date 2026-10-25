@@ -1,12 +1,14 @@
-// NPC daily schedules: which activity a soul is doing at a given time (from
-// the soul table's baked activity_N/time_N columns) and where that puts them
-// (bed, work area, home area or spawn point, via the NPC entity's links).
-// At the start of each activity the NPC walks there from the previous
-// activity's place, along the level's navmesh when one is set (src/navmesh.ts),
-// else in a straight line. The activity behaviours themselves (behaviour trees)
-// come later.
+// NPC daily schedules: which activity a soul is doing at a given time (its
+// daily cycle, src/daycycle.ts: the soul table's baked activity_N/time_N
+// windows, skips and patches, hobbies in free time) and where that puts them
+// (bed, work area, home area, a hobby's area or spawn point, via the NPC
+// entity's links). At the start of each activity the NPC walks there from the
+// previous activity's place, along the level's navmesh when one is set
+// (src/navmesh.ts), else in a straight line. Once there, the activity's
+// behaviour tree drives NPCs near the player (npcs.ts updateAi).
 
 import type { ScheduleItem } from "./character.ts";
+import { DayCycles, type CycleWorld, type NpcCycle, type Target } from "./daycycle.ts";
 import type { EntityInfo, NpcEntity } from "./levelEntities.ts";
 import type { NavMesh, Vec3 } from "./navmesh.ts";
 
@@ -152,8 +154,13 @@ export class Schedules {
   private beds = new Map<number, EntityInfo>();
   /** each NPC's spot in an area (by "npc/area"), found once: picking one searches the navmesh */
   private spots = new Map<string, [number, number, number]>();
+  /** each NPC's daily cycle; free time waits for setCycleData (hobbies, area behaviours) */
+  private cycles: DayCycles;
+  /** where an NPC left its last activity's behaviour tree, by NPC id: the next walk starts there */
+  private departures = new Map<number, { activity: number; pos: [number, number, number] }>();
   constructor(npcs: NpcEntity[], ents: Map<number, EntityInfo>) {
     this.ents = ents;
+    this.cycles = new DayCycles({ ents, hobbies: new Map(), areaBehaviours: () => undefined, ready: false });
     // explicit bed links first; then the homes' remaining beds (Bed entities inside the home
     // polygon), handed out to that home's residents in name order
     const taken = new Set<number>();
@@ -175,6 +182,32 @@ export class Schedules {
         if (k < beds.length) { this.beds.set(n.id, beds[k]); taken.add(beds[k].id); }
       });
     }
+  }
+
+  /**
+   * The data free time needs (hobbies by soul, the behaviours area templates offer, reservations):
+   * daily cycles start afresh with it.
+   */
+  setCycleData(d: Omit<CycleWorld, "ents">): void {
+    this.cycles = new DayCycles({ ...d, ents: this.ents });
+    this.routes.clear();
+    this.departures.clear();
+  }
+
+  /** An NPC's daily cycle as it stands, if it has one yet (messages from its trees). */
+  cycleOf(id: number): NpcCycle | undefined {
+    return this.cycles.get(id);
+  }
+
+  /** An NPC's daily cycle, caught up to game minute `minute`. */
+  cycle(npc: NpcEntity, schedule: ScheduleItem[], minute: number): NpcCycle {
+    return this.cycles.at(npc, schedule, minute);
+  }
+
+  /** The NPC left its activity's behaviour tree at `pos`: the walk to its next activity starts there. */
+  depart(npc: NpcEntity, schedule: ScheduleItem[], minute: number, pos: [number, number, number]): void {
+    const c = this.cycles.at(npc, schedule, minute);
+    if (c.activity) this.departures.set(npc.id, { activity: c.activity.id, pos: [...pos] });
   }
 
   /** Walk along this navmesh from now on (clears cached routes). */
@@ -202,17 +235,25 @@ export class Schedules {
 
   /**
    * Where the NPC is at `minute`, including the walk between places: the current activity
-   * starts with a straight walk from the previous one's place at `speed` m/s (real time).
+   * starts with a walk from the previous one's place at `speed` m/s (real time).
    */
   at(npc: NpcEntity, schedule: ScheduleItem[], minute: number, groundAt: (x: number, y: number) => number, speed: number): Placement {
-    const to = this.place(npc, schedule, minute, groundAt);
-    if (schedule.length < 2) return to;
-    let i = schedule.length - 1;
-    schedule.forEach((s, k) => { if (s.start <= minute) i = k; });
-    const elapsed = (minute - schedule[i].start + 1440) % 1440;
-    const from = this.place(npc, schedule, (schedule[i].start + 1439) % 1440, groundAt);
-    if (Math.hypot(to.pos[0] - from.pos[0], to.pos[1] - from.pos[1]) < 1) return to;
-    const r = this.routeFor(`${npc.id}/${i}`, from.pos, to.pos);
+    const c = this.cycles.at(npc, schedule, minute);
+    const activity = c.activity?.name ?? "";
+    const dep = this.departures.get(npc.id);
+    const left = dep && dep.activity === c.activity?.id ? dep.pos : null;
+    const anchor = c.anchor ? this.placeFor(npc, activity, c.anchor, null, groundAt) : null;
+    let to = this.placeFor(npc, activity, c.target, anchor, groundAt);
+    // a hobby that starts where the NPC stands (cityWalk) starts where its last tree left it
+    if (left && c.target && !c.target.moveToArea) to = { ...to, pos: left };
+    const from = left ?? anchor?.pos ?? null;
+    if (!from || Math.hypot(to.pos[0] - from[0], to.pos[1] - from[1]) < 1) return to;
+    const elapsed = (minute - c.since + 1440) % 1440;
+    const walked0 = elapsed * REAL_SECONDS_PER_GAME_MINUTE * speed;
+    // long arrived even by a route four times the straight line: no route search (selection
+    // places every NPC of the level twice a second)
+    if (walked0 > 4 * Math.hypot(to.pos[0] - from[0], to.pos[1] - from[1]) + 50) return to;
+    const r = this.routeFor(`${npc.id}/${c.activity?.id}/${from.map((v) => v.toFixed(1)).join(",")}>${to.pos.map((v) => v.toFixed(1)).join(",")}`, from, to.pos);
     const total = r.cum[r.cum.length - 1];
     const walked = elapsed * REAL_SECONDS_PER_GAME_MINUTE * speed;
     if (walked >= total) return to;
@@ -226,12 +267,17 @@ export class Schedules {
     // without a navmesh the straight line can run below the terrain between the ends
     if (!this.nav) z = Math.max(groundAt(x, y), z);
     // the walk clip moves along model +Y: turn +Y to the walking direction
-    return { activity: to.activity, where: `→ ${to.where}`, pos: [x, y, z], rot: yawQuat(Math.atan2(b[1] - a[1], b[0] - a[0]) - Math.PI / 2), pose: "walk" };
+    return { activity, where: `→ ${to.where}`, pos: [x, y, z], rot: yawQuat(Math.atan2(b[1] - a[1], b[0] - a[0]) - Math.PI / 2), pose: "walk" };
   }
 
-  place(npc: NpcEntity, schedule: ScheduleItem[], minute: number, groundAt: (x: number, y: number) => number): Placement {
+  /**
+   * Where an activity's target puts the NPC: in bed, at a spot in the work, home or hobby area,
+   * or (a hobby started where the NPC stands, or no target) at `stay`, the place it came from.
+   * Activities without a target fall back by name: other work-like activities (monk_pray,
+   * serveMeal, …) at the work area, the rest at home.
+   */
+  private placeFor(npc: NpcEntity, activity: string, target: Target | null, stay: Placement | null, groundAt: (x: number, y: number) => number): Placement {
     const ents = this.ents;
-    const activity = activityAt(schedule, minute);
     const home = linked(npc, ents, (n, e) => roles(n).includes("Home") && !!e.points);
     const work = linked(npc, ents, (n, e) => roles(n).includes("Work") && !!e.points);
     const bed = this.beds.get(npc.id);
@@ -263,13 +309,18 @@ export class Schedules {
       this.spots.set(key, [x, y, z]);
       return { activity, where, pos: [x, y, z], rot: yawQuat(rng(hash(npc.name + activity))() * 2 * Math.PI), pose: "stand" };
     };
-    const a = activity.toLowerCase();
-    if (a.includes("sleep")) {
-      if (bed) return { activity, where: "bed", pos: bed.pos, rot: bed.rot, pose: "sleep", bed, lying: lyingTag(bed) };
-      return home ? inArea(home, "home") : spawn;
+    const atHome = () => (home ? inArea(home, "home") : spawn);
+    if (target) {
+      const area = ents.get(target.area);
+      if (target.where === "bed") return bed ? { activity, where: "bed", pos: bed.pos, rot: bed.rot, pose: "sleep", bed, lying: lyingTag(bed) } : atHome();
+      if (!target.moveToArea) return stay ? { ...stay, activity, where: target.where, pose: "stand" } : { ...spawn, where: target.where };
+      return area?.points ? inArea(area, target.where) : { ...spawn, where: target.where };
     }
-    if (a.endsWith("work") || a === "monk_pray" || a === "servemeal" || a === "tidymeal") return work ? inArea(work, "work") : home ? inArea(home, "home") : spawn;
-    if (a === "morning" || a === "eat" || a === "fun") return home ? inArea(home, "home") : work ? inArea(work, "work") : spawn;
+    const a = activity.toLowerCase();
+    if (a.includes("sleep")) return bed ? { activity, where: "bed", pos: bed.pos, rot: bed.rot, pose: "sleep", bed, lying: lyingTag(bed) } : atHome();
+    if (a.endsWith("work") || a === "monk_pray" || a === "servemeal" || a === "tidymeal") return work ? inArea(work, "work") : atHome();
+    if (a === "fun" && stay) return { ...stay, activity };
+    if (a === "morning" || a === "eat" || a === "fun") return home ? atHome() : work ? inArea(work, "work") : spawn;
     return spawn;
   }
 }
