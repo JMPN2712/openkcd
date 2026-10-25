@@ -13,6 +13,7 @@ import { FOV_Y, TerrainRenderer, type FlyCamera } from "../src/terrainRenderer.t
 import { TexturePool } from "../src/texturePool.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 import { WaterRenderer } from "../src/waterRenderer.ts";
+import { Doors } from "../src/doors.ts";
 import { buildGrassScene, buildWorldScene, isUberLod, lodItems, newWorldCaches, sceneMatrices, selectLods, type WorldScene } from "../src/world.ts";
 import { PlayerAvatar } from "../src/playerAvatar.ts";
 import { PlayerSession } from "../src/playerSession.ts";
@@ -91,6 +92,17 @@ const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, [ax, ay],
 // debug: HIDE=regex leaves matching models out (e.g. HIDE='^road:|road_side')
 if (process.env.HIDE) scene.models = scene.models.filter((m) => !new RegExp(process.env.HIDE!).test(m.path));
 const items = lodItems(scene);
+// --open-doors: every door in the scene open (doors.ts), as after pressing E at each
+if (args.includes("--open-doors")) {
+  args.splice(args.indexOf("--open-doors"), 1);
+  const doors = new Doors(lvl.vfs, lvl.props);
+  doors.preload();
+  await doors.ready();
+  doors.attach(scene);
+  let opened = 0;
+  for (const d of doors.doors.values()) if (doors.near(d.entity.pos, 0.01).length && doors.set(d, true)) { [...doors.matrices(d.entity.id)]; opened++; }
+  console.log(`doors: ${opened} opened`);
+}
 models.setModels(items, models.indexed ? sceneMatrices(scene) : undefined);
 models.setShadow(shadowMap);
 if (shadowMap) casters.setScene(scene, items.map((it) => it.capacity), shadowMap.cascades, models.indexed);

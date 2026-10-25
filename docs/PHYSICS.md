@@ -51,8 +51,16 @@ Per model, in this order:
 4. **none:**
    - vegetation without physics (grass, bushes);
    - decals and uber-LODs;
-   - door and animated `.cdf` skins. Doors open in the game, so until
-     interaction exists they don't block.
+   - models whose materials all have a surface type the player passes
+     through (`Libs/MaterialEffects/SurfaceTypes.xml`, Physics
+     `horse_only="1"` or `no_collide="1"`): bushes (`mat_vegetation`), and
+     the invisible horse-only blockers level designers put in doorways
+     (`brush/designer_*.cgf` with `materials/special/collision_proxy_horseonly`,
+     surface type `mat_horse_only`). Solid for Henry, those had shut every
+     doorway they stood in: 260 within 200 m of the market;
+   - door and animated `.cdf` skins. Doors collide as moving shapes
+     instead: the leaf's box, under its current swing, for the doors within
+     12 m of Henry (`CollisionWorld.setDynamic`, `web/src/doors.ts`).
 
 Terrain collision is the heightmap. Triangles go into 4 m cells, built when
 the player first nears them.
@@ -62,7 +70,7 @@ models):
 
 | Category | proxy | render | visible | none |
 |---|---|---|---|---|
-| level brushes (designer geometry) | 341 | 23 | 0 | 0 |
+| level brushes (designer geometry) | 81 | 23 | 0 | 260 (horse-only blockers) |
 | buildings/houses | 174 | 0 | 54 | 13 |
 | props/interiors | 93 | 0 | 23 | 24 |
 | vegetation: trees | 75 | 0 | 0 | 16 |
@@ -72,10 +80,10 @@ models):
 | props/misc | 53 | 0 | 7 | 2 |
 | props/groups_of_stuff, fences, rocks, ceramics, piles_of_logs, tools, carts | all | | | |
 | doors and animated props (.cdf skins) | 0 | 0 | 0 | 42 |
-| vegetation: bushes | 23 | 0 | 0 | 15 |
+| vegetation: bushes | 0 | 0 | 0 | 38 |
 | props/windows | 1 | 0 | 11 | 0 |
 | vegetation/vines, uberlods, nature/city_generic decals | | | | all |
-| **All** | **1,618** | **23** | **220** | **300** |
+| **All** | **1,334** | **23** | **220** | **584** |
 
 ## Character controller
 

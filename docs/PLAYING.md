@@ -126,6 +126,7 @@ Click the view to capture the mouse; Esc releases it.
 | Space | jump |
 | V | first / third person |
 | Mouse wheel | third-person camera distance (1–8 m) |
+| E | open or close the door you face (the HUD says when one is in reach; locked doors stay shut) |
 | F | free-fly camera (debugging): drag to look, W A S D to move, Space/E up, C/Q down, Shift faster |
 | T | in free-fly: put Henry under the camera |
 
@@ -133,7 +134,9 @@ Click the view to capture the mouse; Esc releases it.
 
 - **No gameplay yet:** no combat, dialogue, quests, inventory or saves. NPCs
   follow their daily routines but don't react to Henry.
-- **Doors** don't open and don't block.
+- **Doors:** Henry opens and closes them (E) without his hand animation;
+  locked doors can't be opened yet (no keys or lockpicking); NPCs walk
+  through closed doors; no door sounds.
 - **Cutscene videos** don't play.
 - **Water:** rivers whose surface is flat don't flow; waterfalls don't move.
 - **Sky:** no clouds or weather.

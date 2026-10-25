@@ -43,6 +43,8 @@ export interface WorldModel {
   bound: Float32Array; // 5
   /** an uber-LOD (town-block stand-in), drawn only from afar */
   uber: boolean;
+  /** per instance, the entity it draws (doors, which move: doors.ts), or -1; absent when none do */
+  entities?: Int32Array;
 }
 
 export interface WorldScene {
@@ -57,6 +59,8 @@ interface Group {
   kind: WorldModel["kind"];
   matrices: number[];
   nearest: number;
+  /** per instance: entity id or -1 (only kept when some instance has one) */
+  entities?: number[];
 }
 
 /** Editor-only geometry that the game never draws (helper boxes, test sky). */
@@ -210,11 +214,13 @@ export async function buildWorldScene(
 ): Promise<WorldScene> {
   const groups = new Map<string, Group>();
   const r2 = radius * radius;
-  const add = (path: string, kind: Group["kind"], m: ArrayLike<number>, x: number, y: number) => {
+  const add = (path: string, kind: Group["kind"], m: ArrayLike<number>, x: number, y: number, entity = -1) => {
     const d2 = (x - center[0]) ** 2 + (y - center[1]) ** 2;
     if (d2 > r2) return;
     let g = groups.get(path);
     if (!g) groups.set(path, (g = { path, kind, matrices: [], nearest: Infinity }));
+    if (entity >= 0 && !g.entities) g.entities = new Array<number>(g.matrices.length / 16).fill(-1);
+    g.entities?.push(entity);
     for (let k = 0; k < 16; k++) g.matrices.push(m[k]);
     g.nearest = Math.min(g.nearest, Math.sqrt(d2));
   };
@@ -272,7 +278,9 @@ export async function buildWorldScene(
       spec = hit ? vfs.read(hit).then((b) => parseCdf(new TextDecoder().decode(b), path)).catch(() => null) : Promise.resolve(null);
       caches.cdfs.set(path, spec);
     }
-    for (const part of (await spec)?.parts ?? []) if (!part.attach) add(skinKey(part.skin, part.material), "prop", m, e.pos[0], e.pos[1]);
+    // (doors keep their entity id: they open, doors.ts)
+    const id = e.cls === "AnimDoor" ? e.id : -1;
+    for (const part of (await spec)?.parts ?? []) if (!part.attach) add(skinKey(part.skin, part.material), "prop", m, e.pos[0], e.pos[1], id);
   }
 
   return sceneFromGroups(vfs, groups, caches, { ...opts, ground: opts.ground ? { sources: opts.ground, terrain } : undefined });
@@ -358,6 +366,7 @@ async function sceneModels(vfs: Vfs, chosen: Group[], caches: WorldCaches, skipp
     const order = Array.from({ length: count }, (_, i) => [morton(g.matrices[i * 16 + 12], g.matrices[i * 16 + 13]), i]).sort((a, b) => a[0] - b[0]);
     const matrices = new Float32Array(count * 16);
     order.forEach(([, i], j) => { for (let k = 0; k < 16; k++) matrices[j * 16 + k] = g.matrices[i * 16 + k]; });
+    const entities = g.entities && Int32Array.from(order, ([, i]) => g.entities![i]);
     const spheres = new Float32Array(count * 4);
     for (let i = 0; i < count; i++) {
       const m = matrices.subarray(i * 16, i * 16 + 16);
@@ -367,7 +376,7 @@ async function sceneModels(vfs: Vfs, chosen: Group[], caches: WorldCaches, skipp
       spheres[i * 4 + 3] = r * Math.max(Math.hypot(m[0], m[1], m[2]), Math.hypot(m[4], m[5], m[6]), Math.hypot(m[8], m[9], m[10]));
     }
     const clusters = clustersOf(spheres, count);
-    models.push({ path: g.path, kind: g.kind, lods, center: c, radius: r, count, matrices, spheres, clusters, bound: boundOf(clusters), uber: g.path.startsWith("objects/uberlods/") });
+    models.push({ path: g.path, kind: g.kind, lods, center: c, radius: r, count, matrices, spheres, clusters, bound: boundOf(clusters), uber: g.path.startsWith("objects/uberlods/"), entities });
     instances += count;
   }
   return { models, instances, modelsSkipped: Math.max(0, skipped), failed };

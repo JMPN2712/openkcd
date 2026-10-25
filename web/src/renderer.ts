@@ -1244,6 +1244,16 @@ export class ModelRenderer {
   }
 
   /**
+   * (instanceIndices) Replace scene instance `i`'s matrix, as passed to setModels (sceneMatrices
+   * order): a door swinging open. The shadow passes read the same matrices.
+   */
+  setSceneMatrix(i: number, m: Float32Array): void {
+    if (!this.indexed || !this.instMatsBuf || (i + 1) * 16 > this.instMatsCpu.length - 16) return;
+    this.instMatsCpu.set(m, i * 16);
+    this.device.queue.writeBuffer(this.instMatsBuf, i * 64, this.instMatsCpu, i * 16, 16);
+  }
+
+  /**
    * Upload `count` instances for an item created with `capacity` (indirect mode: at the next draw):
    * matrices, or with instanceIndices indices into setModels' matrices.
    */

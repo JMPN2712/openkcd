@@ -31,6 +31,7 @@ import luaWasm from "wasmoon-lua5.1/dist/liblua5.1.wasm?url";
 import { PlayerAvatar } from "./playerAvatar.ts";
 import { PlayerSession } from "./playerSession.ts";
 import { CollisionWorld } from "./collision.ts";
+import { Doors, type Door } from "./doors.ts";
 import { depthClear, depthFormat, type PassSetup } from "./mat4.ts";
 import type { TimeOfDay } from "./tod.ts";
 import { SkyRenderer, skyAt, pickProfile, invert } from "./sky.ts";
@@ -240,6 +241,14 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let playerInfo = "Henry: loading…";
   // terrain plus the streamed objects' collision geometry (physics proxies first, collision.ts)
   const surroundings = new CollisionWorld((x, y) => heightAt(terrain, x, y), terrain.size);
+  // doors open and close (E): their instances move in the scene, their leaves collide (doors.ts)
+  const doors = new Doors(vfs, props);
+  doors.preload();
+  /** doors whose leaf is in the collision world (those near Henry) */
+  const doorColliders = new Set<number>();
+  const showDoor = (id: number) => { for (const { index, m } of doors.matrices(id)) models.setSceneMatrix(index, m); };
+  /** what E would do now (HUD hint), refreshed each frame */
+  let doorHint: { door: Door; act: ReturnType<Doors["action"]> } | null = null;
   void PlayerAvatar.load(vfs, { maxTextureDim: Math.max(256, q.maxTextureDim) }).then((avatar) => {
     if (stopped) return;
     player = new PlayerSession(surroundings, avatar, SPAWN, SPAWN_YAW);
@@ -345,6 +354,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         models.setShadow(shadowMap);
         if (shadowMap) casters.setScene(next, items.map((it) => it.capacity), shadowMap.cascades, models.indexed);
         surroundings.setScene(next);
+        for (const id of doors.attach(next)) showDoor(id);
+        for (const id of doorColliders) surroundings.setDynamic(id, null);
+        doorColliders.clear();
         lodOut = items.map((it) => (models.indexed ? new Uint32Array(it.capacity) : new Float32Array(it.capacity * 16)));
         lodCounts = items.map(() => 0);
         scene = next;
@@ -375,6 +387,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       }
       if ((e.code === "KeyX" || e.code === "CapsLock") && player) player.walk = !player.walk;
       if (e.code === "KeyV" && player && mode === "player") player.setView(player.viewMode === "first" ? "third" : "first");
+      if (e.code === "KeyE" && player && mode === "player" && doorHint) doors.use(doorHint.door, player.controller.pos);
       if (e.code === "KeyT" && player && mode === "fly") {
         player.controller.pos = [cam.pos[0], cam.pos[1], cam.pos[2]];
         player.controller.vel = [0, 0, 0];
@@ -435,6 +448,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
     if (last) fpsAvg += ((now - last) - fpsAvg) * 0.05;
     last = now;
+    const doorsMoved = doors.step(dt);
+    for (const id of doorsMoved) showDoor(id);
     if (mode === "player" && player) {
       player.update(dt, player.input(keys));
       Object.assign(cam, player.camera(dt));
@@ -442,6 +457,14 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       const g = heightAt(terrain, cam.pos[0], cam.pos[1]);
       if (player.viewMode === "third" && cam.pos[2] < g + 0.3) cam.pos[2] = g + 0.3;
       player.avatar.upload(playerR);
+      // doors: the one Henry faces (HUD hint, E), the moving ones, and the leaves near him colliding
+      const feet = player.controller.pos;
+      const fwd: [number, number, number] = [Math.cos(cam.yaw) * Math.cos(cam.pitch), Math.sin(cam.yaw) * Math.cos(cam.pitch), Math.sin(cam.pitch)];
+      const target = doors.target(feet, cam.pos, fwd);
+      doorHint = target ? { door: target, act: doors.action(target) } : null;
+      const near = new Set(doors.near(feet, 12));
+      for (const id of doorColliders) if (!near.has(id)) { surroundings.setDynamic(id, null); doorColliders.delete(id); }
+      for (const id of near) if (!doorColliders.has(id) || doorsMoved.includes(id)) { surroundings.setDynamic(id, doors.collider(id)); doorColliders.add(id); }
     } else {
       const speed = (keys.has("ShiftLeft") || keys.has("ShiftRight") ? 400 : 60) * dt;
       const fx = Math.cos(cam.yaw), fy = Math.sin(cam.yaw);
@@ -555,8 +578,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     device.queue.submit([enc.finish()]);
     cpuAvg += (performance.now() - t0 - cpuAvg) * 0.05;
     const pc = player?.controller;
+    const doorText = doorHint && mode === "player" ? { open: "E: open the door · ", close: "E: close the door · ", locked: "the door is locked · ", busy: "" }[doorHint.act] : "";
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
-    hud.textContent = `${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
+    hud.textContent = `${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${doorText}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();

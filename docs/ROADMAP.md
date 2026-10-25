@@ -21,6 +21,10 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
   in progress, an Apple M3 Pro. The repository stays private until the user
   makes it public. Changes now go through pull requests, with the
   clean-room audit (`tools/audit.sh`) and a build in the `checks` workflow.
+- **Doors (2026-10-25):** E opens and closes doors with the game's clips,
+  the leaves collide, and Henry can walk into houses: invisible horse-only
+  blockers in doorways had stopped him (`docs/PHYSICS.md`). Chests and beds
+  next.
 - **Fixed (2026-10-25): the tailor's evening** (the user's report: at 18:30
   he walked into the back of the armourer's shop, rose to the floor above,
   stood in a corner, then slept hovering over a bed, turned wrong). Three
@@ -143,7 +147,7 @@ playable frame rates on the Potato preset.
         `scripts/test-collision.ts`): physics proxies first, then
         physicalised render meshes, then simplified visible meshes where a
         model has no physics data (`docs/PHYSICS.md` lists the source by
-        object type). Doors don't block yet.
+        object type). Doors block and open since 2026-10-25 (`doors.ts`).
 - [x] First-person camera on Henry's skeleton (head bone), with body
       awareness: the eye at the `camera` bone, pitch −70° to +80° (−35° to
       +45° sprinting), the full body drawn with the head and hair hidden, a
@@ -367,6 +371,19 @@ its cost on Potato with a full market.
         semaphores, teleport; smart-object init behaviours.
   - [ ] Meal, leisure and sleep routines.
 - [ ] **2. Interaction:** doors (animated, with collision), chests, beds.
+  - [x] Doors (2026-10-25, `web/src/doors.ts`): E opens or closes the door
+        Henry faces within its use distance, with the game's clip for its
+        side and approach (`door_<r|l>_<f|b>_<o|c>_player`); the leaf moves
+        in the streamed scene and collides; locked doors stay shut.
+        `scripts/test-doors.ts`.
+  - [x] Henry walks through doorways: the horse-only blockers in them
+        (surface type `mat_horse_only`) no longer stop him; 277 in the
+        market's 200 m.
+  - [ ] Henry's hand animation for doors; NPCs opening the doors they pass
+        through (their walk-through clips are in `doors.dba`); door sounds
+        (step 4); keys and lockpicking (core gameplay).
+  - [ ] Chests.
+  - [ ] Beds.
 - [ ] **3. Talking to NPCs:** voice lines, subtitles, the dialogue camera
       and response choices from the game's dialogue data; no quest
       consequences yet.

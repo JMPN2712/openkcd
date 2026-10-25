@@ -32,7 +32,8 @@ Early development; the walking-simulator and installer milestones are done.
   game without the original files; four quality presets, Potato to High.
 
 **Not yet:** talking to NPCs, quests, combat, inventory, horses and saves;
-NPCs don't react to Henry, doors don't open, cutscenes don't play.
+NPCs don't react to Henry, cutscenes don't play. Doors open (E), but
+locked ones need keys that don't exist yet.
 
 **Play it at <https://openkcd.jmpn.workers.dev/>** with your GOG installer:
 see [docs/PLAYING.md](docs/PLAYING.md). What has been tested is in
@@ -119,6 +120,7 @@ node scripts/render-world.ts /tmp/w --at-npc rat_baker --npc-dist 6 --npcs --clo
 node scripts/render-world.ts /tmp/w --at-entity SO_tailorsTable_40ee6671 --npc-dist 3 --npcs --clock 10:00 --ai 30   # NPCs at work run by their behaviour trees
 node scripts/test-player.ts                      # player controller on Rataje: ground following, climb limit, jump, fall, speeds; Henry's clips
 node scripts/test-collision.ts                   # collision sources by object type around the market, random runs: no penetration, no falling through
+node scripts/test-doors.ts                       # doors near the tailor's house swing on their hinges; E opens and closes his door; the leaf blocks only when shut
 node scripts/test-beds.ts                        # every bed in Rataje: the sleeper lies along it, over it, at its height (--no-align: the old poses)
 node scripts/test-interiors.ts                   # interior placement: sampled beds line up with the bedding brushed on them; every model in their scenes matches its LODs
 node --expose-gc scripts/test-streaming.ts       # two laps through the map's towns: scene rebuild times, memory levels off with cache trimming

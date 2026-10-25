@@ -8,7 +8,7 @@
 //   visible  no physics data at all: FALLBACK to the simplified visible mesh (LOD1 when present),
 //            opaque subsets only (alpha-tested foliage and cloth fringes left out)
 //   none     vegetation without physics (grass, bushes), decals, uber-LODs, and door / animated
-//            .cdf skins (doors open in the game; until interaction exists they don't block)
+//            .cdf skins: doors move, so they collide as dynamic shapes (setDynamic, doors.ts)
 
 import { tessellate } from "./physics.ts";
 import type { LoadedModel } from "./model.ts";
@@ -25,6 +25,14 @@ export interface CollisionShape {
 }
 
 const NO_COLLISION = /(^|\/)decals?\/|decal_|^objects\/uberlods\//;
+
+/**
+ * Surface types the player passes through (Libs/MaterialEffects/SurfaceTypes.xml: Physics
+ * horse_only="1" or no_collide="1"). The horse-only ones are the invisible blockers level
+ * designers put in doorways (brush/designer_*.cgf with materials/special/collision_proxy_horseonly)
+ * to keep horses out of houses: solid for Henry, they had shut every such doorway.
+ */
+const PLAYER_PASSES = new Set(["mat_horse_only", "mat_canopy", "mat_vegetation_seethrough", "mat_grass", "mat_vegetation", "mat_vegetation_horse_ignore"]);
 
 function transformed(m: LoadedModel, include: (mesh: LoadedModel["cgf"]["meshes"][number]) => number[][] | null): { positions: number[]; indices: number[] } {
   const P: number[] = [], I: number[] = [];
@@ -64,6 +72,7 @@ export function collisionShape(wm: Pick<WorldModel, "path" | "kind" | "lods">): 
   const none: CollisionShape = { source: "none", positions: new Float32Array(0), indices: new Uint32Array(0) };
   const base = wm.lods[0];
   if (NO_COLLISION.test(wm.path) || wm.path.includes("|") || wm.path.endsWith(".skin")) return none;
+  if (base.materials.length && base.materials.every((m) => PLAYER_PASSES.has(m.surfaceType.toLowerCase()))) return none;
   const physical = transformed(base, physicalisedSubsets);
   if (base.cgf.physics.length) {
     const P = physical.positions, I = physical.indices;
@@ -101,6 +110,22 @@ interface Cell {
   count: number;
 }
 
+/** Pack world-space triangles (9 floats each) as cells hold them: vertices, normal, bounds. */
+export function packTriangles(v: ArrayLike<number>): Float32Array {
+  const out: number[] = [];
+  for (let o = 0; o + 9 <= v.length; o += 9) {
+    const ex = v[o + 3] - v[o], ey = v[o + 4] - v[o + 1], ez = v[o + 5] - v[o + 2], fx = v[o + 6] - v[o], fy = v[o + 7] - v[o + 1], fz = v[o + 8] - v[o + 2];
+    let nx = ey * fz - ez * fy, ny = ez * fx - ex * fz, nz = ex * fy - ey * fx;
+    const nl = Math.hypot(nx, ny, nz);
+    if (nl < 1e-9) continue;
+    nx /= nl; ny /= nl; nz /= nl;
+    out.push(v[o], v[o + 1], v[o + 2], v[o + 3], v[o + 4], v[o + 5], v[o + 6], v[o + 7], v[o + 8], nx, ny, nz,
+      Math.min(v[o], v[o + 3], v[o + 6]), Math.min(v[o + 1], v[o + 4], v[o + 7]), Math.min(v[o + 2], v[o + 5], v[o + 8]),
+      Math.max(v[o], v[o + 3], v[o + 6]), Math.max(v[o + 1], v[o + 4], v[o + 7]), Math.max(v[o + 2], v[o + 5], v[o + 8]));
+  }
+  return new Float32Array(out);
+}
+
 export class CollisionWorld implements Surroundings {
   private shapes = new Map<string, CollisionShape>();
   private scene: WorldScene | null = null;
@@ -114,6 +139,8 @@ export class CollisionWorld implements Surroundings {
   /** cells found empty (no instance overlaps them) */
   private empty = new Set<number>();
   private cells = new Map<number, Cell>();
+  /** moving shapes (doors) by key: packed triangles and their x/y bounds */
+  private dynamic = new Map<number, Cell & { box: [number, number, number, number] }>();
   private terrainHeight: (x: number, y: number) => number;
   /** shapes chosen, by source (for the HUD and the report) */
   readonly stats: Record<CollisionSource, number> = { proxy: 0, render: 0, visible: 0, none: 0 };
@@ -222,8 +249,21 @@ export class CollisionWorld implements Surroundings {
     return c;
   }
 
-  /** Triangles in the cells overlapping a box (each cell once). */
+  /** Set (or with null, remove) a moving shape: world-space triangles, 9 floats each. */
+  setDynamic(key: number, triangles: ArrayLike<number> | null): void {
+    if (!triangles) { this.dynamic.delete(key); return; }
+    const tris = packTriangles(triangles), count = tris.length / TRI;
+    const box: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (let t = 0; t < count; t++) {
+      box[0] = Math.min(box[0], tris[t * TRI + 12]); box[1] = Math.min(box[1], tris[t * TRI + 13]);
+      box[2] = Math.max(box[2], tris[t * TRI + 15]); box[3] = Math.max(box[3], tris[t * TRI + 16]);
+    }
+    this.dynamic.set(key, { tris, count, box });
+  }
+
+  /** Triangles in the cells overlapping a box (each cell once), then the moving shapes there. */
   private *cellsIn(x0: number, y0: number, x1: number, y1: number): Generator<Cell> {
+    for (const d of this.dynamic.values()) if (d.count && d.box[0] <= x1 && d.box[2] >= x0 && d.box[1] <= y1 && d.box[3] >= y0) yield d;
     for (let cy = Math.floor(y0 / CELL); cy <= Math.floor(y1 / CELL); cy++)
       for (let cx = Math.floor(x0 / CELL); cx <= Math.floor(x1 / CELL); cx++) {
         const c = this.cell(cx, cy);
