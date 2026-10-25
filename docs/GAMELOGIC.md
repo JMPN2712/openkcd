@@ -343,9 +343,31 @@ phase. Test: `web/scripts/test-npcs.ts`.
 - **Area sizes.** Work areas range from a workshop (median 19 m) to huge
   regions (10% are over 4 km across). In the real game, the behaviour
   trees choose a smart object inside them (a stall, a guard post).
-- **Beds.** The `Bed` smart-object class (`Libs/SmartObjects.xml`) has its
-  `lying` helper at the entity origin with identity rotation, so a sleeper
-  lies at the bed's own transform, playing `sleeping_bed_idle.caf`.
+- **Beds** (`web/src/npcs.ts`, `lyingTag` in `web/src/schedule.ts`):
+  - **Pose.** A bed's kind (`Properties/Script esBedTypes`: normal, bench,
+    ground, shelter, tent) and its helper class's side (`SleepingBench_Left`,
+    `_Right`) pick the lying fragment, as the lie-down fragments do in
+    `kcd_male_database.adb` (`LieDown` with `liePlaceBench+lieSideLeft`
+    plays `laydown_bench_left`, then sets the idle state `lying` with
+    tag `lyingLeft` → `sleeping_bench_idle_left`). Rataje's 1,302 beds:
+    ground 560, bench 319, normal 244, shelter 138, tent 41. Women's
+    general DBA has no bench clips; they use the bed pose.
+  - **Place.** The helper class's lie-down helper (`lieSideLeft`/`Right`,
+    else `lying`, else `Entry`) in the bed's frame.
+  - **Align bone.** The lie-down fragments align the clip's `Align` bone
+    with that helper (procedural `PositionAdjustAlignBone`, without z). The
+    lying clips hold it turned 90° (−90° on the right side) and up to
+    0.21 m aside, so the body, which lies along the character's Y, lies
+    along the bed's X: its long side in the bed and bench models, and in
+    the helpers (entries at ±0.85 m on Y, the wake-up spot 1.69 m aside on
+    X). The character stands at helper × inverse(Align).
+  - **Height.** Sleepers keep the helper's height: standing them on the
+    collision surface put bench sleepers on the bench's top, 0.45 m too
+    high.
+  - **Check** (`web/scripts/test-beds.ts`): all 1,302 sleepers lie along
+    their beds, over them, no more than 0.35 m above the top (three ground
+    cloths that their data calls benches are not checked for height).
+    Without the Align bone, 1,296 lie across.
 - **The viewer's approximation** (`web/src/schedule.ts`):
   - activity from the soul schedule;
   - sleep → own bed (explicit links, then the beds inside the home polygon
@@ -353,7 +375,10 @@ phase. Test: `web/scripts/test-npcs.ts`.
   - work → work area;
   - morning, eat, fun → home area;
   - inside an area, use the spawn point if it lies in that area (about
-    half do), else a stable pseudo-random point.
+    half do), else a stable pseudo-random point with walkable floor near
+    the area's height, standing on it. An area can reach past its floor:
+    the tailor's home is upstairs, but its polygon also covers the shop
+    below, where he had stood 3.4 m up in the air.
 
   Rataje at 03:00: 577 in bed, 204 at work (night shifts). At 12:00: 637
   at work, 188 at home.

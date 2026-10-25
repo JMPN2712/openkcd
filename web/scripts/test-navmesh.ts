@@ -1,6 +1,7 @@
 // Node test for src/navmesh.ts on Rataje (read-only): indexes the level's
 // navmesh, finds a few routes and checks that every path segment stays on the
-// mesh (midpoints over a walkable polygon) and is no shorter than the straight line.
+// mesh (midpoints over a walkable polygon, or a doorway hop), climbs no steeper than stairs and
+// is no shorter than the straight line.
 // First, whole-mesh checks from the format note: every tile decodes, indices are
 // in range, and every internal neighbour shares its edge in reverse.
 // usage: node scripts/test-navmesh.ts [GAME_ROOT]
@@ -59,7 +60,18 @@ const routes: [string, Vec3, Vec3][] = [
   ["guard 8: home → garrison (Rataje)", at(2597, 565), at(2698, 600)],
   ["Rataje market → bakery", at(2578, 563), at(2603, 569)],
   ["across Rataje (west gate area → east)", at(2520, 600), at(2660, 590)],
+  // through the house door (an off-mesh connection) and up the stairs, to a room on a layer of its own
+  ["Rataje: the tailor's table → his home upstairs", [2520.83, 543.95, 77.76], [2525.28, 536.67, 81.6]],
 ];
+/** Whether segment p–q is one of the mesh's off-mesh connections (a doorway hop), either way. */
+const doorway = (p: Vec3, q: Vec3) => {
+  const close = (u: Vec3, v: Vec3) => Math.hypot(u[0] - v[0], u[1] - v[1], u[2] - v[2]) < 0.05;
+  const tx = Math.floor(p[0] / nav.tileSize), ty = Math.floor(p[1] / nav.tileSize);
+  for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (const t of nav.tilesAt(tx + dx, ty + dy)) {
+    if (t.offMesh.some((c) => (close(c.a, p) && close(c.b, q)) || (close(c.a, q) && close(c.b, p)))) return true;
+  }
+  return false;
+};
 for (const [name, a, b] of routes) {
   t0 = performance.now();
   const path = nav.findPath(a, b, 200000);
@@ -69,21 +81,24 @@ for (const [name, a, b] of routes) {
     fails++;
     continue;
   }
-  let len = 0, off = 0;
+  let len = 0, off = 0, doors = 0, steep = 0;
   for (let i = 1; i < path.length; i++) {
     const p = path[i - 1], q = path[i];
     len += Math.hypot(q[0] - p[0], q[1] - p[1]);
     const mid: Vec3 = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2, (p[2] + q[2]) / 2];
-    if (!nav.findPoly(mid, 0.3)) {
+    // no climbing steeper than stairs (a straight line up through a ceiling)
+    if (Math.abs(q[2] - p[2]) > Math.hypot(q[0] - p[0], q[1] - p[1]) + 0.4) steep++;
+    if (doorway(p, q)) doors++;
+    else if (!nav.findPoly(mid, 0.3)) {
       off++;
       const near = nav.findPoly(mid, 50);
       console.log(`   off-mesh segment ${i}: ${p.map((v) => v.toFixed(1))} → ${q.map((v) => v.toFixed(1))} (${Math.hypot(q[0] - p[0], q[1] - p[1]).toFixed(1)} m); a poly within 50 m: ${near ? `tile ${near.tile.x},${near.tile.y} L${near.tile.layer}` : "none"}`);
     }
   }
   const straight = Math.hypot(b[0] - a[0], b[1] - a[1]);
-  const ok = off === 0 && len >= straight - 0.5;
+  const ok = off === 0 && steep === 0 && len >= straight - 0.5 && Math.abs(path[path.length - 1][2] - (nav.findPoly(b)?.point?.[2] ?? b[2])) < 0.5;
   if (!ok) fails++;
-  console.log(`${name}: ${path.length} corners, ${len.toFixed(1)} m (straight ${straight.toFixed(1)} m), ${off} segment midpoints off the mesh, ${Math.round(ms)} ms ${ok ? "" : "FAIL"}`);
+  console.log(`${name}: ${path.length} corners, ${len.toFixed(1)} m (straight ${straight.toFixed(1)} m), ${off} segment midpoints off the mesh, ${doors} doorways, ${steep} too steep, ${Math.round(ms)} ms ${ok ? "" : "FAIL"}`);
   console.log(`   ${path.slice(0, 8).map((p) => p.map((v) => v.toFixed(1)).join(",")).join("  ")}${path.length > 8 ? "  …" : ""}`);
 }
 console.log(fails ? `FAIL (${fails})` : "OK");

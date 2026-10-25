@@ -119,6 +119,7 @@ node scripts/render-world.ts /tmp/w --at-npc rat_baker --npc-dist 6 --npcs --clo
 node scripts/render-world.ts /tmp/w --at-entity SO_tailorsTable_40ee6671 --npc-dist 3 --npcs --clock 10:00 --ai 30   # NPCs at work run by their behaviour trees
 node scripts/test-player.ts                      # player controller on Rataje: ground following, climb limit, jump, fall, speeds; Henry's clips
 node scripts/test-collision.ts                   # collision sources by object type around the market, random runs: no penetration, no falling through
+node scripts/test-beds.ts                        # every bed in Rataje: the sleeper lies along it, over it, at its height (--no-align: the old poses)
 node scripts/test-interiors.ts                   # interior placement: sampled beds line up with the bedding brushed on them; every model in their scenes matches its LODs
 node --expose-gc scripts/test-streaming.ts       # two laps through the map's towns: scene rebuild times, memory levels off with cache trimming
 node scripts/test-sky.ts                         # time-of-day profiles, sunrise/sunset, the sun's path, light levels over the day

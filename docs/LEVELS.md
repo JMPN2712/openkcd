@@ -387,12 +387,26 @@ Decoded by `web/src/navmesh.ts` and `tools/navmesh.py`.
   - vertices, mostly packed into one u32 each and quantised over the tile
     bounds (11/11/10 bits);
   - polygons of up to 6 vertices, whose neighbour codes are internal
-    neighbours or links across the tile border;
-  - off-mesh connections.
+    neighbours or portals (`0x8000 | side`, side 0 +x, 2 +y, 4 −x, 6 −y,
+    as Detour's). A portal on the tile's border joins the next tile cell;
+    one inside the tile joins **another layer of the same cell**, at the
+    edge facing the opposite way. Interiors are often layers of their own
+    (the tailor's home, upstairs over the shop, and its stairs).
+  - off-mesh connections, 52 bytes each (start and end f32×3, radius, then
+    as in Detour the polygon, flags with bit 1 = both ways, and side; then
+    20 more bytes). In Rataje they are about 1 m hops at one height,
+    **through doorways**: a house's rooms are reached only through them.
+- **Routes** (`NavMesh.findPath`): A* over polygons through both kinds of
+  portal and the off-mesh connections (each end on a polygon within its
+  radius and 1 m of its height), then a funnel. Without the in-cell
+  portals and the doorways, 204 of Rataje's 2,135 schedule walks (9.6%)
+  found no route and fell back to a straight line through walls and
+  floors; now 8 do (0.4%).
 - **Check** (`web/scripts/test-navmesh.ts`): Rataje has 58,056 tiles,
   2.52 M polygons and 4.08 M vertices, and all 5.47 M internal neighbour
   edges are shared in reverse. The parse ends exactly at the end of the
-  95 MB file.
+  95 MB file. Routes stay on the mesh or take doorways, climb no steeper
+  than stairs, and reach the tailor's room upstairs.
 - **`level.pak/ubernav.tmm`** (796 KB): a packed graph, probably the coarse
   long-distance travel network. Not decoded.
 

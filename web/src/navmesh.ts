@@ -6,8 +6,9 @@
 // tiles are decoded when a query reaches them.
 //
 // Pathfinding: A* over polygons (edge-midpoint distances), crossing tile borders
-// by matching border edges of neighbouring tiles, then the funnel algorithm
-// ("simple stupid funnel") over the portals for the final corner path.
+// by matching border edges of neighbouring tiles and taking the off-mesh
+// connections (the short hops through doorways into houses), then the funnel
+// algorithm ("simple stupid funnel") over the portals for the final corner path.
 
 export type Vec3 = [number, number, number];
 
@@ -49,6 +50,22 @@ export interface NavTile {
   polyNeis: Uint16Array;
   /** vertices per poly (2 = off-mesh connection) */
   polyN: Uint8Array;
+  /** off-mesh connections: links between two points of the mesh, one-way unless `bidir` */
+  offMesh: OffMeshLink[];
+}
+
+/**
+ * An off-mesh connection (52 bytes: start and end f32×3, radius f32, then as in Detour's
+ * dtOffMeshConnection its polygon u16, flags u8 (1: both ways) and side u8, then 20 bytes OpenKCD
+ * doesn't use). In Rataje they are about a metre long at one height, through doorways: the rooms
+ * behind them are separate pieces of the mesh (the tailor's home upstairs is 64 polygons reached
+ * only through one), so without them routes into houses fail.
+ */
+export interface OffMeshLink {
+  a: Vec3;
+  b: Vec3;
+  radius: number;
+  bidir: boolean;
 }
 
 interface TileRef {
@@ -102,13 +119,21 @@ export function decodeTile(dv: DataView, o: number): NavTile {
     }
     polyN[k] = dv.getUint8(p + 25); // byte 24 is flags/area, 26–27 more flags
   }
-  return { x: n(H.x), y: n(H.y), layer: n(H.layer), bmin, bmax, verts, polyCount, polyVerts, polyNeis, polyN };
+  p += n(H.detailMeshes) * DETAIL_MESH_BYTES + n(H.detailVerts) * 12 + n(H.detailTris) * DETAIL_TRI_BYTES;
+  const offMesh: OffMeshLink[] = [];
+  for (let k = 0; k < n(H.offMesh); k++, p += OFFMESH_BYTES) {
+    offMesh.push({ a: vec(p), b: vec(p + 12), radius: dv.getFloat32(p + 24, true), bidir: (dv.getUint8(p + 30) & 1) !== 0 });
+  }
+  return { x: n(H.x), y: n(H.y), layer: n(H.layer), bmin, bmax, verts, polyCount, polyVerts, polyNeis, polyN, offMesh };
 }
 
 export class NavMesh {
   private dv: DataView;
   private refs = new Map<string, TileRef[]>();
   private tiles = new Map<number, NavTile>();
+  /** off-mesh links by the polygon they leave from (polyKey), for the tile cells in linkedCells */
+  private links = new Map<string, { to: PolyRef; a: Vec3; b: Vec3 }[]>();
+  private linkedCells = new Set<string>();
   readonly tileCount: number;
   readonly tileSize: number;
 
@@ -177,11 +202,45 @@ export class NavMesh {
     return best;
   }
 
-  /** Neighbour polygons of a polygon with their portal (shared edge segment). */
-  private neighbours(ref: PolyRef): { to: PolyRef; a: Vec3; b: Vec3 }[] {
+  /**
+   * Attach the off-mesh connections stored in tile cell (x, y) to the polygons at their ends (each
+   * end on a polygon within its radius and 1 m of its height, as Detour links them).
+   */
+  private linkCell(x: number, y: number): void {
+    const cell = `${x},${y}`;
+    if (this.linkedCells.has(cell)) return;
+    this.linkedCells.add(cell);
+    const at = (p: Vec3, r: number) => {
+      const hit = this.findPoly(p, r);
+      return hit && Math.abs(hit.point![2] - p[2]) < 1 ? hit : null;
+    };
+    const add = (from: PolyRef, link: { to: PolyRef; a: Vec3; b: Vec3 }) => {
+      const k = polyKey(from);
+      const list = this.links.get(k);
+      if (list) list.push(link);
+      else this.links.set(k, [link]);
+    };
+    for (const tile of this.tilesAt(x, y)) {
+      for (const c of tile.offMesh) {
+        const s = at(c.a, c.radius), e = at(c.b, c.radius);
+        if (!s || !e) continue;
+        add(s, { to: e, a: c.a, b: c.b });
+        if (c.bidir) add(e, { to: s, a: c.b, b: c.a });
+      }
+    }
+  }
+
+  /**
+   * Neighbour polygons of a polygon with their portal (shared edge segment), and the polygons its
+   * off-mesh connections lead to (`jump`: from a to b).
+   */
+  private neighbours(ref: PolyRef): { to: PolyRef; a: Vec3; b: Vec3; jump?: boolean }[] {
     const { tile, poly } = ref;
     const n = tile.polyN[poly];
-    const out: { to: PolyRef; a: Vec3; b: Vec3 }[] = [];
+    const out: { to: PolyRef; a: Vec3; b: Vec3; jump?: boolean }[] = [];
+    // connections are stored in the tile of their start: those ending here may be next door
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) this.linkCell(tile.x + dx, tile.y + dy);
+    for (const l of this.links.get(polyKey(ref)) ?? []) out.push({ ...l, jump: true });
     for (let j = 0; j < n; j++) {
       const nei = tile.polyNeis[poly * MAX_VERTS + j];
       if (nei === 0) continue;
@@ -191,21 +250,26 @@ export class NavMesh {
         out.push({ to: { tile, poly: nei - 1 }, a, b });
         continue;
       }
-      // external: the edge lies on a tile border; find the overlapping border edge next door
+      // external: a portal facing direction `dir` (0 +x, 2 +y, 4 −x, 6 −y, as Detour's sides), on
+      // the tile's border towards the next tile cell, or inside the tile towards another layer of
+      // the same cell (a house's rooms are often a layer of their own: without those portals they
+      // were islands). It joins the overlapping portal facing the opposite way, as Detour links them.
       const eps = 0.01;
-      let dx = 0, dy = 0, axis = 0;
-      if (Math.abs(a[0] - tile.bmax[0]) < eps && Math.abs(b[0] - tile.bmax[0]) < eps) { dx = 1; axis = 1; }
-      else if (Math.abs(a[0] - tile.bmin[0]) < eps && Math.abs(b[0] - tile.bmin[0]) < eps) { dx = -1; axis = 1; }
-      else if (Math.abs(a[1] - tile.bmax[1]) < eps && Math.abs(b[1] - tile.bmax[1]) < eps) { dy = 1; axis = 0; }
-      else if (Math.abs(a[1] - tile.bmin[1]) < eps && Math.abs(b[1] - tile.bmin[1]) < eps) { dy = -1; axis = 0; }
-      else continue;
+      const dir = nei & 0xff;
+      if (dir & 1 || dir > 6) continue;
+      const axis = dir === 0 || dir === 4 ? 1 : 0;
+      const dx = dir === 0 ? 1 : dir === 4 ? -1 : 0, dy = dir === 2 ? 1 : dir === 6 ? -1 : 0;
+      const opposite = (dir + 4) & 7;
       const lo = Math.min(a[axis], b[axis]), hi = Math.max(a[axis], b[axis]);
-      for (const other of this.tilesAt(tile.x + dx, tile.y + dy)) {
+      const onBorder = dx ? Math.abs(a[0] - (dx > 0 ? tile.bmax[0] : tile.bmin[0])) < eps : Math.abs(a[1] - (dy > 0 ? tile.bmax[1] : tile.bmin[1])) < eps;
+      const candidates = [...(onBorder ? this.tilesAt(tile.x + dx, tile.y + dy) : []), ...this.tilesAt(tile.x, tile.y).filter((t) => t !== tile)];
+      for (const other of candidates) {
         for (let k = 0; k < other.polyCount; k++) {
           const m = other.polyN[k];
           if (m < 3) continue;
           for (let i = 0; i < m; i++) {
-            if (!(other.polyNeis[k * MAX_VERTS + i] & EXTERNAL_LINK)) continue;
+            const on = other.polyNeis[k * MAX_VERTS + i];
+            if (!(on & EXTERNAL_LINK) || (on & 0xff) !== opposite) continue;
             const c = vert(other, other.polyVerts[k * MAX_VERTS + i]);
             const d = vert(other, other.polyVerts[k * MAX_VERTS + ((i + 1) % m)]);
             const fixed = 1 - axis;
@@ -237,9 +301,9 @@ export class NavMesh {
     if (!s || !e) return null;
     // the path runs between the closest points on the mesh; callers bridge the last metres
     const start = s.point!, end = e.point!;
-    const key = (r: PolyRef) => `${r.tile.x},${r.tile.y},${r.tile.layer},${r.poly}`;
+    const key = polyKey;
     const ek = key(e);
-    interface Node { ref: PolyRef; g: number; f: number; pos: Vec3; parent: Node | null; portal: [Vec3, Vec3] | null }
+    interface Node { ref: PolyRef; g: number; f: number; pos: Vec3; parent: Node | null; portal: [Vec3, Vec3] | null; jump?: boolean }
     const open: Node[] = [];
     const best = new Map<string, number>();
     const push = (n: Node) => {
@@ -281,12 +345,13 @@ export class NavMesh {
       if ((best.get(ck) ?? Infinity) < cur.g) continue;
       if (ck === ek) { found = cur; break; }
       for (const nb of this.neighbours(cur.ref)) {
-        const mid: Vec3 = [(nb.a[0] + nb.b[0]) / 2, (nb.a[1] + nb.b[1]) / 2, (nb.a[2] + nb.b[2]) / 2];
-        const g = cur.g + dist(cur.pos, mid);
+        // through a portal: to its midpoint; along an off-mesh connection: to its start, then its end
+        const pos: Vec3 = nb.jump ? nb.b : [(nb.a[0] + nb.b[0]) / 2, (nb.a[1] + nb.b[1]) / 2, (nb.a[2] + nb.b[2]) / 2];
+        const g = cur.g + (nb.jump ? dist(cur.pos, nb.a) + dist(nb.a, nb.b) : dist(cur.pos, pos));
         const nk = key(nb.to);
         if (g >= (best.get(nk) ?? Infinity)) continue;
         best.set(nk, g);
-        push({ ref: nb.to, g, f: g + h(mid), pos: mid, parent: cur, portal: [nb.a, nb.b] });
+        push({ ref: nb.to, g, f: g + h(pos), pos, parent: cur, portal: [nb.a, nb.b], jump: nb.jump });
       }
     }
     if (!found) return null;
@@ -297,6 +362,8 @@ export class NavMesh {
     const portals: [Vec3, Vec3][] = [[start, start]];
     for (let k = 1; k < chain.length; k++) {
       const [a, b] = chain[k].portal!;
+      // an off-mesh connection: the path goes through both of its ends
+      if (chain[k].jump) { portals.push([a, a], [b, b]); continue; }
       const from = k === 1 ? start : chain[k - 1].pos;
       const to = k + 1 < chain.length ? chain[k + 1].pos : end;
       const dir: Vec3 = [to[0] - from[0], to[1] - from[1], 0];
@@ -307,6 +374,10 @@ export class NavMesh {
     portals.push([end, end]);
     return funnel(portals);
   }
+}
+
+function polyKey(r: PolyRef): string {
+  return `${r.tile.x},${r.tile.y},${r.tile.layer},${r.poly}`;
 }
 
 function vert(t: NavTile, i: number): Vec3 {

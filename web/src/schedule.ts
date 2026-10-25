@@ -20,6 +20,28 @@ export interface Placement {
   /** quaternion w, x, y, z */
   rot: [number, number, number, number];
   pose: Pose;
+  /** in bed: the bed entity, and the Mannequin `Lying` fragment's tag for it (see lyingTag) */
+  bed?: EntityInfo;
+  lying?: string;
+}
+
+/**
+ * The `Lying` fragment tag (kcd_male_database.adb) for a bed: its kind (Properties Script
+ * esBedTypes) picks the place, its helper class's _Left/_Right the side, matching the lie-down
+ * fragments' tags (liePlaceBench+lieSideLeft → laydown_bench_left, then `lyingLeft` →
+ * sleeping_bench_idle_left). Rataje's 1,302 beds: ground 560, bench 319, normal 244, shelter 138,
+ * tent 41.
+ */
+export function lyingTag(bed: EntityInfo): string {
+  const kind = /\besBedTypes="([^"]*)"/.exec(bed.propsXml ?? "")?.[1] ?? "normal";
+  const side = /right$/i.test(bed.soHelpers ?? "") ? "Right" : "Left";
+  switch (kind) {
+    case "bench": return `lying${side}`;
+    case "ground": return `lyingGround${side}`;
+    case "shelter": return "lyingShelter";
+    case "tent": return "lyingTent";
+    default: return "lying";
+  }
 }
 
 /** Activity at `minute` (0–1439): the last item started at or before it, wrapping past midnight. */
@@ -73,8 +95,8 @@ export function areaContains(area: EntityInfo, x: number, y: number): boolean {
   return inside(areaPolygon(area), x, y);
 }
 
-/** A stable pseudo-random point inside an area polygon. */
-function pointInArea(area: EntityInfo, seed: string): [number, number] {
+/** A stable pseudo-random point inside an area polygon (one `accept` takes, when given). */
+function pointInArea(area: EntityInfo, seed: string, accept?: (x: number, y: number) => boolean): [number, number] {
   const pts = areaPolygon(area);
   if (pts.length < 6) return [area.pos[0], area.pos[1]];
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -85,7 +107,7 @@ function pointInArea(area: EntityInfo, seed: string): [number, number] {
   const r = rng(hash(seed));
   for (let k = 0; k < 64; k++) {
     const x = x0 + r() * (x1 - x0), y = y0 + r() * (y1 - y0);
-    if (inside(pts, x, y)) return [x, y];
+    if (inside(pts, x, y) && (!accept || accept(x, y))) return [x, y];
   }
   return [area.pos[0], area.pos[1]];
 }
@@ -128,6 +150,8 @@ export class Schedules {
   }
   private routes = new Map<string, Route>();
   private beds = new Map<number, EntityInfo>();
+  /** each NPC's spot in an area (by "npc/area"), found once: picking one searches the navmesh */
+  private spots = new Map<string, [number, number, number]>();
   constructor(npcs: NpcEntity[], ents: Map<number, EntityInfo>) {
     this.ents = ents;
     // explicit bed links first; then the homes' remaining beds (Bed entities inside the home
@@ -157,6 +181,7 @@ export class Schedules {
   setNavMesh(nav: NavMesh | null): void {
     this.nav = nav;
     this.routes.clear();
+    this.spots.clear();
   }
 
   private routeFor(key: string, from: Vec3, to: Vec3): Route {
@@ -218,14 +243,29 @@ export class Schedules {
       let w = 0;
       for (let i = 2; i < poly.length; i += 2) w = Math.max(w, Math.abs(poly[i] - poly[0]), Math.abs(poly[i + 1] - poly[1]));
       if (inside(poly, npc.pos[0], npc.pos[1]) || w > 200) return { ...spawn, where };
-      const [x, y] = pointInArea(area, `${npc.name}/${where}`);
-      // ground floor: the area's base height, or the terrain if that is higher (sloped yards)
-      const z = Math.max(area.pos[2], groundAt(x, y));
+      // the floor: the area's base height, or the terrain if that is higher (sloped yards). With a
+      // navmesh, only points with walkable floor near that height, standing on it: an area can reach
+      // past its floor (the tailor's home, upstairs, spans the ground-floor shop below, where he stood
+      // 3.4 m up in the air)
+      const key = `${npc.id}/${area.id}`;
+      const cached = this.spots.get(key);
+      if (cached) return { activity, where, pos: cached, rot: yawQuat(rng(hash(npc.name + activity))() * 2 * Math.PI), pose: "stand" };
+      const nav = this.nav;
+      const floor = (x: number, y: number) => {
+        const ref = Math.max(area.pos[2], groundAt(x, y));
+        const hit = nav?.findPoly([x, y, ref], 0.2);
+        const z = hit?.point?.[2];
+        return z !== undefined && Math.abs(z - ref) < 1.5 ? z : null;
+      };
+      const seed = `${npc.name}/${where}`;
+      const [x, y] = nav ? pointInArea(area, seed, (x, y) => floor(x, y) !== null) : pointInArea(area, seed);
+      const z = floor(x, y) ?? Math.max(area.pos[2], groundAt(x, y));
+      this.spots.set(key, [x, y, z]);
       return { activity, where, pos: [x, y, z], rot: yawQuat(rng(hash(npc.name + activity))() * 2 * Math.PI), pose: "stand" };
     };
     const a = activity.toLowerCase();
     if (a.includes("sleep")) {
-      if (bed) return { activity, where: "bed", pos: bed.pos, rot: bed.rot, pose: "sleep" };
+      if (bed) return { activity, where: "bed", pos: bed.pos, rot: bed.rot, pose: "sleep", bed, lying: lyingTag(bed) };
       return home ? inArea(home, "home") : spawn;
     }
     if (a.endsWith("work") || a === "monk_pray" || a === "servemeal" || a === "tidymeal") return work ? inArea(work, "work") : home ? inArea(home, "home") : spawn;

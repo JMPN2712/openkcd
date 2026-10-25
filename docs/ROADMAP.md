@@ -21,6 +21,26 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
   in progress, an Apple M3 Pro. The repository stays private until the user
   makes it public. Changes now go through pull requests, with the
   clean-room audit (`tools/audit.sh`) and a build in the `checks` workflow.
+- **Fixed (2026-10-25): the tailor's evening** (the user's report: at 18:30
+  he walked into the back of the armourer's shop, rose to the floor above,
+  stood in a corner, then slept hovering over a bed, turned wrong). Three
+  causes, all from the data:
+  - **Routes:** in-cell portals between navmesh layers and the off-mesh
+    connections through doorways were ignored, so houses behind a door were
+    unreachable and routes fell back to straight lines: 9.6% of Rataje's
+    schedule walks, now 0.4%. He now leaves by the shop door, enters the
+    house and climbs its stairs (`docs/LEVELS.md`).
+  - **Home spots** at the area's height where only the floor below has a
+    navmesh (he stood 3.4 m up in the air); now only on walkable floor at
+    that height.
+  - **Beds:** every sleeper used the bed pose, unaligned and stood on the
+    bed's collision top. Now the bed's kind picks the lying clip (bench,
+    ground, shelter, tent, bed), placed by the clip's `Align` bone at the
+    bed's helper, at the helper's height: all 1,302 beds pass
+    `scripts/test-beds.ts` (1,296 lay across before). `docs/GAMELOGIC.md`.
+  - Found on the way: the game has no `kcd_female_database.adb`, which
+    `mannequin.ts` loads for women, so women's work fragments probably
+    never resolve. To check under step 5 (NPC animations).
 - **Milestone 4 (living world) started:** the order is NPC routines end to
   end, interaction (doors, chests, beds), talking to NPCs, ambient audio,
   NPC animations; see section 4.
@@ -333,6 +353,13 @@ its cost on Potato with a full market.
 - [ ] **1. NPC daily routines end to end:** the smart-object graph and the
       game's route search (GraphSearch); first the tailor's full day, then
       the rest of Rataje's market.
+  - [x] Routes into houses: navmesh layer portals and doorway links
+        (2026-10-25).
+  - [x] Sleeping: lying clip by bed kind, aligned to the bed's helper
+        (2026-10-25).
+  - [ ] Research note needed: how the daily-cycle brain
+        (`sb_daycycles.xml#root`) picks an activity's behaviour (mailboxes,
+        priorities, keep/drop/overridable) and its activity nodes.
   - [ ] Remaining world-side nodes: helpers, messaging between NPCs,
         semaphores, teleport; smart-object init behaviours.
   - [ ] Meal, leisure and sleep routines.

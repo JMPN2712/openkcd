@@ -8,13 +8,15 @@ import { parseSkeleton, skeletonKey, type Skeleton } from "./skeleton.ts";
 import { Dba } from "./dba.ts";
 import { Animator } from "./pose.ts";
 import type { Clip } from "./anim.ts";
-import type { NpcEntity } from "./levelEntities.ts";
+import type { EntityInfo, NpcEntity } from "./levelEntities.ts";
 import type { Placement, Pose, Schedules } from "./schedule.ts";
 import type { NpcAi } from "./npcAi.ts";
 import type { LoadedModel } from "./model.ts";
 import type { Vfs } from "./vfs.ts";
 import { multiply } from "./mat4.ts";
 import { avoid, CA, NPC_PATH_RADIUS, type CrowdAgent, type Vec3 } from "./crowd.ts";
+import { parseSmartObjectHelpers, type SoHelper } from "./btWorld.ts";
+import { parseAdb } from "./mannequin.ts";
 
 const CLIPS: Record<"male" | "female", [string, Record<Pose, string[]>]> = {
   male: ["animations/humans/male/male_general.dba", {
@@ -63,6 +65,8 @@ export interface WorldNpc {
   world: Float32Array;
   animator: Animator;
   clips: Record<Pose, Clip | null>;
+  /** sleeping clips by `Lying` fragment tag (Placement.lying): bed, bench, ground, shelter, tent */
+  lying: Map<string, LyingClip>;
   phase: number;
   /** walk-cycle position (frames) and the clock of the last animateNpcs, so the cycle follows the distance walked */
   walkFrame?: number;
@@ -82,11 +86,41 @@ export interface NpcRenderItem {
 interface Rig {
   skeleton: Skeleton;
   clips: Record<Pose, Clip | null>;
+  lying: Map<string, LyingClip>;
 }
+
+/**
+ * A lying clip and its `Align` bone (model space, on the floor plane: x, y, yaw). The lie-down
+ * fragments align that bone with the bed's helper (procedural PositionAdjustAlignBone, UseZAxis
+ * false), so the character stands at helper × inverse(Align). The lying clips hold it still, turned
+ * 90° (−90° lying on the right) and up to 0.21 m aside: the body lies along the character's Y, and
+ * so along the bed's X, its long side (bed and bench models, and the beds' helpers: entries at
+ * ±0.85 m on Y, the wake-up spot 1.69 m aside on X). Without it, sleepers lay across their beds.
+ */
+interface LyingClip {
+  clip: Clip;
+  /** the character's transform relative to the helper (inverse Align), column-major */
+  offset: Float32Array;
+}
+
+/** What beds need from the game data: smart-object helpers by class, and the `Lying` fragment's animation per tag. */
+export interface BedData {
+  helpers: Map<string, SoHelper[]>;
+  lying: Map<string, string>;
+}
+
+const qmul = (a: number[], b: number[]): [number, number, number, number] => [
+  a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+  a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+  a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+  a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
+];
 
 export class NpcWorld {
   private db: Promise<CharacterDb> | null = null;
   private rigs = new Map<string, Promise<Rig | null>>();
+  private bedData: Promise<BedData> | null = null;
+  private beds: BedData | null = null;
   private chars = new Map<number, Promise<LoadedCharacter | null>>();
   private vfs: Vfs;
   readonly entities: NpcEntity[];
@@ -105,6 +139,32 @@ export class NpcWorld {
     this.groundAt = groundAt;
   }
 
+  /**
+   * Smart-object helpers (Libs/SmartObjects.xml) and the male database's `Lying` variants: both
+   * genders' clips share these names (sleeping_bed_idle, sleeping_ground_idle_left, …).
+   */
+  private loadBeds(): Promise<BedData> {
+    this.bedData ??= (async () => {
+      const text = async (p: string) => { const h = this.vfs.lookup(p); return h ? new TextDecoder().decode(await this.vfs.read(h)) : ""; };
+      const helpers = parseSmartObjectHelpers(await text("libs/smartobjects.xml"));
+      const lying = new Map<string, string>();
+      const adb = await text("animations/mannequin/adb/kcd_male_database.adb");
+      for (const v of (adb ? parseAdb(adb).get("lying") : undefined) ?? []) if (v.anims[0] && !lying.has(v.tags)) lying.set(v.tags, v.anims[0].name);
+      this.beds = { helpers, lying };
+      return this.beds;
+    })().catch(() => ({ helpers: new Map(), lying: new Map() }));
+    return this.bedData;
+  }
+
+  /**
+   * In bed: lie at the bed's lie-down helper (the lieSide<Left/Right> gate, else `lying`, else
+   * `Entry`), in the entity's frame.
+   */
+  private inBed(p: Placement): Placement {
+    const at = p.bed && this.beds ? lieAt(p.bed, p.lying ?? "lying", this.beds.helpers) : null;
+    return at ? { ...p, ...at } : p;
+  }
+
   private rig(skeletonPath: string, female: boolean): Promise<Rig | null> {
     const key = skeletonPath + (female ? "#f" : "#m");
     let r = this.rigs.get(key);
@@ -114,6 +174,7 @@ export class NpcWorld {
         const skeleton = hit ? parseSkeleton(await this.vfs.read(hit)) : null;
         if (!skeleton) return null;
         const clips: Record<Pose, Clip | null> = { stand: null, sleep: null, walk: null, act: null };
+        const lying = new Map<string, LyingClip>();
         const [dbPath, names] = CLIPS[female ? "female" : "male"];
         const dh = this.vfs.lookup(dbPath);
         if (dh) {
@@ -122,8 +183,17 @@ export class NpcWorld {
             const name = names[pose].find((n) => dba.anims.some((a) => a.name === n));
             if (name) clips[pose] = dba.clip(name);
           }
+          const dir = dbPath.slice(0, dbPath.lastIndexOf("/") + 1) + "behavior/";
+          for (const [tag, anim] of (await this.loadBeds()).lying) {
+            if (!dba.anims.some((a) => a.name === `${dir}${anim}.caf`)) continue;
+            const clip = dba.clip(`${dir}${anim}.caf`);
+            lying.set(tag, { clip, offset: alignOffset(skeleton, clip) });
+          }
+          // women's general DBA has no bench clips: those beds use the bed pose
+          const bedPose = lying.get("lying");
+          if (bedPose) for (const tag of (await this.loadBeds()).lying.keys()) if (!lying.has(tag)) lying.set(tag, bedPose);
         }
-        return { skeleton, clips };
+        return { skeleton, clips, lying };
       })().catch(() => null);
       this.rigs.set(key, r);
     }
@@ -152,9 +222,9 @@ export class NpcWorld {
 
   /** Schedule placement (walks included), or the spawn point without schedules. */
   scheduled(e: NpcEntity, schedule: ScheduleItem[], minute: number): Placement {
-    return this.schedules
-      ? this.schedules.at(e, schedule, minute, this.groundAt, WALK_SPEED[e.female ? "female" : "male"])
-      : { activity: "", where: "spawn", pos: e.pos, rot: e.rot, pose: "stand" };
+    if (!this.schedules) return { activity: "", where: "spawn", pos: e.pos, rot: e.rot, pose: "stand" };
+    const p = this.schedules.at(e, schedule, minute, this.groundAt, WALK_SPEED[e.female ? "female" : "male"]);
+    return p.pose === "sleep" ? this.inBed(p) : p;
   }
 
   /** NPCs returned by the last near(): they keep their place in later selections (see select). */
@@ -231,7 +301,8 @@ export class NpcWorld {
       m.agent.pos[0] += m.agent.vel[0] * dt;
       m.agent.pos[1] += m.agent.vel[1] * dt;
       const z = m.goalZ ?? m.agent.pos[2];
-      m.agent.pos[2] = this.surface?.(m.agent.pos[0], m.agent.pos[1], z) ?? z;
+      // sleepers keep the bed helper's height (the bench's top lifted them 0.45 m)
+      m.agent.pos[2] = m.ref.pose === "sleep" ? z : this.surface?.(m.agent.pos[0], m.agent.pos[1], z) ?? z;
     }
     this.collideBodies(npcs);
     npcs.forEach((n) => {
@@ -365,9 +436,10 @@ export class NpcWorld {
         placement,
         schedule: souls.get(e.name)!.schedule,
         character,
-        world: poseMatrix(placement.pos, placement.rot),
+        world: npcMatrix(rig, placement),
         animator: new Animator(rig.skeleton),
         clips: rig.clips,
+        lying: rig.lying,
         phase: Math.random() * 1000,
         items: [],
       });
@@ -437,6 +509,39 @@ export function npcItems(npcs: WorldNpc[], base = 0): NpcRenderItem[] {
   return items;
 }
 
+/**
+ * Where a sleeper's placement goes in a bed: the bed's lie-down helper (the lieSide<Left/Right>
+ * gate, else `lying`, else `Entry`) in the entity's frame, or null without one.
+ */
+export function lieAt(bed: EntityInfo, lying: string, helpers: Map<string, SoHelper[]>): { pos: [number, number, number]; rot: [number, number, number, number] } | null {
+  const h = helpers.get((bed.soHelpers ?? "Bed").toLowerCase());
+  const side = lying.endsWith("Right") ? "Right" : "Left";
+  const hp = h?.find((x) => x.name === `lieSide${side}`) ?? h?.find((x) => x.name === "lying") ?? h?.find((x) => x.name === "Entry");
+  if (!hp) return null;
+  const [w, x, y, z] = bed.rot, [px, py, pz] = hp.pos;
+  // rotate the helper offset by the bed's rotation
+  const tx = 2 * (y * pz - z * py), ty = 2 * (z * px - x * pz), tz = 2 * (x * py - y * px);
+  const off = [px + w * tx + (y * tz - z * ty), py + w * ty + (z * tx - x * tz), pz + w * tz + (x * ty - y * tx)];
+  return { pos: [bed.pos[0] + off[0], bed.pos[1] + off[1], bed.pos[2] + off[2]], rot: qmul(bed.rot, hp.rot) };
+}
+
+/** A lying clip's inverse `Align` bone on the floor plane (see LyingClip), column-major. */
+export function alignOffset(skeleton: Skeleton, clip: Clip): Float32Array {
+  const align = skeleton.byName.get("align");
+  if (align === undefined) return poseMatrix([0, 0, 0], [1, 0, 0, 0]);
+  const m = new Animator(skeleton).evaluate(clip, clip.start)[align];
+  const yaw = Math.atan2(m[1], m[0]), c = Math.cos(yaw), s = Math.sin(yaw);
+  // inverse of (rotate by yaw, then move to the bone's x, y)
+  return poseMatrix([-(c * m[12] + s * m[13]), -(-s * m[12] + c * m[13]), 0], [Math.cos(-yaw / 2), 0, 0, Math.sin(-yaw / 2)]);
+}
+
+/** An NPC's world matrix for a placement: in bed, moved by the lying clip's Align offset. */
+function npcMatrix(n: Pick<WorldNpc, "lying">, p: Placement): Float32Array {
+  const m = poseMatrix(p.pos, p.rot);
+  const lie = p.pose === "sleep" && p.lying ? n.lying.get(p.lying) : undefined;
+  return lie ? multiply(m, lie.offset) : m;
+}
+
 /** Renderer operations animateNpcs needs (ModelRenderer's). */
 export interface NpcRendererOps {
   setPalette(item: number, m: Float32Array): void;
@@ -473,7 +578,7 @@ export function animateNpcs(npcs: WorldNpc[], world: NpcWorld, minute: number, s
     const moved = p.pos.some((v, i) => v !== n.placement.pos[i]) || p.rot.some((v, i) => v !== n.placement.rot[i]);
     n.placement = p;
     if (moved) {
-      n.world = poseMatrix(p.pos, p.rot);
+      n.world = npcMatrix(n, p);
       n.character.parts.forEach(({ transform }, k) => r.setItemTransform(n.items[k], transform ? multiply(n.world, transform) : n.world));
     }
     if (eye) {
@@ -483,7 +588,8 @@ export function animateNpcs(npcs: WorldNpc[], world: NpcWorld, minute: number, s
       if ((animFrame + k) % every !== 0) continue;
     }
     const st = p.pose === "act" ? world.ai?.state(n.entity.id) : undefined;
-    let c = n.clips[p.pose] ?? n.clips.stand;
+    // in bed: the Lying clip for the bed's kind (a bench sleeper hovered above it in the bed pose)
+    let c = (p.pose === "sleep" && p.lying ? n.lying.get(p.lying)?.clip : undefined) ?? n.clips[p.pose] ?? n.clips.stand;
     let frame = c ? c.start + (((c === walk ? n.walkFrame ?? 0 : seconds * c.fps + n.phase)) % Math.max(1, c.end - c.start)) : 0;
     if (st?.clip && world.ai) {
       // a behaviour-tree animation: from its start, looping or holding the last frame

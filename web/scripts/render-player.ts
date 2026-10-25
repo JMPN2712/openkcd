@@ -146,7 +146,9 @@ if (withNpcs) {
   npcWorld = new NpcWorld(lvl.vfs, ents, schedules, (x, y) => heightAt(lvl.terrain, x, y));
   npcWorld.surface = (x, y, z) => (surroundings.ground(x, y, z + 0.5, z - 1.5) ?? surroundings.ground(x, y, z + 1, z - 1.5))?.z ?? null;
 }
-const minuteOfDay = clock[0] * 60 + clock[1];
+// --npc-clock HH:MM: the NPCs' time of day, when it should differ from the light's (night scenes in daylight)
+const npcClock = opt("--npc-clock", "").split(":").map(Number);
+const minuteOfDay = npcClock.length === 2 ? npcClock[0] * 60 + npcClock[1] : clock[0] * 60 + clock[1];
 let simSeconds = 0;
 
 // trees beyond the real ones, as cards (--no-far-trees leaves them out)
