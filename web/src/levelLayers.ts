@@ -6,6 +6,9 @@
 // Drawing them all at once doubles buildings up and leaves objects floating; this picks a
 // plausible game-start set by name.
 
+import { parseEntityIndex, type EntityInfo } from "./levelEntities.ts";
+import type { PakEntry } from "./zip.ts";
+
 export function parseLayerNames(levelDataXml: string): Map<number, string> {
   const out = new Map<number, string>();
   const i = levelDataXml.indexOf("<Layers>"), j = levelDataXml.indexOf("</Layers>");
@@ -34,4 +37,25 @@ export function defaultHiddenLayers(names: Map<number, string>): Set<number> {
     else if (m && Number(m[2]) > 0 && hasState0.has(m[1].toLowerCase())) hidden.add(id);
   }
   return hidden;
+}
+
+/**
+ * Doors (AnimDoor entities) in the layer files (layers/<name>{guid}.xml) of layers shown at game
+ * start. The mission file holds 866 of Rataje's doors; 160 more live in 46 layer files, among
+ * them Skalitz's around Henry's home (sv_state0_prefabs) and Rattay castle's hall (hall_door_state0).
+ * Reading every layer file (87 MiB) takes about half a second; only those with doors are parsed.
+ */
+export async function layerDoors(entries: PakEntry[], read: (e: PakEntry) => Promise<Uint8Array>, names: Map<number, string>, hidden: Set<number>): Promise<EntityInfo[]> {
+  const ids = new Map([...names].map(([id, n]) => [n.toLowerCase(), id]));
+  const out: EntityInfo[] = [];
+  for (const e of entries) {
+    const m = /^layers\/([^{/]+)(\{[^}]*\})?\.xml$/i.exec(e.name);
+    if (!m) continue;
+    const id = ids.get(m[1].toLowerCase());
+    if (id === undefined || hidden.has(id)) continue;
+    const text = new TextDecoder().decode(await read(e));
+    if (!text.includes('EntityClass="AnimDoor"')) continue;
+    for (const ent of parseEntityIndex(text).values()) if (ent.cls === "AnimDoor" && ent.model) out.push(ent);
+  }
+  return out;
 }

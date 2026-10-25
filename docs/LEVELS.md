@@ -417,8 +417,13 @@ Decoded by `web/src/navmesh.ts` and `tools/navmesh.py`.
   611 layers.
 - **Layer names.** `leveldata.xml` lists 1,969 layers
   (`<Layer Name="re_executioner_state0{guid}" Id="1269" Specs="-1"/>`).
-  Layered entities live in `layers/*.xml` (not loaded); mission entities
-  have no layer.
+  Layered entities live in `layers/<name>{guid}.xml` (1,831 files, 87 MiB);
+  mission entities have no layer. Of them, only the **doors** of layers
+  shown at game start are loaded so far (`layerDoors` in
+  `web/src/levelLayers.ts`): 121 beyond the mission's 866, among them every
+  door of Skalitz (`sv_state0_prefabs`) and Rattay castle's hall door
+  (`hall_door_state0`). Other layered entities (NPCs, furniture, items)
+  are still left out.
 - **States coexist in the file:**
   - alternative versions of places (`re_executioner_state0` / `_state1`,
     `hall_state0` / `hall_state2` / `hall_state12`, burned or intact farms,

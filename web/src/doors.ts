@@ -190,6 +190,32 @@ export class Doors {
     return true;
   }
 
+  /** Whether a door is swinging now. */
+  isMoving(id: number): boolean {
+    return this.moving.has(id);
+  }
+
+  /**
+   * Where `user` should stand while door `d` opens towards them: out of the leaf's sweep, along the
+   * line from the hinge (the entity origin), 0.4 m beyond the leaf's length; null when the door
+   * doesn't swing their way or they are clear. In the game Henry's own animation steps him back
+   * (the DoorLeft/DoorRight "Front" helper, 0.7 m out from the leaf's middle, is inside the sweep);
+   * until he has it, the world view slides him there.
+   */
+  clearSpot(d: Door, user: Vec3): Vec3 | null {
+    const box = this.boxes.get(d.entity.id);
+    if (!box || !d.clip || !d.open) return null;
+    const [w, x, y, z] = d.entity.rot;
+    const fwd = [2 * (x * y - w * z), 1 - 2 * (x * x + z * z)];
+    const h = d.entity.pos, dx = user[0] - h[0], dy = user[1] - h[1];
+    // opening from the front: the leaf swings into the user's (−Y) half
+    if (dx * fwd[0] + dy * fwd[1] > 0) return null;
+    const reach = Math.max(Math.abs(box[0]), Math.abs(box[3])) + 0.4, dist = Math.hypot(dx, dy);
+    if (dist >= reach) return null;
+    const ux = dist > 1e-3 ? dx / dist : -fwd[0], uy = dist > 1e-3 ? dy / dist : -fwd[1];
+    return [h[0] + ux * reach, h[1] + uy * reach, user[2]];
+  }
+
   /** Advance the moving doors by `dt` seconds; returns the ids whose leaf moved. */
   step(dt: number): number[] {
     const out: number[] = [];

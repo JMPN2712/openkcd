@@ -249,6 +249,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const showDoor = (id: number) => { for (const { index, m } of doors.matrices(id)) models.setSceneMatrix(index, m); };
   /** what E would do now (HUD hint), refreshed each frame */
   let doorHint: { door: Door; act: ReturnType<Doors["action"]> } | null = null;
+  /** Henry stepping back out of a door's swing over STEP_ASIDE seconds (doors.ts clearSpot) */
+  let stepAside: { from: number[]; to: number[]; t: number } | null = null;
+  const STEP_ASIDE = 0.6;
   void PlayerAvatar.load(vfs, { maxTextureDim: Math.max(256, q.maxTextureDim) }).then((avatar) => {
     if (stopped) return;
     player = new PlayerSession(surroundings, avatar, SPAWN, SPAWN_YAW);
@@ -387,7 +390,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       }
       if ((e.code === "KeyX" || e.code === "CapsLock") && player) player.walk = !player.walk;
       if (e.code === "KeyV" && player && mode === "player") player.setView(player.viewMode === "first" ? "third" : "first");
-      if (e.code === "KeyE" && player && mode === "player" && doorHint) doors.use(doorHint.door, player.controller.pos);
+      if (e.code === "KeyE" && player && mode === "player" && doorHint && doors.use(doorHint.door, player.controller.pos)) {
+        const to = doors.clearSpot(doorHint.door, player.controller.pos);
+        if (to) stepAside = { from: [...player.controller.pos], to, t: 0 };
+      }
       if (e.code === "KeyT" && player && mode === "fly") {
         player.controller.pos = [cam.pos[0], cam.pos[1], cam.pos[2]];
         player.controller.vel = [0, 0, 0];
@@ -452,6 +458,14 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     for (const id of doorsMoved) showDoor(id);
     if (mode === "player" && player) {
       player.update(dt, player.input(keys));
+      if (stepAside) {
+        // eased; collision still applies on his next update
+        stepAside.t = Math.min(STEP_ASIDE, stepAside.t + dt);
+        const k = stepAside.t / STEP_ASIDE, e = k * k * (3 - 2 * k), s = stepAside;
+        player.controller.pos[0] = s.from[0] + (s.to[0] - s.from[0]) * e;
+        player.controller.pos[1] = s.from[1] + (s.to[1] - s.from[1]) * e;
+        if (k >= 1) stepAside = null;
+      }
       Object.assign(cam, player.camera(dt));
       // keep a chase camera above the terrain
       const g = heightAt(terrain, cam.pos[0], cam.pos[1]);
@@ -464,7 +478,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       doorHint = target ? { door: target, act: doors.action(target) } : null;
       const near = new Set(doors.near(feet, 12));
       for (const id of doorColliders) if (!near.has(id)) { surroundings.setDynamic(id, null); doorColliders.delete(id); }
-      for (const id of near) if (!doorColliders.has(id) || doorsMoved.includes(id)) { surroundings.setDynamic(id, doors.collider(id)); doorColliders.add(id); }
+      // (a swinging leaf doesn't shove Henry: it collides again where it stops)
+      for (const id of near) {
+        if (doors.isMoving(id)) { if (doorColliders.delete(id)) surroundings.setDynamic(id, null); continue; }
+        if (!doorColliders.has(id)) { surroundings.setDynamic(id, doors.collider(id)); doorColliders.add(id); }
+      }
     } else {
       const speed = (keys.has("ShiftLeft") || keys.has("ShiftRight") ? 400 : 60) * dt;
       const fx = Math.cos(cam.yaw), fy = Math.sin(cam.yaw);

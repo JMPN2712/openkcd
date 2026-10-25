@@ -1,5 +1,6 @@
 // Doors on Rataje (src/doors.ts, read-only): the doors in a scene around the tailor's house, as
 // the world view streams them.
+// - The doors of the editor layers shown at game start load too (Skalitz, Rattay castle's hall).
 // - Every door has its leaf box, and its open pose (the end of its front clip) swings the leaf
 //   80–100° about its hinge: the box's hinge edge stays within 0.15 m, the far edge moves.
 // - Using the tailor's house door from inside (its front: the door's −Y side, by the door script's
@@ -27,6 +28,11 @@ const lvl = await openRataje(root, { cover: false });
 const doors = new Doors(lvl.vfs, lvl.props);
 const all = [...doors.doors.values()];
 console.log(`${all.length} doors in Rataje: ${all.filter((d) => d.right).length} right, ${all.filter((d) => !d.right).length} left, ${all.filter((d) => d.locked).length} locked`);
+// the mission's 866 and the visible layers' (levelLayers.ts layerDoors): Skalitz around Henry's
+// home, Rattay castle's hall door
+const skalitz = all.find((d) => Math.hypot(d.entity.pos[0] - 793.4, d.entity.pos[1] - 3459.6) < 0.3);
+const hall = all.find((d) => Math.hypot(d.entity.pos[0] - 2700.3, d.entity.pos[1] - 664.1) < 0.3);
+check(all.length > 866 && !!skalitz && !!hall && !hall.locked, `doors from the visible editor layers: ${all.length - 866} more, among them Skalitz's by Henry's home and Rattay castle's hall door (unlocked)`);
 doors.preload();
 await doors.ready();
 
@@ -74,7 +80,13 @@ if (door) {
   check(ray() === null, "without the leaf the doorway is open (the house's collision leaves it free)");
   world.setDynamic(1, doors.collider(door.entity.id));
   check(ray() !== null, "the shut door blocks the doorway");
+  // the game's user spots (DoorRight helpers Front / Back: 0.6 m along the leaf, 0.7 m out)
+  const at = (lx: number, ly: number): [number, number, number] => [c[0] + xa[0] * lx + fwd[0] * ly, c[1] + xa[1] * lx + fwd[1] * ly, c[2]];
+  const front = at(-0.6, -0.7), back = at(-0.6, 0.7);
   check(doors.action(door) === "open" && doors.use(door, inside), "E from inside starts door_r_f_o_player");
+  const spot = doors.clearSpot(door, front);
+  const reach = spot && Math.hypot(spot[0] - c[0], spot[1] - c[1]);
+  check(!!spot && reach! > 1.4 && doors.clearSpot(door, back) === null, `opening towards Henry at the Front helper steps him ${spot ? Math.hypot(spot[0] - front[0], spot[1] - front[1]).toFixed(2) : "?"} m out of the swing (to ${reach?.toFixed(2)} m from the hinge); from the Back helper it swings away`);
   let t = 0;
   while (door.clip && t < 10) { doors.step(0.1); t += 0.1; }
   check(door.open && Math.abs(Math.abs((Math.atan2(door.leaf[1], door.leaf[0]) * 180) / Math.PI) - 90) < 10, `open after ${t.toFixed(1)} s`);

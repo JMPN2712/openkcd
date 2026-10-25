@@ -15,7 +15,7 @@ import { ReadWorkers } from "./readWorkers.ts";
 import { parseNpcEntities, parseEntityIndex, propEntities, type EntityInfo, type NpcEntity } from "./levelEntities.ts";
 import { Schedules } from "./schedule.ts";
 import { NavMesh } from "./navmesh.ts";
-import { parseLayerNames, defaultHiddenLayers } from "./levelLayers.ts";
+import { parseLayerNames, defaultHiddenLayers, layerDoors } from "./levelLayers.ts";
 import { ASSET_RE } from "./assets.ts";
 import { parseTimeOfDay, type TimeOfDay } from "./tod.ts";
 import { parseSurfaceTypes } from "./terrainDetail.ts";
@@ -77,10 +77,14 @@ export function levelData(paks: PakSource[], level: string, status: (s: string) 
       // editor layers: alternative states and cutscene sets hidden at game start (levelLayers.ts)
       const ld = entries.find((e) => e.name.toLowerCase() === "leveldata.xml");
       const ldText = ld ? new TextDecoder().decode(await readEntry(blob, ld, undefined, false)) : "";
-      const hiddenLayers = ld ? defaultHiddenLayers(parseLayerNames(ldText)) : new Set<number>();
+      const layerNames = parseLayerNames(ldText);
+      const hiddenLayers = ld ? defaultHiddenLayers(layerNames) : new Set<number>();
       const surfaceTypes = parseSurfaceTypes(ldText);
       const npcEntities = parseNpcEntities(xml);
       const ents = parseEntityIndex(xml);
+      // the doors of the layers shown at game start (Skalitz's, Rattay castle hall's): drawn and usable
+      status("Reading doors from the editor layers…");
+      for (const d of await layerDoors(entries, (e) => readEntry(blob, e, undefined, false), layerNames, hiddenLayers)) if (!ents.has(d.id)) ents.set(d.id, d);
       const schedules = new Schedules(npcEntities, ents);
       // the level's navmesh (recast.pak), for NPC walking routes
       const recast = paks.find((x) => x.path.toLowerCase() === `data/levels/${level}/recast.pak`);

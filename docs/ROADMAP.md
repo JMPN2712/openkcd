@@ -21,7 +21,7 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
   in progress, an Apple M3 Pro. The repository stays private until the user
   makes it public. Changes now go through pull requests, with the
   clean-room audit (`tools/audit.sh`) and a build in the `checks` workflow.
-- **Doors (2026-10-25):** E opens and closes doors with the game's clips,
+- **Doors (2026-10-25), checked by the user:** E opens and closes doors with the game's clips,
   the leaves collide, and Henry can walk into houses: invisible horse-only
   blockers in doorways had stopped him (`docs/PHYSICS.md`). Chests and beds
   next.
@@ -379,6 +379,11 @@ its cost on Potato with a full market.
   - [x] Henry walks through doorways: the horse-only blockers in them
         (surface type `mat_horse_only`) no longer stop him; 277 in the
         market's 200 m.
+  - [x] Doors in the editor layers shown at game start (2026-10-25): 121
+        more, Skalitz's and Rattay castle's hall door among them. When a
+        door opens towards Henry he steps out of its swing (until his own
+        animation does it), and a swinging leaf no longer shoves him.
+  - [ ] Other layered entities (furniture, NPCs, items in `layers/*.xml`).
   - [ ] Henry's hand animation for doors; NPCs opening the doors they pass
         through (their walk-through clips are in `doors.dba`); door sounds
         (step 4); keys and lockpicking (core gameplay).
