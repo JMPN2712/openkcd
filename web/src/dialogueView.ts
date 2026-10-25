@@ -39,6 +39,9 @@ export class DialogueHost {
     return !!this.player;
   }
 
+  /** The NPC (soul) who spoke last in the playing sequence: whom the dialogue camera frames. */
+  partner: string | null = null;
+
   private load(): Promise<Loaded> {
     return (this.loaded ??= (async () => {
       const text = new Localization();
@@ -79,6 +82,7 @@ export class DialogueHost {
     this.playing?.stop();
     this.playing = null;
     this.player = null;
+    this.partner = null;
     this.shown = undefined;
     this.subtitle.hidden = true;
   }
@@ -89,6 +93,7 @@ export class DialogueHost {
     if (!p) return;
     for (const e of p.advance(dt)) {
       if (e.kind !== "say") continue;
+      if (e.actor?.soul) this.partner = e.actor.soul;
       this.playing?.stop();
       this.playing = null;
       const b = this.buffers.get(e);

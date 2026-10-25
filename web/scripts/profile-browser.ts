@@ -5,7 +5,7 @@
 // call crosses into the GPU process: this measures what a player gets.
 // Driven over the DevTools protocol (Node's built-in WebSocket); no npm deps.
 // usage: node scripts/profile-browser.ts [--root=GAME_ROOT] [--preset=high] [--settle=30]
-//          [--seconds=8] [--windowed] [--dialogue=SEQUENCE_ID] [--at=x,y[,yaw°]] [--fly=SECONDS [--spikes]] [--build-slim=full|potato] [--package] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080]
+//          [--seconds=8] [--windowed] [--dialogue=SEQUENCE_ID [--shot=close_up] [--screenshot=PREFIX]] [--at=x,y[,yaw°]] [--fly=SECONDS [--spikes]] [--build-slim=full|potato] [--package] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080]
 //   CHROME=… picks the browser binary, CHROME_FLAGS=… adds flags, PROFILE_DIR=… keeps the profile; --probe stops after naming the
 //   WebGPU adapter; --fly then flies north-west across the map (free-fly, 60 m/s: a streaming
 //   step every few seconds) printing the HUD every 10 s, then profiles there; with --spikes it
@@ -198,6 +198,14 @@ console.log(readings.join("\n"));
 // its subtitles as they appear, and how many of its lines decoded to audio
 const dialogueId = arg("dialogue", "");
 if (dialogueId) {
+  // --shot=close_up …: the dialogue camera's debug shot; --screenshot=PREFIX saves a PNG at each new subtitle
+  const shot = arg("shot", "");
+  const shots = arg("screenshot", "");
+  if (shot) {
+    await evaluate(`(() => { const s = document.querySelector(".level-dialogue-shot"); s.value = ${JSON.stringify(shot)}; s.dispatchEvent(new Event("change")); })()`);
+    await sleep(1500);
+  }
+  let shotNo = 0;
   await evaluate(`(() => { const i = document.querySelector(".level-dialogue-id"); i.value = ${JSON.stringify(dialogueId)}; [...document.querySelectorAll("button")].find((b) => /Dialogue/.test(b.textContent)).click(); })()`);
   const td = Date.now();
   const started = await waitFor("the dialogue", () => hud().then((s) => /Dialogue \d+:|Dialogue: |No dialogue/.test(s) ? s.slice(s.lastIndexOf(" · ") + 3) : undefined), 120000);
@@ -205,7 +213,14 @@ if (dialogueId) {
   let last = "", quietFor = 0;
   while (quietFor < 6) {
     const sub = await evaluate<string>(`(() => { const s = document.querySelector(".level-subtitle"); return s && !s.hidden ? s.textContent : ""; })()`);
-    if (sub && sub !== last) console.log(`  ${((Date.now() - td) / 1000).toFixed(1).padStart(5)} s  ${sub}`);
+    if (sub && sub !== last) {
+      console.log(`  ${((Date.now() - td) / 1000).toFixed(1).padStart(5)} s  ${sub}`);
+      if (shots) {
+        await sleep(400); // the camera follows the new speaker from the next frame
+        const { data } = await page("Page.captureScreenshot", { format: "png" });
+        await writeFile(`${shots}${shotNo++}.png`, Buffer.from(data, "base64"));
+      }
+    }
     quietFor = sub ? 0 : quietFor + 1;
     last = sub;
     await sleep(500);

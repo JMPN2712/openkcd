@@ -423,8 +423,15 @@ its cost on Potato with a full market.
         gossip 46319 end to end; checked in headless Chrome by the
         tailor's shop (all 6 lines voiced). Cost: about 1.5 s to load on
         first use, about 125 MiB kept.
-  - [ ] Dialogue camera: the rig and its blendspace are in the data; the
-        shot for each line needs a research note.
+  - [x] Dialogue camera rig (2026-10-25, `web/src/dialogueCamera.ts`):
+        the camera skeleton on Henry is posed by its blendspace from where
+        the partner stands (angle, distance, height). The four shots
+        (`master`, `medium`, `close_shot`, `close_up`) frame the partner
+        as the game's do. `scripts/test-dialogue-camera.ts`; renders with
+        `render-player.ts --dialogue-shot`. In the view a debug picker
+        chooses the shot.
+  - [ ] Which shot each line uses, and when it cuts: needs a research
+        note. So do the mood/posture clips added on top and the lens.
   - [ ] Research note needed (`notes/dialogue.md`): conversation starts,
         choice lists, entry conditions, sequence flow (`next`, `type`,
         `flags`, timeouts).

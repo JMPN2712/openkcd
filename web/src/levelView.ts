@@ -35,6 +35,7 @@ import { Doors, type Door } from "./doors.ts";
 import { Chests, type Chest } from "./chests.ts";
 import { Localization } from "./localization.ts";
 import { DialogueHost } from "./dialogueView.ts";
+import { DialogueCameraRig, SHOTS, type Shot } from "./dialogueCamera.ts";
 import { Beds, sleepMinutes, WAKE_MINUTE, type Bed } from "./beds.ts";
 import { depthClear, depthFormat, type PassSetup } from "./mat4.ts";
 import type { TimeOfDay } from "./tod.ts";
@@ -163,7 +164,21 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   dlgId.title = "Dialogue sequence id (debug)";
   const dlgBtn = el("button", undefined, "▶ Dialogue");
   dlgBtn.type = "button";
-  clockBar.append(dlgId, dlgBtn);
+  // debug: the dialogue camera's shot while a dialogue plays (which shot a line uses waits for a
+  // research note): the rig on Henry, framing the NPC who spoke last
+  const shotSel = el("select", "level-dialogue-shot");
+  shotSel.title = "Dialogue camera shot (debug)";
+  for (const s of ["off", ...SHOTS]) shotSel.append(new Option(s === "off" ? "Camera: normal" : `Camera: ${s}`, s));
+  clockBar.append(dlgId, dlgBtn, shotSel);
+  let cameraRig: Promise<DialogueCameraRig | null> | null = null;
+  let rig: DialogueCameraRig | null = null;
+  /** Henry's view before the dialogue camera took over (it shows his head, so third person meanwhile) */
+  let viewBeforeShot: "first" | "third" | null = null;
+  shotSel.addEventListener("change", () => {
+    cameraRig ??= DialogueCameraRig.load(vfs).catch((err) => { console.warn("dialogue camera:", err); return null; });
+    void cameraRig.then((r) => { rig = r; });
+    canvas.focus();
+  });
   // an open chest's contents
   const chestPanel = el("div", "level-chest");
   chestPanel.hidden = true;
@@ -565,6 +580,18 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         if (k >= 1) stepAside = null;
       }
       Object.assign(cam, player.camera(dt));
+      // the dialogue camera (debug shot choice): the rig on Henry, aimed by the NPC who spoke last
+      const shot = shotSel.value as Shot | "off";
+      const talker = shot !== "off" && rig && dialogue.partner ? npcs.find((n) => n.soul === dialogue.partner) : undefined;
+      if (talker && !viewBeforeShot) { viewBeforeShot = player.viewMode; player.setView("third"); }
+      if (!talker && viewBeforeShot) { player.setView(viewBeforeShot); viewBeforeShot = null; }
+      if (talker && rig && shot !== "off") {
+        const s = rig.place(player.controller.pos, player.controller.yaw, (npcWorld.drawn(talker.entity.id) ?? talker.placement).pos)[shot];
+        const d = [s.target[0] - s.eye[0], s.target[1] - s.eye[1], s.target[2] - s.eye[2]];
+        cam.pos = [...s.eye];
+        cam.yaw = Math.atan2(d[1], d[0]);
+        cam.pitch = Math.atan2(d[2], Math.hypot(d[0], d[1]));
+      }
       // keep a chase camera above the terrain
       const g = heightAt(terrain, cam.pos[0], cam.pos[1]);
       if (player.viewMode === "third" && cam.pos[2] < g + 0.3) cam.pos[2] = g + 0.3;

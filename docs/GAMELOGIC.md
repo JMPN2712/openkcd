@@ -321,12 +321,35 @@ NotNearPlayer, IsLoadedGate, RemoveLink.
 - **Waiting on research notes:** how a conversation starts (approach,
   greeting, topic choice by condition and priority), how choices are
   offered (`type`, `flags`, `next`, timeouts), how entry conditions
-  evaluate, and the dialogue camera's shot choice. The camera rig itself
-  is in the data: `dialog_cameras.chr` has `master`, `close_shot`,
-  `close_up` and `medium` camera bones with targets, attached at Henry's
-  `Align`. Its 3D blendspace `3d_ad_cameras_base.bspace` is laid out by
-  the partner's angle (−180°…180°), distance (80–250 cm) and height
-  (−45…45 cm).
+  evaluate, and which camera shot a line uses (and when it cuts).
+- **The dialogue camera rig (`web/src/dialogueCamera.ts`).** This part is
+  in the data.
+  - `dialog_cameras.chr` is a skeleton of camera bones: `master`,
+    `medium`, `close_shot` and `close_up`, each with a `<name>_target`
+    bone it looks at.
+  - `male.cdf` attaches it at Henry's `Align` (his feet, facing +Y).
+  - Its pose comes from the 3D blendspace `3d_ad_cameras_base.bspace`:
+    45 one-pose clips named by where the partner stands
+    (`ad_cam_base_y<height>_z<distance>_x<angle>`). The grid covers
+    angles −180…180°, distances 80/140/250 cm and heights −45/0/45 cm,
+    and each `SetPara` value rises with its label.
+  - Between grid points the rig blends the eight corners trilinearly,
+    piecewise linear in each label. That is our reading; the clip names
+    give the layout.
+  - The clips are the patched ones (`Data/patch/ipl_patch_010900.pak`;
+    chest offset 1.45 m). In them every shot looks towards the partner
+    (`close_up` within 19°, the others within 36°) from beside or behind
+    Henry at head height. `master` is not a wide shot, as its name
+    suggests: it is a close two-shot.
+  - **Left out:** the mood and posture clips added on top
+    (`ad_cam_base_stand_calm_add`, `…_bench_…`, `…_table_…`) and the
+    lens. The view keeps its own field of view.
+  - **In the view:** a debug picker (*Camera: …*) puts the camera on one
+    shot while a dialogue plays. The rig sits on Henry and frames the NPC
+    who spoke last; Henry switches to third person meanwhile so his head
+    shows. `scripts/test-dialogue-camera.ts` checks the rig.
+    `render-player.ts --at-npc rat_tailor --npc-dist 1.4 --dialogue-shot
+    close_up` renders a shot with Henry facing the tailor.
 
 ## Quests (`Libs/Quests/flowgraphs`)
 

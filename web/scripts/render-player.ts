@@ -36,6 +36,8 @@ import { Schedules } from "../src/schedule.ts";
 import { NavMesh } from "../src/navmesh.ts";
 import { readCentralDirectory, readEntry } from "../src/zip.ts";
 
+import { DialogueCameraRig, type Shot } from "../src/dialogueCamera.ts";
+let dialogueRig: Promise<DialogueCameraRig> | null = null;
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
 const root = opt("--root", join(homedir(), "kcd1"));
@@ -51,6 +53,9 @@ const grassRadius = Number(opt("--grass", "55")); // 0: no grass
 const atNpc = opt("--at-npc", ""); // with --npcs: the camera in front of this NPC (by name), facing them
 const npcDist = Number(opt("--npc-dist", "3")); // metres from that NPC; --npc-yaw turns the camera around them (degrees)
 const npcYaw = (Number(opt("--npc-yaw", "0")) * Math.PI) / 180;
+// --dialogue-shot SHOT (with --at-npc): Henry stands --npc-dist in front of that NPC, facing them, and
+// the camera takes the dialogue rig's shot (src/dialogueCamera.ts: master, medium, close_shot, close_up)
+const dialogueShot = opt("--dialogue-shot", "") as Shot | "";
 const withNpcs = args.includes("--npcs") ? (args.splice(args.indexOf("--npcs"), 1), true) : false; // NPCs within 120 m, by their schedules
 const [outDir] = args;
 if (!outDir) throw new Error("usage: render-player.ts OUT_DIR [options]");
@@ -214,6 +219,19 @@ async function render(name: string): Promise<void> {
       const ex = p.pos[0] + Math.cos(yaw) * npcDist, ey = p.pos[1] + Math.sin(yaw) * npcDist;
       cam = { pos: [ex, ey, p.pos[2] + Number(process.env.NPC_EYE ?? 1.5)], yaw: yaw + Math.PI, pitch: Number(process.env.NPC_PITCH ?? -0.12) };
       console.log(`framing ${atNpc}: ${p.activity} at ${p.where}, ${p.pose}, feet at z ${p.pos[2].toFixed(2)} (terrain ${heightAt(lvl.terrain, p.pos[0], p.pos[1]).toFixed(2)})`);
+      if (dialogueShot) {
+        const feet: [number, number, number] = [ex, ey, surroundings.ground(ex, ey, p.pos[2] + 0.5, p.pos[2] - 1.5)?.z ?? p.pos[2]];
+        const henryYaw = yaw + Math.PI;
+        session.setView("third");
+        session.avatar.place(feet, henryYaw);
+        session.avatar.upload(playerR);
+        const rig = await (dialogueRig ??= DialogueCameraRig.load(lvl.vfs));
+        const placed = rig.place(feet, henryYaw, p.pos);
+        const s = placed[dialogueShot];
+        const d = [s.target[0] - s.eye[0], s.target[1] - s.eye[1], s.target[2] - s.eye[2]];
+        cam = { pos: [...s.eye], yaw: Math.atan2(d[1], d[0]), pitch: Math.atan2(d[2], Math.hypot(d[0], d[1])) };
+        console.log(`dialogue shot ${dialogueShot}: partner at ${placed.partner.angle.toFixed(0)}°, ${placed.partner.distance.toFixed(0)} cm, ${placed.partner.height.toFixed(0)} cm; eye ${s.eye.map((v) => v.toFixed(2)).join(",")}`);
+      }
     }
   }
   const g = heightAt(lvl.terrain, cam.pos[0], cam.pos[1]);
