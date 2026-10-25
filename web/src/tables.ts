@@ -13,7 +13,8 @@ export function parseTable(text: string): Row[] {
   const out: Row[] = [];
   for (const m of text.matchAll(ROW_RE)) {
     const row: Row = {};
-    for (const a of m[1].matchAll(ATTR_RE)) row[a[1]] = a[2].includes("&") ? a[2].replace(/&(amp|lt|gt|quot|apos);/g, (_, e: string) => ENTITIES[e]) : a[2];
+    // named entities and numeric ones (dialogue conditions break lines with &#xD;&#xA;)
+    for (const a of m[1].matchAll(ATTR_RE)) row[a[1]] = a[2].includes("&") ? a[2].replace(/&(amp|lt|gt|quot|apos|#x[0-9a-fA-F]+|#\d+);/g, (_, e: string) => ENTITIES[e] ?? String.fromCharCode(e[1] === "x" ? parseInt(e.slice(2), 16) : Number(e.slice(1)))) : a[2];
     out.push(row);
   }
   return out;

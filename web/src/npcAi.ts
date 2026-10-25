@@ -165,10 +165,18 @@ export class NpcAi {
     return [...this.driven.keys()];
   }
 
+  /**
+   * NPCs in a conversation with Henry: their trees and walks wait (ours, not from a note: the
+   * game interrupts the daily cycle for a dialogue in a way the notes don't cover yet).
+   */
+  readonly paused = new Set<number>();
+
   /** Advance the AI clock, every walk, and the trees that are due (TICK). */
   tick(dt: number): void {
     this.now += dt;
-    for (const d of this.driven.values()) {
+    for (const [id, d] of this.driven) {
+      // paused: the clock moves on around it (walks, clips and a wind-down deadline hold)
+      if (this.paused.has(id)) { d.due = this.now + TICK; d.state.since += dt; if (d.deadline !== undefined) d.deadline += dt; continue; }
       const st = d.state;
       if (st.mode === "walk" && st.route && st.duration !== undefined) {
         const { pts, cum } = st.route;

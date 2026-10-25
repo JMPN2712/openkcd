@@ -126,7 +126,8 @@ Click the view to capture the mouse; Esc releases it.
 | Space | jump |
 | V | first / third person |
 | Mouse wheel | third-person camera distance (1–8 m) |
-| E | open or close the door or chest you face (a prompt below the middle of the view says when one is in reach; locked ones stay shut); an open chest lists what it holds; on a bed, sleep until 7:00 |
+| E | talk to the person you face ("Talk to …" when they have something to say); open or close the door or chest you face (a prompt below the middle of the view says when one is in reach; locked ones stay shut); an open chest lists what it holds; on a bed, sleep until 7:00 |
+| 1–9, ↑ ↓, Enter | in a conversation: pick a reply (a timed reply takes the highlighted one when its bar runs out); Space skips the line being said |
 | F | free-fly camera (debugging): drag to look, W A S D to move, Space/E up, C/Q down, Shift faster |
 | T | in free-fly: put Henry under the camera |
 
@@ -141,10 +142,11 @@ the address starts Henry there, e.g. `?at=2522,545` by the tailor's shop.
 ## Known issues
 
 - **No gameplay yet:** no combat, quests, inventory or saves. NPCs follow
-  their daily routines but don't react to Henry. Dialogue plays (voices and
-  subtitles) only from the debug control: nobody starts a conversation yet,
-  there are no response choices, and the dialogue camera's shots are picked
-  by hand.
+  their daily routines but don't react to Henry on their own. You can talk
+  to them (greetings, replies, farewells, in their recorded voices), but
+  what trade, repairs and training open isn't there yet, haggling shows a
+  placeholder, quest topics stay hidden (no quests are started), and the
+  dialogue camera keeps one shot.
 - **Doors:** Henry opens and closes them (E) without his hand animation;
   locked doors can't be opened yet (no keys or lockpicking); NPCs walk
   through closed doors; no door sounds.

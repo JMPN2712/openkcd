@@ -325,15 +325,19 @@ the time changes, though a round's shop visit can fail.
 
 - **The tables.** 52,415 sequences hold 201,190 lines.
   - `topic2sequence` lists a topic's sequences, each with entry conditions
-    (expressions such as `var('3') AND var('4')`, not evaluated yet).
+    (expressions such as `var('3') AND var('4')`, see Conversations).
   - `sequence_line` orders a sequence's lines (`order_by`) and types them.
     Type 1 is a response, 84,632 of them, with a row in `response`: the
     speaking role, a `text_ui_dialog` key, camera mode and volume. Type 5
     is a command, 82,657 of them, in `v_dialogue_commands`. Types 2 and 4
     (2,618 and 31,281) have no table of their own.
-  - `sequence` gives `next`, `type`, `flags`, `priority`, `timeout`,
-    `speech_coef`, a Lua `script` and a `ui_prompt` per sequence. What
-    these mean for the flow waits on a research note.
+  - `sequence` gives `next` (the topic that follows), `type`, `flags`,
+    `priority` (menu order), `group`, `timeout`, `speech_coef`, a Lua
+    `script` and a `ui_prompt` per sequence.
+  - `v_branch` (8,926) gives the entry points: a start topic, a type
+    (0 normal … 7 refusal), a priority and whether a greeting may come
+    first; `topic` gives each topic's menu priority, speaking role, label
+    and time limit; `topictorole` the role and metarole pairs a topic needs.
 - **Commands.** Each has who and target (role ids), a type, `int_param`,
   `char_param` and a `delay` in seconds. Two types read plainly from the
   data:
@@ -365,10 +369,52 @@ the time changes, though a round's shop visit can fail.
   near Henry that can play each role.
 - **Cost.** Loaded on first use, about 1.5 s in Chrome. Kept in memory:
   64 MiB of tables, 11 MiB of text and a 49 MiB index of 148k recordings.
-- **Waiting on research notes:** how a conversation starts (approach,
-  greeting, topic choice by condition and priority), how choices are
-  offered (`type`, `flags`, `next`, timeouts), how entry conditions
-  evaluate, and which camera shot a line uses (and when it cuts).
+- **Conversations (`web/src/dialogueFlow.ts`, `dialogueCondition.ts`),**
+  from the research note `dialogue.md`:
+  - **Starting.** E talks to the NPC Henry faces (within 2.5 m) when it
+    "has something to say": a branch of type 0, 1 or 5 whose roles fit
+    and whose entry condition holds. A participant fits a role pair when
+    it has the role and holds the metarole now: soul2metarole plus what
+    behaviours grant. A shopkeeper holds `MERCHANT` and `REPAIRMAN`
+    while his work behaviour runs, as the land's `goToSmartArea` grants
+    them (`shop/shopkeeper`); the trade and repair branches need them.
+  - **Narrowing.** Refusals win; then the top branch priority;
+    player conversations over NPC-only ones; above priority 0 one is
+    picked at random and plays at once.
+  - **Greeting** (type 2) before the first choice, its follow-ups one
+    random sequence per topic; **farewell** (type 3) a single barked line.
+    The tailor's greeting script removes his `POZDRAV` metarole, so he
+    greets once.
+  - **The menu**: the game's stable merge sort (topic priority, then
+    topic id + sequence priority), `(Back)` for type 7, `(End dialog)` at
+    the top level, the "exhausted" marker, and a countdown bar for timed
+    topics that takes the highlighted option at zero. A lone candidate
+    mid-conversation plays without a menu. Flags 1 and 8 end the
+    conversation (no return to the menu); flag 2 opens the price panel,
+    a placeholder for now. Sequence timeouts (−1 once, N seconds of game
+    time) make sequences unavailable after use.
+  - **Conditions**: the condition language with actor indices and named
+    conditions (`dialogue_functions`). All 16k entry conditions and 261
+    named ones parse; `--` starts a comment. Quests, relationships, stats
+    and items aren't modelled: their functions read "not started", 0,
+    and a relationship of 0.5 (ASSUMPTION, the middle reputation band).
+  - **Scripts** run in the game's Lua with `g_varContext`, `dc` (role →
+    the participant's entity) and `Variables` over the dialogue's locals
+    (kept per pair of participants) and globals.
+  - **ASSUMPTIONs** for research: start branches match roles strictly
+    (one pair per participant; greetings and farewells loosely), test
+    branches are left out, owning start topics come from walking each
+    branch's `next` links, and the NPC Henry talks to pauses its
+    behaviour tree.
+  - **Check** (`scripts/test-dialogue-flow.ts`, the note's walkthrough):
+    with the shop open, the tailor greets, the menu is trade, repair,
+    (End dialog); trade ends it with his farewell; without `MERCHANT`
+    trade is gone; topic 6807 shows priorities 0, 1, 2 with a 10 s limit.
+    In headless Chrome (`profile-browser.ts --talk=rat_tailor --pick=3`)
+    the same conversation plays with his recorded voice.
+- **Waiting on research notes:** which camera shot a line uses (and when it
+  cuts); the price panel's details; what shops, bribes and trainers do
+  after their sequences.
 - **The dialogue camera rig (`web/src/dialogueCamera.ts`).** This part is
   in the data.
   - `dialog_cameras.chr` is a skeleton of camera bones: `master`,

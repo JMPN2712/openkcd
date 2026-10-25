@@ -271,10 +271,12 @@ function __kcd_entity(id, name)
     if type(k) ~= "string" or not k:match("^%u") then return nil end
     return mkstub("entity.soul." .. k)
   end })
+  -- removals are kept (false) so a soul's starting metaroles (soul2metarole) can be taken away
   rawset(soul, "AddMetaRoleByName", function(self, role) roles[role] = true end)
-  rawset(soul, "RemoveMetaRoleByName", function(self, role) roles[role] = nil end)
+  rawset(soul, "RemoveMetaRoleByName", function(self, role) roles[role] = false end)
   rawset(soul, "HasMetaRoleByName", function(self, role) return roles[role] == true end)
-  rawset(soul, "GetMetaRoles", function(self) local out = {} for r in pairs(roles) do out[#out + 1] = r end table.sort(out) return out end)
+  rawset(soul, "GetMetaRoles", function(self) local out = {} for r, on in pairs(roles) do if on then out[#out + 1] = r end end table.sort(out) return out end)
+  rawset(soul, "__kcd_changes", roles)
   e = setmetatable({ id = id, name = name, this = { id = id, name = name }, soul = soul }, { __index = function(t, k)
     if k == "Properties" then
       local p = __kcd_decode(__kcd_entprops(id) or "null") or {}
@@ -290,6 +292,32 @@ function __kcd_entity(id, name)
   end })
   entities[id] = e
   return e
+end
+
+-- a dialogue sequence's script: g_varContext, dc (role name → entity) and Variables over the
+-- dialogue's locals and globals, as the engine sets them around the script; returns the variables,
+-- the price panel's eight shop_* globals (when all are set) and the participants' metarole changes
+local SHOP = { "shop_min", "shop_max", "shop_keeper_price", "shop_your_price", "shop_progress", "shop_original_price", "shop_title_idx", "shop_haggle_step" }
+function __kcd_dialog(code, ctx, dcJson, localsJson, globalsJson)
+  local L, G = decode(localsJson) or {}, decode(globalsJson) or {}
+  local dcIn = decode(dcJson) or {}
+  local saved = { Variables = Variables, g_varContext = g_varContext, dc = dc }
+  local V = setmetatable({}, { __index = saved.Variables })
+  V.SetLocal = function(name, c, v) L[tostring(name)] = v end
+  V.GetLocal = function(name, c) return L[tostring(name)] end
+  V.SetGlobal = function(name, v) G[tostring(name)] = v end
+  V.GetGlobal = function(name) return G[tostring(name)] end
+  Variables, g_varContext, dc = V, ctx, {}
+  local ids = {}
+  for role, who in pairs(dcIn) do dc[role] = __kcd_entity(who.id, who.name) ids[#ids + 1] = who.id end
+  local f, err = loadstring(code, "=dialog")
+  if not f then __kcd_error(err) else local ok, e = pcall(f) if not ok then __kcd_error(tostring(e)) end end
+  Variables, g_varContext, dc = saved.Variables, saved.g_varContext, saved.dc
+  local shop = {}
+  for _, k in ipairs(SHOP) do local v = _G[k] if v == nil then shop = nil break end shop[k] = v end
+  local meta = {}
+  for _, id in ipairs(ids) do meta[tostring(id)] = __kcd_entity(id).soul.__kcd_changes end
+  return json({ locals = L, globals = G, shop = shop, meta = meta }, 0)
 end
 
 function __kcd_exec(code, entityId, entityName, dataJson)
@@ -402,6 +430,30 @@ export class LuaHost {
         if not ok then __kcd_error("OnInit: " .. tostring(e)) return false end
       end
       return true`) === true;
+  }
+
+  /**
+   * Run a dialogue sequence's script (dialogueFlow.ts): `dc` maps role names to the participants'
+   * entities. Returns the dialogue's variables after it, the price panel's globals when all eight
+   * are set, and per entity id the metaroles its soul gained (true) or lost (false) so far.
+   */
+  runDialogue(code: string, ctx: string, dc: Record<string, { id: number; name: string }>, locals: Record<string, Value>, globals: Record<string, Value>): { locals: Record<string, Value>; globals: Record<string, Value>; shop: Record<string, Value> | null; meta: Record<string, Record<string, boolean>> } {
+    const g = this.lua.global;
+    g.set("__kcd_code", code);
+    g.set("__kcd_args", JSON.stringify([ctx, JSON.stringify(dc), JSON.stringify(locals), JSON.stringify(globals)]));
+    const out = this.lua.doStringSync(`local a = __kcd_decode(__kcd_args) return __kcd_dialog(__kcd_code, a[1], a[2], a[3], a[4])`) as string;
+    return JSON.parse(out);
+  }
+
+  /** The metaroles an entity's soul gained (true) or lost (false) through scripts and trees. */
+  metaroleChanges(id: number): Record<string, boolean> {
+    const out = this.lua.doStringSync(`return __kcd_json(__kcd_entity(${Number(id)}).soul.__kcd_changes)`) as string;
+    return JSON.parse(out) ?? {};
+  }
+
+  /** Grant or take a metarole on an entity's soul (as a behaviour does with AddMetaRoleByName). */
+  setMetarole(id: number, name: string, on: boolean): void {
+    this.lua.doStringSync(`__kcd_entity(${Number(id)}).soul:${on ? "AddMetaRoleByName" : "RemoveMetaRoleByName"}(${JSON.stringify(name)})`);
   }
 
   /** Run tree code; returns the variables whose values changed. */

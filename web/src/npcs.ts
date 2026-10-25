@@ -11,7 +11,7 @@ import type { Clip } from "./anim.ts";
 import type { EntityInfo, NpcEntity } from "./levelEntities.ts";
 import type { Placement, Pose, Schedules } from "./schedule.ts";
 import type { NpcAi } from "./npcAi.ts";
-import type { NpcCycle } from "./daycycle.ts";
+import type { NpcCycle, Target } from "./daycycle.ts";
 import type { LoadedModel } from "./model.ts";
 import type { Vfs } from "./vfs.ts";
 import { multiply } from "./mat4.ts";
@@ -224,8 +224,47 @@ export class NpcWorld {
   leaveTree(n: WorldNpc, minute: number): void {
     const st = this.ai?.state(n.entity.id);
     if (st) this.schedules?.depart(n.entity, n.schedule, minute, st.pos);
-    this.ai?.stop(n.entity.id);
-    this.running.delete(n.entity.id);
+    this.stopTree(n.entity.id);
+  }
+
+  /** NPCs whose shop is open (shopOpen): the work behaviour of a shopkeeper runs */
+  private shops = new Set<number>();
+
+  /**
+   * A shopkeeper's shop opens with his work behaviour and closes when it ends, as the land's
+   * goToSmartArea does: his soul holds MERCHANT and REPAIRMAN meanwhile (the trade and repair
+   * conversations need them). Opening and closing the shop's stock waits for shops.
+   */
+  private shopOpen(id: number, open: boolean): void {
+    const lua = this.ai?.world.o.lua;
+    if (!lua || this.shops.has(id) === open) return;
+    if (open) this.shops.add(id); else this.shops.delete(id);
+    for (const role of ["MERCHANT", "REPAIRMAN"]) lua.setMetarole(id, role, open);
+  }
+
+  /** Stop an NPC's tree (closing a shop it kept open). */
+  stopTree(id: number): void {
+    this.ai?.stop(id);
+    this.running.delete(id);
+    this.shopOpen(id, false);
+  }
+
+  /** Start an NPC's activity behaviour (opening a shopkeeper's shop at work). */
+  startTree(n: WorldNpc, t: Target, key: string, pos: [number, number, number], rot: [number, number, number, number]): boolean {
+    const ai = this.ai!;
+    // the shop opens before the behaviour is called, whatever comes of it
+    if (t.where === "work" && ai.world.keepsShop(n.entity.id)) this.shopOpen(n.entity.id, true);
+    const ok = ai.start(n.entity, t.area, t.behaviour, pos, rot);
+    this.running.set(n.entity.id, ok ? key : `!${key}`);
+    return ok;
+  }
+
+  /** Hold an NPC where its tree stopped (an interpreter gap); a shopkeeper's shop stays open. */
+  hold(n: WorldNpc, key: string, minute: number): void {
+    const open = this.shops.has(n.entity.id);
+    this.leaveTree(n, minute);
+    this.running.set(n.entity.id, `!${key}`);
+    if (open) this.shopOpen(n.entity.id, true);
   }
 
   /** Where an NPC is at `minute`: its behaviour tree's state when one drives it, else the schedule. */
@@ -484,7 +523,7 @@ export function updateAi(npcs: WorldNpc[], world: NpcWorld, minute: number): voi
   const ai = world.ai;
   if (!ai) return;
   const inView = new Set(npcs.map((n) => n.entity.id));
-  for (const id of ai.ids()) if (!inView.has(id)) { ai.stop(id); world.running.delete(id); }
+  for (const id of ai.ids()) if (!inView.has(id)) world.stopTree(id);
   for (const n of npcs) {
     const id = n.entity.id;
     const c = world.cycle(n.entity, n.schedule, minute);
@@ -511,8 +550,7 @@ export function updateAi(npcs: WorldNpc[], world: NpcWorld, minute: number): voi
       // ending the activity: the NPC holds its spot and the tree isn't restarted
       if (ai.world.gapIn(id)) {
         world.aiLog?.(n.entity, "gap", `${cur} ${res}`);
-        world.leaveTree(n, minute);
-        world.running.set(id, `!${key}`);
+        world.hold(n, key, minute);
         continue;
       }
       world.aiLog?.(n.entity, "early", `${cur} ${res}`);
@@ -520,13 +558,14 @@ export function updateAi(npcs: WorldNpc[], world: NpcWorld, minute: number): voi
       world.leaveTree(n, minute);
       continue;
     }
+    // a held NPC (no tree) whose activity changed: its shop closes
+    if (cur.startsWith("!") && cur !== `!${key}`) world.stopTree(id);
     if (!key || !t) { world.running.delete(id); continue; }
     const p = world.scheduled(n.entity, n.schedule, minute);
     if (p.pose !== "stand" || p.where !== t.where) { if (cur !== `!${key}`) world.running.delete(id); continue; }
     // a tree that could not start (no such behaviour in the area) is not retried every check
     if (cur === `!${key}`) continue;
-    const ok = ai.start(n.entity, t.area, t.behaviour, p.pos, p.rot);
-    world.running.set(id, ok ? key : `!${key}`);
+    const ok = world.startTree(n, t, key, p.pos, p.rot);
     world.aiLog?.(n.entity, ok ? "start" : "failedStart", `${key} ${t.behaviour}`);
   }
 }

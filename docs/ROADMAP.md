@@ -452,9 +452,17 @@ its cost on Potato with a full market.
         chooses the shot.
   - [ ] Which shot each line uses, and when it cuts: needs a research
         note. So do the mood/posture clips added on top and the lens.
-  - [ ] Research note needed (`notes/dialogue.md`): conversation starts,
-        choice lists, entry conditions, sequence flow (`next`, `type`,
-        `flags`, timeouts).
+  - [x] Conversation starts and choice lists from `notes/dialogue.md`
+        (2026-10-25, `web/src/dialogueFlow.ts`, `dialogueCondition.ts`):
+        E talks to the NPC Henry faces; greetings, the topic menu in the
+        game's order, timed choices, follow-ups and (Back), flags that end
+        the conversation, the farewell bark; entry conditions and sequence
+        scripts. The tailor walkthrough passes headless and in Chrome
+        (`scripts/test-dialogue-flow.ts`, `profile-browser.ts --talk`).
+  - [ ] The price panel (flag 2, haggling and bribes): a placeholder.
+  - [ ] Shop, repair and trainer screens their sequences open.
+  - [ ] Research note needed: role matching's strict mode (where it
+        applies), and how a dialogue interrupts the NPC's daily cycle.
   - [ ] Command lines: moods and `ADLG_*` fragments (with step 5).
 - [ ] **4. Ambient audio:** footsteps per surface, town and nature
       ambience, NPC barks.

@@ -118,6 +118,7 @@ node scripts/test-btworld.ts                     # Rataje's tailor at work: area
 SEED=1 node scripts/test-btworld.ts ~/kcd1 rat_tailor cityWalk sa_rat_city   # his free time: benches, shops, walk points (DEBUG=n: running nodes)
 node scripts/test-daycycle.ts                    # daily cycle: schedule store rules, patches, the tailor's day, hobby draws and areas in Rataje
 node scripts/sim-daycycle.ts --clock 18:27 --minutes 15   # the market across an activity change: trees start/wind down/end, per-frame cost (--max 60, --list)
+node scripts/test-dialogue-flow.ts               # conversations: the tailor walkthrough (greeting, menu order, trade ends it, farewell), timed topic 6807, every condition parses
 node scripts/test-lua.ts                         # Lua 5.1 (WebAssembly): semantics, tree data round trip, boot Scripts/main.lua
 node scripts/bench-npcs.ts                       # CPU benchmark: NPC loading and per-frame cost in Rataje's market (--decode: CPU texture decoding)
 node scripts/render-world.ts /tmp/w --at-npc rat_baker --npc-dist 6 --npcs --clock 12:00   # world with NPCs placed by their schedules, framed on one
@@ -138,6 +139,7 @@ node scripts/build-slim.ts OUT_DIR [--potato] [--store]   # the compact package 
 node scripts/test-slim.ts PACKAGE_DIR            # the package's codec, and a sample of its models and textures against the paks
 node scripts/bench-streaming.ts --back           # what a streaming step costs: scene build, geometry upload (in slices), the renderer rebuild and the frame after, kept geometry memory
 node scripts/profile-browser.ts --at=2522,545 --dialogue=46319   # the same, Henry by the tailor's shop: plays the gossip there and prints its subtitles as Chrome shows them
+node scripts/profile-browser.ts --preset=potato --at=2524,546 --talk=rat_tailor --pick=3   # a conversation with the tailor in Chrome: subtitles, each menu, the options pressed
 node scripts/profile-browser.ts --trace          # the world view in headless Chrome on the real GPU (opens ~/kcd1 through the folder input): HUD fps, a CPU profile, and with --trace how busy Chrome's GPU process is
 node scripts/test-texture-pool.ts                # texture streaming: grow, shrink under a budget (read back from the GPU), reads on worker threads
 node scripts/render-player.ts /tmp/p --walk "1:;2:w;1.5:w+shift;1:"   # headless walk as Henry with scripted input, a frame per segment (--textures 1024,1024 or --no-pool)

@@ -276,6 +276,23 @@ details.part p { margin: 4px 0; }
 .level-subtitle[hidden] { display: none; }
 .level-subtitle b { color: #e3c27a; font-weight: 600; }
 .level-dialogue-id { width: 6em; }
+/* the conversation's choices (dialogueView.ts): numbered, the highlighted one marked; a timed
+   choice shows its countdown above */
+.level-dialogue-menu {
+  position: absolute; left: 50%; bottom: 9%; transform: translateX(-50%); z-index: 3;
+  min-width: min(60%, 420px); max-width: min(86%, 760px); padding: 8px 10px; border-radius: 6px;
+  background: rgba(0, 0, 0, 0.62); color: #f2ead8; text-shadow: 0 1px 2px #000; font-size: 16px;
+}
+.level-dialogue-menu[hidden] { display: none; }
+.level-dialogue-menu ol { margin: 0; padding: 0; list-style: none; }
+.level-dialogue-menu li { padding: 3px 8px; border-radius: 4px; cursor: pointer; }
+.level-dialogue-menu li .n { display: inline-block; width: 1.6em; color: #b9ab8c; }
+.level-dialogue-menu li.sel { background: rgba(227, 194, 122, 0.22); color: #fff; }
+.level-dialogue-menu li.exhausted { color: #9c9380; }
+.level-dialogue-menu li .tag { margin-left: 8px; font-size: 13px; color: #e3c27a; }
+.level-dialogue-menu .timer { height: 4px; margin: 0 6px 6px; border-radius: 2px; background: rgba(255, 255, 255, 0.15); }
+.level-dialogue-menu .timer i { display: block; height: 100%; border-radius: 2px; background: #e3c27a; }
+.level-dialogue-menu p { margin: 4px 8px; }
 /* sleeping (beds.ts): the view fades to black while time passes */
 .level-fade {
   position: absolute; inset: 0; z-index: 3; display: flex; align-items: center; justify-content: center;

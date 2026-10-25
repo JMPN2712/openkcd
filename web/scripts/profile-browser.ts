@@ -5,7 +5,7 @@
 // call crosses into the GPU process: this measures what a player gets.
 // Driven over the DevTools protocol (Node's built-in WebSocket); no npm deps.
 // usage: node scripts/profile-browser.ts [--root=GAME_ROOT] [--preset=high] [--settle=30]
-//          [--seconds=8] [--windowed] [--dialogue=SEQUENCE_ID [--shot=close_up] [--screenshot=PREFIX]] [--at=x,y[,yaw°]] [--fly=SECONDS [--spikes]] [--build-slim=full|potato] [--package] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080]
+//          [--seconds=8] [--windowed] [--dialogue=SEQUENCE_ID [--shot=close_up] [--screenshot=PREFIX]] [--talk=NPC_NAME [--pick=1,2]] [--at=x,y[,yaw°]] [--fly=SECONDS [--spikes]] [--build-slim=full|potato] [--package] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080]
 //   CHROME=… picks the browser binary, CHROME_FLAGS=… adds flags, PROFILE_DIR=… keeps the profile; --probe stops after naming the
 //   WebGPU adapter; --fly then flies north-west across the map (free-fly, 60 m/s: a streaming
 //   step every few seconds) printing the HUD every 10 s, then profiles there; with --spikes it
@@ -223,6 +223,39 @@ if (dialogueId) {
     }
     quietFor = sub ? 0 : quietFor + 1;
     last = sub;
+    await sleep(500);
+  }
+}
+
+// --talk=NPC_NAME: a conversation with that NPC (the debug control takes a name), printing the
+// subtitles and each menu; --pick=2,1 presses those option numbers at the menus in turn (default 1)
+const talkTo = arg("talk", "");
+if (talkTo) {
+  const picks = arg("pick", "1").split(",");
+  const press = async (code: string, key: string) => {
+    for (const type of ["keyDown", "keyUp"] as const) await page("Input.dispatchKeyEvent", { type, code, key, windowsVirtualKeyCode: key.charCodeAt(0) });
+  };
+  await evaluate(`(() => { const i = document.querySelector(".level-dialogue-id"); i.value = ${JSON.stringify(talkTo)}; [...document.querySelectorAll("button")].find((b) => /Dialogue/.test(b.textContent)).click(); })()`);
+  const td = Date.now();
+  let lastSub = "", lastMenu = "", quietFor = 0, k = 0;
+  while (quietFor < 10 && Date.now() - td < 180000) {
+    const [sub, menu, info] = await evaluate<[string, string, string]>(`(() => {
+      const s = document.querySelector(".level-subtitle"), m = document.querySelector(".level-dialogue-menu"), h = document.querySelector(".level-hud")?.textContent ?? "";
+      return [s && !s.hidden ? s.textContent : "", m && !m.hidden ? [...m.querySelectorAll("li")].map((li) => li.textContent).join(" | ") || m.textContent : "", h.slice(h.lastIndexOf(" · ") + 3)];
+    })()`);
+    const t = ((Date.now() - td) / 1000).toFixed(1).padStart(5);
+    if (sub && sub !== lastSub) console.log(`  ${t} s  ${sub}`);
+    if (menu && menu !== lastMenu) {
+      console.log(`  ${t} s  menu: ${menu}`);
+      await sleep(700);
+      const n = picks[Math.min(k++, picks.length - 1)];
+      console.log(`  ${t} s  presses ${n}`);
+      await evaluate(`document.querySelector(".level-canvas").focus()`);
+      await press(/^\d$/.test(n) ? `Digit${n}` : n, /^\d$/.test(n) ? n : "\r");
+    }
+    quietFor = sub || menu ? 0 : quietFor + 1;
+    lastSub = sub; lastMenu = menu;
+    if (/Conversation /.test(info)) { console.log(`  ${t} s  ${info}`); break; }
     await sleep(500);
   }
 }

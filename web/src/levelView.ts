@@ -160,9 +160,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   // debug: play a dialogue sequence by id with the NPCs around Henry (how conversations start
   // waits for a research note); 46319 is the tailor's gossip about the baths
   const dlgId = el("input", "level-dialogue-id");
-  dlgId.type = "number";
+  dlgId.type = "text";
   dlgId.value = "46319";
-  dlgId.title = "Dialogue sequence id (debug)";
+  dlgId.title = "Dialogue sequence id, or an NPC's name to talk to (debug)";
   const dlgBtn = el("button", undefined, "▶ Dialogue");
   dlgBtn.type = "button";
   // debug: the dialogue camera's shot while a dialogue plays (which shot a line uses waits for a
@@ -190,7 +190,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let promptText = "";
   const dialogue = new DialogueHost(vfs, paks);
   let dialogueInfo = "";
-  stage.append(canvas, fullBtn, marketBtn, clockBar, hud, chestPanel, prompt, dialogue.subtitle, fade);
+  stage.append(canvas, fullBtn, marketBtn, clockBar, hud, chestPanel, prompt, dialogue.subtitle, dialogue.menu, fade);
   host.replaceChildren(
     el("p", "scene-title", `${level}: ${terrain.size} × ${terrain.size} m terrain, ${objects.brushName.length.toLocaleString()} brushes, ${objects.vegGroup.length.toLocaleString()} vegetation instances`),
     stage,
@@ -298,6 +298,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   // beds: E sleeps until morning (beds.ts)
   const beds = new Beds(vfs, props);
   let bedHint: { bed: Bed; taken: boolean } | null = null;
+  // talking (dialogueView.ts): E with the NPC Henry faces, when it has something to say
+  let talkHint: { npc: WorldNpc; name: string; ready: boolean | undefined } | null = null;
+  let gameSeconds = 0; // game time since the view opened (dialogue cooldowns)
+  dialogue.clock = () => ({ seconds: gameSeconds, hour: minute / 60 });
   let sleeping = false;
   const sleepIn = (bed: Bed) => {
     if (!player || sleeping) return;
@@ -361,6 +365,15 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       .filter((x) => x.d < 30)
       .sort((a, b) => a.d - b.d);
     dialogueInfo = "Loading the dialogue tables…";
+    // a name: a conversation with that NPC, if shown
+    const who = dlgId.value.trim();
+    if (!/^\d+$/.test(who)) {
+      const n = npcs.find((x) => x.entity.name === who);
+      if (!n) dialogueInfo = `Dialogue: ${who} isn't near`;
+      else void dialogue.talk({ soul: n.soul, name: n.entity.name, entity: n.entity.id }).then(() => { dialogueInfo = `Talking to ${who}`; }).catch((err) => { dialogueInfo = `Dialogue: ${(err as Error).message}`; });
+      canvas.focus();
+      return;
+    }
     void dialogue.play(Number(dlgId.value), near.map((x) => x.n.soul))
       .then((s) => { dialogueInfo = s; })
       .catch((err) => { dialogueInfo = `Dialogue: ${(err as Error).message}`; });
@@ -383,6 +396,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (!lua.boot()) console.warn("Lua start-up:", lua.errors.slice(0, 3));
     // free time: hobbies by soul and the areas offering them (daycycle.ts)
     schedules.setCycleData(await cycleData(vfs, w));
+    // conversations run sequence scripts and read metaroles in the same Lua
+    dialogue.lua = lua;
     return w;
   })().then((w) => {
     if (stopped) return;
@@ -492,6 +507,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
 
   const keys = new Set<string>();
   canvas.addEventListener("keydown", (e) => {
+    // in a conversation the menu takes the keys (numbers, arrows, Enter, Space)
+    if (dialogue.talkingTo && !e.repeat && dialogue.key(e)) { e.preventDefault(); return; }
     if (!e.repeat) {
       if (e.code === "KeyF" && player) {
         mode = mode === "player" ? "fly" : "player";
@@ -499,8 +516,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       }
       if ((e.code === "KeyX" || e.code === "CapsLock") && player) player.walk = !player.walk;
       if (e.code === "KeyV" && player && mode === "player") player.setView(player.viewMode === "first" ? "third" : "first");
-      // E: the chest Henry faces, else the door
-      if (e.code === "KeyE" && player && mode === "player" && chestHint) {
+      // E: the chest Henry faces, else the NPC, else the door
+      if (e.code === "KeyE" && player && mode === "player" && !chestHint && talkHint && talkHint.ready !== false && !dialogue.talkingTo) {
+        const n = talkHint.npc;
+        void dialogue.talk({ soul: n.soul, name: n.entity.name, entity: n.entity.id }).catch((err) => { dialogueInfo = `Dialogue: ${(err as Error).message}`; });
+      } else if (e.code === "KeyE" && player && mode === "player" && chestHint) {
         if (chestHint.act === "close") closeChest();
         else if (chests.use(chestHint.chest)) { openChest = chestHint.chest; void fillChestPanel(openChest); }
       } else if (e.code === "KeyE" && player && mode === "player" && !doorHint && bedHint && !bedHint.taken) {
@@ -573,8 +593,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     for (const id of doorsMoved) showDoor(id);
     for (const id of chests.step(dt)) showChest(id);
     dialogue.update(dt);
+    if (dialogue.info) { dialogueInfo = dialogue.info; dialogue.info = ""; }
     if (mode === "player" && player) {
-      player.update(dt, player.input(keys));
+      // Henry stands still while he talks
+      player.update(dt, player.input(dialogue.talkingTo ? new Set<string>() : keys));
       if (stepAside) {
         // eased; collision still applies on his next update
         stepAside.t = Math.min(STEP_ASIDE, stepAside.t + dt);
@@ -585,8 +607,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       }
       Object.assign(cam, player.camera(dt));
       // the dialogue camera (debug shot choice): the rig on Henry, aimed by the NPC who spoke last
-      const shot = shotSel.value as Shot | "off";
-      const talker = shot !== "off" && rig && dialogue.partner ? npcs.find((n) => n.soul === dialogue.partner) : undefined;
+      // in a conversation the medium shot frames the NPC unless the picker chooses another
+      const talking = dialogue.talkingTo;
+      const shot = (shotSel.value === "off" && talking ? "medium" : shotSel.value) as Shot | "off";
+      const talkerSoul = talking?.soul ?? dialogue.partner;
+      const talker = shot !== "off" && rig && talkerSoul ? npcs.find((n) => n.soul === talkerSoul) : undefined;
       if (talker && !viewBeforeShot) { viewBeforeShot = player.viewMode; player.setView("third"); }
       if (!talker && viewBeforeShot) { player.setView(viewBeforeShot); viewBeforeShot = null; }
       if (talker && rig && shot !== "off") {
@@ -607,6 +632,20 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       doorHint = target ? { door: target, act: doors.action(target) } : null;
       const bed = beds.target(feet, cam.pos, fwd);
       bedHint = bed ? { bed, taken: npcs.some((n) => n.placement.pose === "sleep" && n.placement.bed?.id === bed.entity.id) } : null;
+      // the NPC in front of Henry within 2.5 m (within 30° of the view), awake
+      let best: WorldNpc | null = null, bestD = 2.5;
+      for (const n of npcs) {
+        const p = (npcWorld.drawn(n.entity.id) ?? n.placement);
+        if (p.pose === "sleep") continue;
+        const dx = p.pos[0] - feet[0], dy = p.pos[1] - feet[1], d = Math.hypot(dx, dy);
+        if (d < bestD && Math.abs(p.pos[2] - feet[2]) < 1.5 && (dx * fwd[0] + dy * fwd[1]) / (d * Math.hypot(fwd[0], fwd[1]) || 1) > Math.cos(Math.PI / 6)) { best = n; bestD = d; }
+      }
+      talkHint = best ? { npc: best, name: dialogue.displayName(best.soul) ?? "them", ready: dialogue.hasSomethingToSay({ soul: best.soul, name: best.entity.name, entity: best.entity.id }) } : null;
+      // the NPC Henry talks to waits (its behaviour tree is paused)
+      if (npcAi) {
+        for (const id of npcAi.paused) if (id !== talking?.entity) npcAi.paused.delete(id);
+        if (talking) npcAi.paused.add(talking.entity);
+      }
       const chest = chests.target(feet, cam.pos, fwd);
       chestHint = chest ? { chest, act: chest === openChest ? "close" : chests.action(chest) } : null;
       // walking away from an open chest closes it
@@ -638,6 +677,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (!streamedAt || Math.hypot(cam.pos[0] - streamedAt[0], cam.pos[1] - streamedAt[1]) > STREAM_STEP) void stream();
     if (!grass || Math.hypot(cam.pos[0] - grass.at[0], cam.pos[1] - grass.at[1]) > q.grass / 4) void streamGrass();
     minute = (minute + (dt * Number(speedSel.value)) / 60) % 1440;
+    gameSeconds += dt * Number(speedSel.value);
     // one simulation clock for behaviour trees and NPC animation, scaled like the game clock
     // (×15 = real time): legs keep pace with movement at every speed, and pausing freezes both
     const simDt = (dt * Number(speedSel.value)) / 15;
@@ -732,8 +772,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     cpuAvg += (performance.now() - t0 - cpuAvg) * 0.05;
     const pc = player?.controller;
     // [key, action]: key "" for a message without one
-    const hint: readonly [string, string] | null = mode !== "player" || sleeping ? null
+    const hint: readonly [string, string] | null = mode !== "player" || sleeping || dialogue.talkingTo ? null
       : chestHint ? ({ open: ["E", "Open the chest"], close: ["E", "Close the chest"], locked: ["", "The chest is locked"], busy: null } as const)[chestHint.act]
+      : talkHint && talkHint.ready !== false ? ["E", `Talk to ${talkHint.name}`]
       : doorHint ? ({ open: ["E", "Open the door"], close: ["E", "Close the door"], locked: ["", "The door is locked"], busy: null } as const)[doorHint.act]
       : bedHint ? (bedHint.taken ? ["", "Someone is sleeping here"] : ["E", `Sleep until morning${bedHint.bed.legal ? "" : " (not your bed)"}`]) : null;
     const promptKey = hint ? hint.join("|") : "";

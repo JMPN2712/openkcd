@@ -143,6 +143,8 @@ export interface WorldOptions {
   lua?: LuaHost;
   /** brain variables (Libs/Tables/ai/brain_variable: b_dialogParameters, b_context, …) */
   brainVars?: BtVariable[];
+  /** soul names of shopkeepers (shop/shopkeeper): their work opens the shop (MERCHANT, REPAIRMAN) */
+  shopkeepers?: Set<string>;
   /** a `daycycle:change` message to an NPC (its fields: add, handle, name, priority, …), for its daily cycle */
   daycycleChange?: (npc: number, fields: Record<string, Value>) => void;
 }
@@ -305,6 +307,11 @@ export class AiWorld {
   endActivity(npc: number): void {
     this.locks.set(`I/${npc}/timeChanged`, false);
     this.brain(npc).set("t_timeChanged", true);
+  }
+
+  /** Whether an NPC keeps a shop (the trees ask Shops.GetShopDBIdByKeeper). */
+  keepsShop(npc: number): boolean {
+    return !!this.o.shopkeepers?.has(this.o.ents.get(npc)?.name ?? "");
   }
 
   /** Whether the NPC's behaviour reached a node this interpreter doesn't support since it started. */
@@ -1165,5 +1172,7 @@ export async function createAiWorld(vfs: Vfs, opts: Omit<WorldOptions, "ai" | "t
     const form = ({ "1": "array", "2": "associative", "3": "array" } as Record<string, string>)[r.ai_variable_form_id] ?? "single";
     brainVars.set(r.brain_variable_name, { name: r.brain_variable_name, type: r.type, values: r.init_value ?? "", form, persistent: r.is_persistent === "True" });
   }
-  return new AiWorld({ ...opts, ai, helpers, brainVars: [...brainVars.values()], trees: (f, n) => trees.get(`${f}#${n}`) });
+  const soulNames = new Map((await readTable(vfs, "rpg/soul")).map((r) => [r.soul_id, r.soul_name]));
+  const shopkeepers = new Set((await readTable(vfs, "shop/shopkeeper")).map((r) => soulNames.get(r.keeper_id) ?? "").filter(Boolean));
+  return new AiWorld({ ...opts, ai, helpers, shopkeepers, brainVars: [...brainVars.values()], trees: (f, n) => trees.get(`${f}#${n}`) });
 }

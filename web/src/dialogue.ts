@@ -12,8 +12,9 @@
 //   - other kinds (sequence_line_type 2 and 4) have no table of their own.
 //
 // The cast comes from the souls: soul → roles (`soul2role`), soul → voice
-// (`v_soul_character_data`). Which conversation starts, and how its choices are offered, is left to
-// a research note; this module only reads and resolves.
+// (`v_soul_character_data`), soul → starting metaroles (`soul2metarole`). Conversations start at
+// branches (`v_branch`: a start topic, a type and a priority); a sequence's `next` is the topic
+// that follows. dialogueFlow.ts runs conversations over this data; this module only reads it.
 
 import { groupBy, readTable, type Row } from "./tables.ts";
 import type { Vfs } from "./vfs.ts";
@@ -58,8 +59,12 @@ export interface DialogueLine {
 
 export interface Sequence {
   id: number;
-  /** the sequence that follows (0: none) */
+  /** the topic that follows (0: none) */
   next: number;
+  /** non-zero on 29 rows: the menu's "exhausted" marker */
+  group: number;
+  /** rpg/skill_check_difficulty id (0 AutoSuccess … 6 AutoFail), when set */
+  difficulty?: number;
   type: number;
   flags: number;
   priority: number;
@@ -84,6 +89,36 @@ export interface Role {
   metarole: number;
 }
 
+/** A conversation entry point (v_branch). */
+export interface Branch {
+  startTopic: number;
+  /** 0 normal, 1 rare, 2 greeting, 3 farewell, 4 reaction, 5 NPC↔NPC, 6 bark, 7 refusal */
+  type: number;
+  /** 0: offered on the menu; 1–3: the NPC starts it by itself */
+  priority: number;
+  allowGreeting: boolean;
+  test: boolean;
+  reputation?: number;
+}
+
+export interface Topic {
+  id: number;
+  /** menu order across topics (mostly 7) */
+  priority: number;
+  /** the speaking role (0: none) */
+  role: number;
+  /** alias behaviour trees request it by */
+  label: string;
+  /** seconds for a timed choice (0: none) */
+  timeLimit: number;
+}
+
+/** A role a topic needs, under the metarole its holder must have. */
+export interface RolePair {
+  metarole: number;
+  role: number;
+}
+
 const TABLES = {
   sequence: "text/sequence",
   line: "text/sequence_line",
@@ -97,6 +132,11 @@ const TABLES = {
   soulCharacter: "rpg/v_soul_character_data",
   mood: "text/dialogue_mood",
   voiceAbbreviation: "text/v_voice_abbreviation",
+  branch: "text/v_branch",
+  topic: "text/topic",
+  functions: "text/dialogue_functions",
+  soulMetarole: "rpg/soul2metarole",
+  metarole: "rpg/metarole",
 };
 
 const int = (s: string | undefined) => (s ? Number(s) : 0);
@@ -106,6 +146,18 @@ export class DialogueDb {
   private sequences = new Map<number, Sequence>();
   private topics = new Map<number, TopicEntry[]>();
   private topicRoles = new Map<number, number[]>();
+  private topicPairs = new Map<number, RolePair[]>();
+  private topicInfo = new Map<number, Topic>();
+  private owners = new Map<number, number>();
+  private soulMetaroles = new Map<string, number[]>();
+  private metaroleIds = new Map<string, number>();
+  private metaroleNames = new Map<number, string>();
+  /** every branch, in table order */
+  readonly branches: Branch[] = [];
+  /** branches by start topic */
+  private branchAt = new Map<number, Branch>();
+  /** named conditions (dialogue_functions): name → expression */
+  readonly functions = new Map<string, string>();
   private roles = new Map<number, Role>();
   private soulRoles = new Map<string, number[]>();
   private soulVoices = new Map<string, number>();
@@ -121,14 +173,15 @@ export class DialogueDb {
   static async load(vfs: Vfs): Promise<DialogueDb> {
     const db = new DialogueDb();
     const read = (k: keyof typeof TABLES) => readTable(vfs, TABLES[k]);
-    const [seqs, lines, responses, commands, waves, t2s, t2r, roles, soulRoles, soulChars, moods, abbrs] = await Promise.all([
+    const [seqs, lines, responses, commands, waves, t2s, t2r, roles, soulRoles, soulChars, moods, abbrs, branches, topics, functions, soulMetaroles, metaroles] = await Promise.all([
       read("sequence"), read("line"), read("response"), read("command"), read("wave"),
       read("topic2sequence"), read("topicToRole"), read("role"), read("soulRole"), read("soulCharacter"), read("mood"), read("voiceAbbreviation"),
+      read("branch"), read("topic"), read("functions"), read("soulMetarole"), read("metarole"),
     ]);
     for (const r of seqs) {
       const id = int(r.sequence_id);
       db.sequences.set(id, {
-        id, next: int(r.next), type: int(r.type), flags: int(r.flags), priority: int(r.priority), timeout: int(r.timeout),
+        id, next: int(r.next), group: int(r.group), difficulty: optNum(r.skill_check_difficulty_id), type: int(r.type), flags: int(r.flags), priority: int(r.priority), timeout: int(r.timeout),
         speechCoef: r.speech_coef ? Number(r.speech_coef) : 1, script: r.script ?? "", uiPrompt: r.ui_prompt ?? "", lines: [],
       });
     }
@@ -171,6 +224,37 @@ export class DialogueDb {
       const list = db.topicRoles.get(t) ?? [];
       list.push(int(r.role_id));
       db.topicRoles.set(t, list);
+      const pairs = db.topicPairs.get(t) ?? [];
+      pairs.push({ metarole: int(r.metarole_id), role: int(r.role_id) });
+      db.topicPairs.set(t, pairs);
+    }
+    for (const r of topics) db.topicInfo.set(int(r.topic_id), { id: int(r.topic_id), priority: int(r.priority), role: int(r.role_id), label: r.label ?? "", timeLimit: r.time_limit ? Number(r.time_limit) : 0 });
+    for (const r of branches) {
+      const b: Branch = { startTopic: int(r.start_topic), type: int(r.branch_type_id), priority: int(r.priority), allowGreeting: r.allow_greeting !== "False", test: r.is_test === "True", reputation: optNum(r.reputation_condition_id) };
+      db.branches.push(b);
+      if (!db.branchAt.has(b.startTopic)) db.branchAt.set(b.startTopic, b);
+    }
+    for (const r of functions) db.functions.set(r.function_name, r.expression ?? "");
+    for (const r of soulMetaroles) {
+      const list = db.soulMetaroles.get(r.soul_id) ?? [];
+      list.push(int(r.metarole_id));
+      db.soulMetaroles.set(r.soul_id, list);
+    }
+    for (const r of metaroles) { db.metaroleIds.set(r.metarole_name, int(r.metarole_id)); db.metaroleNames.set(int(r.metarole_id), r.metarole_name); }
+    // each topic's owning start topic: walk every branch from its start topic along its sequences'
+    // `next` topics; the first branch to reach a topic owns it (the research note leaves the
+    // engine's walk untraced and suggests this)
+    for (const b of db.branches) {
+      const queue = [b.startTopic];
+      while (queue.length) {
+        const t = queue.shift()!;
+        if (db.owners.has(t)) continue;
+        db.owners.set(t, b.startTopic);
+        for (const e of db.topics.get(t) ?? []) {
+          const n = db.sequences.get(e.sequence)?.next;
+          if (n && !db.owners.has(n)) queue.push(n);
+        }
+      }
     }
     for (const r of roles) db.roles.set(int(r.role_id), { id: int(r.role_id), name: r.role_name, metarole: int(r.metarole_id) });
     for (const r of soulRoles) {
@@ -229,6 +313,40 @@ export class DialogueDb {
     const abbr = this.abbreviations.get(voice);
     if (!abbr || !line.text || line.folder === undefined || !line.voices?.includes(voice)) return undefined;
     return `dialog/${String(line.folder).padStart(6, "0")}/${abbr}_${line.text}.ogg`.toLowerCase();
+  }
+
+  /** A topic's own fields (priority, speaking role, label, time limit). */
+  topic(id: number): Topic {
+    return this.topicInfo.get(id) ?? { id, priority: 7, role: 0, label: "", timeLimit: 0 };
+  }
+
+  /** The role pairs a topic needs (topictorole), in table order. */
+  rolePairs(topic: number): RolePair[] {
+    return this.topicPairs.get(topic) ?? [];
+  }
+
+  /** The start topic of the branch a topic belongs to (itself for a start topic). */
+  owner(topic: number): number {
+    return this.owners.get(topic) ?? topic;
+  }
+
+  /** The branch starting at a topic, if any. */
+  branch(startTopic: number): Branch | undefined {
+    return this.branchAt.get(startTopic);
+  }
+
+  /** A soul's starting metaroles (soul2metarole). */
+  metarolesOf(soul: string): number[] {
+    return this.soulMetaroles.get(soul) ?? [];
+  }
+
+  /** A metarole's id by name (MERCHANT, REPAIRMAN, …). */
+  metaroleId(name: string): number | undefined {
+    return this.metaroleIds.get(name);
+  }
+
+  metaroleName(id: number): string | undefined {
+    return this.metaroleNames.get(id);
   }
 
   moodName(id: number): string | undefined {
