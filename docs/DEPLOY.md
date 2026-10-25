@@ -18,8 +18,10 @@ so the site serves only the app.
 | Assets directory | `dist` |
 | Node.js version | from `web/.node-version` (24); or set `NODE_VERSION=24` |
 
-`npm run build` type-checks and then builds; a type error fails the
-deployment. npm may warn that the `webgpu` package's install script isn't
+**Every push to `main` deploys automatically** (the Worker builds from the
+repository), live within moments, so a merged pull request reaches players
+on their next page load. `npm run build` type-checks and then builds; a
+type error fails the deployment. npm may warn that the `webgpu` package's install script isn't
 approved: that package is only for the headless tests, and the build doesn't
 need it. Deploying by hand from a checkout:
 

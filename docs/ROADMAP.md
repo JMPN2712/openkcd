@@ -38,6 +38,8 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
     ground, shelter, tent, bed), placed by the clip's `Align` bone at the
     bed's helper, at the helper's height: all 1,302 beds pass
     `scripts/test-beds.ts` (1,296 lay across before). `docs/GAMELOGIC.md`.
+  - Checked by the user in Chrome on the live site (2026-10-25): the tailor
+    goes up to his room, stays there and sleeps properly.
   - Found on the way: the game has no `kcd_female_database.adb`, which
     `mannequin.ts` loads for women, so women's work fragments probably
     never resolve. To check under step 5 (NPC animations).

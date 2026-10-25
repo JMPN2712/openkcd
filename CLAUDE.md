@@ -63,7 +63,8 @@ copy, the research repo) are in `CLAUDE.local.md`, which is not committed.
   System Access API) stays as the alternative.
 - **Dropped:** no server or R2 streaming of game files.
 - **Hosted player:** <https://openkcd.jmpn.workers.dev/> serves the app only
-  (static assets; `docs/DEPLOY.md`). Players' installs are tied to that
+  (static assets; `docs/DEPLOY.md`). Every push to `main` deploys within
+  moments, so merging a PR ships it to players. Players' installs are tied to that
   origin, so the address must not change lightly.
 
 ## Milestones
