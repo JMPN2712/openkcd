@@ -14,6 +14,7 @@ import { TexturePool } from "../src/texturePool.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 import { WaterRenderer } from "../src/waterRenderer.ts";
 import { Doors } from "../src/doors.ts";
+import { Chests } from "../src/chests.ts";
 import { buildGrassScene, buildWorldScene, isUberLod, lodItems, newWorldCaches, sceneMatrices, selectLods, type WorldScene } from "../src/world.ts";
 import { PlayerAvatar } from "../src/playerAvatar.ts";
 import { PlayerSession } from "../src/playerSession.ts";
@@ -102,6 +103,21 @@ if (args.includes("--open-doors")) {
   let opened = 0;
   for (const d of doors.doors.values()) if (doors.near(d.entity.pos, 0.01).length && doors.set(d, true)) { [...doors.matrices(d.entity.id)]; opened++; }
   console.log(`doors: ${opened} opened`);
+}
+// --open-chests: every unlocked chest in the scene open (chests.ts)
+if (args.includes("--open-chests")) {
+  args.splice(args.indexOf("--open-chests"), 1);
+  const chests = new Chests(lvl.vfs, lvl.props);
+  chests.attach(scene);
+  await chests.settle();
+  let opened = 0;
+  for (const c of chests.chests.values()) {
+    if (!chests.use(c)) continue;
+    while (c.dir !== 0) chests.step(0.1);
+    [...chests.matrices(c.entity.id)];
+    opened++;
+  }
+  console.log(`chests: ${opened} opened`);
 }
 models.setModels(items, models.indexed ? sceneMatrices(scene) : undefined);
 models.setShadow(shadowMap);

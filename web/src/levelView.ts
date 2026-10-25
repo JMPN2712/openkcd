@@ -32,6 +32,8 @@ import { PlayerAvatar } from "./playerAvatar.ts";
 import { PlayerSession } from "./playerSession.ts";
 import { CollisionWorld } from "./collision.ts";
 import { Doors, type Door } from "./doors.ts";
+import { Chests, type Chest } from "./chests.ts";
+import { Localization } from "./localization.ts";
 import { depthClear, depthFormat, type PassSetup } from "./mat4.ts";
 import type { TimeOfDay } from "./tod.ts";
 import { SkyRenderer, skyAt, pickProfile, invert } from "./sky.ts";
@@ -150,7 +152,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   for (const [k, v] of Object.entries(PRESETS)) presetSel.append(new Option(`Quality: ${v.label}`, k, k === presetName, k === presetName));
   presetSel.addEventListener("change", () => { savePreset(presetSel.value as PresetName); void showLevel(host, paks, level); });
   clockBar.append(presetSel);
-  stage.append(canvas, fullBtn, marketBtn, clockBar, hud);
+  // an open chest's contents
+  const chestPanel = el("div", "level-chest");
+  chestPanel.hidden = true;
+  stage.append(canvas, fullBtn, marketBtn, clockBar, hud, chestPanel);
   host.replaceChildren(
     el("p", "scene-title", `${level}: ${terrain.size} × ${terrain.size} m terrain, ${objects.brushName.length.toLocaleString()} brushes, ${objects.vegGroup.length.toLocaleString()} vegetation instances`),
     stage,
@@ -249,6 +254,33 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const showDoor = (id: number) => { for (const { index, m } of doors.matrices(id)) models.setSceneMatrix(index, m); };
   /** what E would do now (HUD hint), refreshed each frame */
   let doorHint: { door: Door; act: ReturnType<Doors["action"]> } | null = null;
+  // chests open (E) and show what they hold (chests.ts); item names in English for now
+  const chests = new Chests(vfs, props);
+  const text = new Localization();
+  void text.load(paks, ["text_ui_items"]).catch(() => false);
+  const showChest = (id: number) => { for (const { index, m } of chests.matrices(id)) models.setSceneMatrix(index, m); };
+  let chestHint: { chest: Chest; act: ReturnType<Chests["action"]> } | null = null;
+  /** the chest whose contents are shown */
+  let openChest: Chest | null = null;
+  const fillChestPanel = async (c: Chest) => {
+    const items = await chests.contents(c, text);
+    if (openChest !== c) return;
+    chestPanel.replaceChildren(el("h3", undefined, "Chest"));
+    const list = el("ul");
+    for (const it of items.filter((x) => !x.maybe)) list.append(el("li", undefined, `${it.name} ×${it.amount}`));
+    const maybe = items.filter((x) => x.maybe);
+    if (maybe.length) {
+      const li = el("li", "maybe", `and perhaps some of: ${maybe.slice(0, 12).map((x) => x.name).join(", ")}${maybe.length > 12 ? `, … (${maybe.length} kinds)` : ""}`);
+      list.append(li);
+    }
+    chestPanel.append(items.length ? list : el("p", undefined, "Empty."), el("p", "note", "Taking items comes with the inventory."));
+    chestPanel.hidden = false;
+  };
+  const closeChest = () => {
+    if (openChest && chests.action(openChest) === "close") chests.use(openChest);
+    openChest = null;
+    chestPanel.hidden = true;
+  };
   /** Henry stepping back out of a door's swing over STEP_ASIDE seconds (doors.ts clearSpot) */
   let stepAside: { from: number[]; to: number[]; t: number } | null = null;
   const STEP_ASIDE = 0.6;
@@ -358,6 +390,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         if (shadowMap) casters.setScene(next, items.map((it) => it.capacity), shadowMap.cascades, models.indexed);
         surroundings.setScene(next);
         for (const id of doors.attach(next)) showDoor(id);
+        for (const id of chests.attach(next)) showChest(id);
         for (const id of doorColliders) surroundings.setDynamic(id, null);
         doorColliders.clear();
         lodOut = items.map((it) => (models.indexed ? new Uint32Array(it.capacity) : new Float32Array(it.capacity * 16)));
@@ -390,7 +423,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       }
       if ((e.code === "KeyX" || e.code === "CapsLock") && player) player.walk = !player.walk;
       if (e.code === "KeyV" && player && mode === "player") player.setView(player.viewMode === "first" ? "third" : "first");
-      if (e.code === "KeyE" && player && mode === "player" && doorHint && doors.use(doorHint.door, player.controller.pos)) {
+      // E: the chest Henry faces, else the door
+      if (e.code === "KeyE" && player && mode === "player" && chestHint) {
+        if (chestHint.act === "close") closeChest();
+        else if (chests.use(chestHint.chest)) { openChest = chestHint.chest; void fillChestPanel(openChest); }
+      } else if (e.code === "KeyE" && player && mode === "player" && doorHint && doors.use(doorHint.door, player.controller.pos)) {
         const to = doors.clearSpot(doorHint.door, player.controller.pos);
         if (to) stepAside = { from: [...player.controller.pos], to, t: 0 };
       }
@@ -456,6 +493,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     last = now;
     const doorsMoved = doors.step(dt);
     for (const id of doorsMoved) showDoor(id);
+    for (const id of chests.step(dt)) showChest(id);
     if (mode === "player" && player) {
       player.update(dt, player.input(keys));
       if (stepAside) {
@@ -476,6 +514,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       const fwd: [number, number, number] = [Math.cos(cam.yaw) * Math.cos(cam.pitch), Math.sin(cam.yaw) * Math.cos(cam.pitch), Math.sin(cam.pitch)];
       const target = doors.target(feet, cam.pos, fwd);
       doorHint = target ? { door: target, act: doors.action(target) } : null;
+      const chest = chests.target(feet, cam.pos, fwd);
+      chestHint = chest ? { chest, act: chest === openChest ? "close" : chests.action(chest) } : null;
+      // walking away from an open chest closes it
+      if (openChest && Math.hypot(openChest.entity.pos[0] - feet[0], openChest.entity.pos[1] - feet[1]) > openChest.useDistance + 0.5) closeChest();
       const near = new Set(doors.near(feet, 12));
       for (const id of doorColliders) if (!near.has(id)) { surroundings.setDynamic(id, null); doorColliders.delete(id); }
       // (a swinging leaf doesn't shove Henry: it collides again where it stops)
@@ -596,7 +638,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     device.queue.submit([enc.finish()]);
     cpuAvg += (performance.now() - t0 - cpuAvg) * 0.05;
     const pc = player?.controller;
-    const doorText = doorHint && mode === "player" ? { open: "E: open the door · ", close: "E: close the door · ", locked: "the door is locked · ", busy: "" }[doorHint.act] : "";
+    const doorText = mode !== "player" ? ""
+      : chestHint ? { open: "E: open the chest · ", close: "E: close the chest · ", locked: "the chest is locked · ", busy: "" }[chestHint.act]
+      : doorHint ? { open: "E: open the door · ", close: "E: close the door · ", locked: "the door is locked · ", busy: "" }[doorHint.act] : "";
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
     hud.textContent = `${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${doorText}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}`;
   };

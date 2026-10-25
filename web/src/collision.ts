@@ -72,7 +72,8 @@ export function collisionShape(wm: Pick<WorldModel, "path" | "kind" | "lods">): 
   const none: CollisionShape = { source: "none", positions: new Float32Array(0), indices: new Uint32Array(0) };
   const base = wm.lods[0];
   // (".skin|mtl": .cdf parts; a brush with its material override, "x.cgf|y.mtl", collides)
-  if (NO_COLLISION.test(wm.path) || /\.skin(\||$)/.test(wm.path)) return none;
+  // (a chest's lid, "x.cga#lid:node", moves: its body carries the chest's proxies)
+  if (NO_COLLISION.test(wm.path) || /\.skin(\||$)/.test(wm.path) || wm.path.includes("#lid:")) return none;
   if (base.materials.length && base.materials.every((m) => PLAYER_PASSES.has(m.surfaceType.toLowerCase()))) return none;
   const physical = transformed(base, physicalisedSubsets);
   if (base.cgf.physics.length) {

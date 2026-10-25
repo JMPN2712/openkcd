@@ -256,6 +256,17 @@ details.part p { margin: 4px 0; }
   background: rgba(0, 0, 0, 0.5); color: #ddd;
 }
 .level-canvas:focus { outline: 2px solid var(--accent); }
+/* a chest's contents (chests.ts), over the view while it is open */
+.level-chest {
+  position: absolute; top: 44px; right: 8px; z-index: 2; max-width: min(320px, 70%); max-height: 60%; overflow: auto;
+  margin: 0; padding: 8px 12px; border-radius: 6px; font-size: 13px; line-height: 1.4;
+  background: rgba(0, 0, 0, 0.62); color: #eee; pointer-events: none;
+}
+.level-chest[hidden] { display: none; }
+.level-chest h3 { margin: 0 0 4px; font-size: 13px; }
+.level-chest ul { margin: 0; padding-left: 16px; }
+.level-chest .maybe { color: #aaa; }
+.level-chest .note { margin: 6px 0 0; color: #aaa; font-size: 12px; }
 
 @media (max-width: 900px) {
   main { grid-template-columns: 1fr; grid-auto-rows: minmax(240px, auto); overflow: auto; }

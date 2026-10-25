@@ -26,6 +26,9 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
   take it: black where the game's are black, invisible where they are
   invisible walls (still colliding). Other material overrides (texture swaps
   on 16,143 brushes) are not applied yet (`docs/LEVELS.md`).
+- **Chests (2026-10-25):** E opens a chest's lid with the game's animation
+  and lists its contents (fixed items, and what its presets may add; how the
+  game rolls presets needs a research note). Beds next.
 - **Doors (2026-10-25), checked by the user:** E opens and closes doors with the game's clips,
   the leaves collide, and Henry can walk into houses: invisible horse-only
   blockers in doorways had stopped him (`docs/PHYSICS.md`). Chests and beds
@@ -392,7 +395,15 @@ its cost on Potato with a full market.
   - [ ] Henry's hand animation for doors; NPCs opening the doors they pass
         through (their walk-through clips are in `doors.dba`); door sounds
         (step 4); keys and lockpicking (core gameplay).
-  - [ ] Chests.
+  - [x] Chests (2026-10-25, `web/src/chests.ts`, `anm.ts`): E opens an
+        unlocked chest's lid with its model's own `_open.anm` (10–20°, as
+        the game's) and lists what it holds by name (`localization.ts`, the
+        English text tables): its own items and what its presets can add.
+        The lid is drawn apart from the body (`x.cga#lid:node`). Locked
+        chests stay shut. `scripts/test-chests.ts`.
+  - [ ] Research note needed: how an inventory's presets are rolled
+        (`max_items`, priorities, `amount_random_add`), for real loot.
+  - [ ] Taking items (with the inventory, core gameplay).
   - [ ] Beds.
 - [ ] **3. Talking to NPCs:** voice lines, subtitles, the dialogue camera
       and response choices from the game's dialogue data; no quest

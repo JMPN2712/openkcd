@@ -3,6 +3,7 @@
 // LOD chain (x_lod1.cgf, x_lod2.cgf, …) once, and each frame picks a LOD per
 // instance by distance, culling by view distance and frustum.
 
+import { parseAnm } from "./anm.ts";
 import type { EntityInfo } from "./levelEntities.ts";
 import { parseCdf, poseMatrix, type CharacterSpec } from "./character.ts";
 import { loadModel, meshModel, modelExists, type LoadedModel, type MipChain } from "./model.ts";
@@ -90,6 +91,10 @@ export interface WorldCaches {
   textures: Map<string, Promise<MipChain | null>>;
   /** parsed .cdf of door / AnimObject props */
   cdfs: Map<string, Promise<CharacterSpec | null>>;
+  /** per chest model (.cga): the node its _open.anm moves (the lid), or null (chests.ts) */
+  lids: Map<string, Promise<string | null>>;
+  /** chest models split in body and lid ("x.cga#lid:node"), with the base LODs they came from */
+  parts: Map<string, { from: LoadedModel; lods: LoadedModel[] }>;
   /** a compact package (slim.ts): models it holds are loaded from it, the rest from the paks */
   slim?: SlimPackage;
   /** scene builds so far, and the build that last used each model (trimWorldCaches) */
@@ -100,7 +105,7 @@ export interface WorldCaches {
 }
 
 export function newWorldCaches(): WorldCaches {
-  return { models: new Map(), textures: new Map(), cdfs: new Map(), generation: 0, usedAt: new Map(), loaded: new Map() };
+  return { models: new Map(), textures: new Map(), cdfs: new Map(), lids: new Map(), parts: new Map(), generation: 0, usedAt: new Map(), loaded: new Map() };
 }
 
 /**
@@ -129,6 +134,17 @@ export function trimWorldCaches(caches: WorldCaches, keep = 3): { models: number
   return { models };
 }
 
+/** The node a chest model's <model>_open.anm moves (its lid), or null without one. */
+export function chestLid(vfs: Vfs, path: string, caches: WorldCaches): Promise<string | null> {
+  let p = caches.lids.get(path);
+  if (!p) {
+    const hit = vfs.lookup(path.replace(/\.cga$/, "_open.anm"));
+    p = hit ? vfs.read(hit).then((b) => parseAnm(b)[0]?.name ?? null).catch(() => null) : Promise.resolve(null);
+    caches.lids.set(path, p);
+  }
+  return p;
+}
+
 /** Group key for a character skin with its material override (.cdf parts): "skin|mtl". */
 const skinKey = (skin: string, mtl: string | null) => `${skin}|${mtl ?? ""}`;
 
@@ -139,6 +155,22 @@ const GROUND_TILE = 512;
 const groundKey = (source: number, ids: number[]) => `ground${source}:${ids.join(",")}`;
 
 async function loadLods(vfs: Vfs, path: string, caches: WorldCaches, maxTextureDim: number, normalMaps = true, ground?: { sources: GroundSource[]; terrain: Terrain }): Promise<LoadedModel[] | null> {
+  // a chest's body or lid ("x.cga#body:node", "#lid:node"): the model's meshes without or with
+  // the node its _open.anm moves; the body keeps the LODs (without nodes named like the lid)
+  const part = /^(.*)#(body|lid):(.*)$/.exec(path);
+  if (part) {
+    const lods = await loadLods(vfs, part[1], caches, maxTextureDim, normalMaps);
+    if (!lods) return null;
+    const known = caches.parts.get(path);
+    if (known && known.from === lods[0]) return known.lods;
+    const lid = part[3].toLowerCase();
+    const pick = (m: LoadedModel, keep: (node: string) => boolean): LoadedModel => ({ ...m, cgf: { ...m.cgf, meshes: m.cgf.meshes.filter((x) => keep(x.nodeName.toLowerCase())) } });
+    const out = part[2] === "lid"
+      ? [pick(lods[0], (n) => n === lid)]
+      : lods.map((m, k) => pick(m, (n) => n !== lid && (k === 0 || !n.includes("lid"))));
+    caches.parts.set(path, { from: lods[0], lods: out });
+    return out;
+  }
   const load = (p: string) => {
     caches.usedAt.set(p, caches.generation);
     let m = caches.models.get(p);
@@ -286,7 +318,12 @@ export async function buildWorldScene(
     if (e.scale) for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) m[c * 4 + r] *= e.scale[c];
     const path = e.model!.toLowerCase().replace(/\\/g, "/");
     if (!path.endsWith(".cdf")) {
-      add(path, "prop", m, e.pos[0], e.pos[1]);
+      // chests with an opening animation: body and lid apart, the lid keeping its entity (chests.ts)
+      const lid = e.cls === "Stash" && path.endsWith(".cga") ? await chestLid(vfs, path, caches) : null;
+      if (lid) {
+        add(`${path}#body:${lid}`, "prop", m, e.pos[0], e.pos[1]);
+        add(`${path}#lid:${lid}`, "prop", m, e.pos[0], e.pos[1], e.id);
+      } else add(path, "prop", m, e.pos[0], e.pos[1]);
       continue;
     }
     // doors, wells, flags: the .cdf's skins in bind pose (closed / at rest)

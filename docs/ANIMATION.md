@@ -441,3 +441,26 @@ From `Scripts/Entities/actor/BasicActor.lua` (`BasicActorParams`),
   - facial animation;
   - cloth and pendulum attachments;
   - animation events (footstep sounds come later, with audio).
+
+## Object animations (.anm, chest lids)
+
+Decoded by `web/src/anm.ts`; used by `web/src/chests.ts`.
+
+- **Format:** CryTek's older chunk file (`"CryTek\0\0"`, file type, version,
+  chunk-table offset; table entries of type, version, offset, id, size).
+  Each chunk starts with a 16-byte copy of its table entry.
+- **Node chunk** (`0xCCCC000B`): name[64], object/parent ids, children,
+  material id, 4 bytes, tm f32[16], pos, rot, scale, then the position,
+  rotation and scale controller ids (−1 none).
+- **Controller chunk** (`0xCCCC000D`, v0x826): type, key count, flags, id,
+  then keys. Type 10 (TCB rotation): 40-byte keys of i32 time (3ds Max
+  ticks, 4,800 a second), axis xyz and angle (radians), then tension,
+  continuity, bias and eases.
+- **Keys are relative,** as Max exports TCB rotations, and turn by Max's
+  left-hand rule (with it, the lids rise; as right-handed angles they sank
+  into the chests).
+- **Chests:** five models (`chest01`–`chest05`) with `<model>_open.anm`,
+  ~990 chest entities in Rataje. Each lid turns about its node's x axis, on
+  the chest's back (+Y) edge, by 10–20° over 0.83–1 s. Some open files go up
+  and back down (`chest02`): "open" plays to the widest key, and closing
+  plays it back.

@@ -126,7 +126,7 @@ Click the view to capture the mouse; Esc releases it.
 | Space | jump |
 | V | first / third person |
 | Mouse wheel | third-person camera distance (1–8 m) |
-| E | open or close the door you face (the HUD says when one is in reach; locked doors stay shut) |
+| E | open or close the door or chest you face (the HUD says when one is in reach; locked ones stay shut); an open chest lists what it holds |
 | F | free-fly camera (debugging): drag to look, W A S D to move, Space/E up, C/Q down, Shift faster |
 | T | in free-fly: put Henry under the camera |
 
@@ -137,6 +137,9 @@ Click the view to capture the mouse; Esc releases it.
 - **Doors:** Henry opens and closes them (E) without his hand animation;
   locked doors can't be opened yet (no keys or lockpicking); NPCs walk
   through closed doors; no door sounds.
+- **Chests** show what they hold, but nothing can be taken yet (no
+  inventory), and the random part of their loot isn't rolled: the list
+  shows what they may hold.
 - **Cutscene videos** don't play.
 - **Water:** rivers whose surface is flat don't flow; waterfalls don't move.
 - **Sky:** no clouds or weather.
