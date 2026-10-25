@@ -37,7 +37,11 @@ copy, the research repo) are in `CLAUDE.local.md`, which is not committed.
 - **Commits** end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - **Pull requests, not pushes to `main`.** Work on a feature branch, run
   `tools/audit.sh origin/main`, open a PR with `gh`, and merge it yourself
-  once the `checks` workflow passes, unless the user says otherwise.
+  once the `checks` workflow passes, unless the user says otherwise. Merge
+  by rebasing the branch on `origin/main` and pushing it as `main`
+  (`git push origin HEAD:main`, a fast-forward; GitHub marks the PR
+  merged). Don't merge on GitHub: its merges sign commits with the
+  account's private e-mail address.
 - **Commits, PRs and issues in this repo never mention** decompiled code,
   the game's DLL or its names, or the decompiler by name. The audit checks
   commit messages and the PR text. Say "research notes" instead.

@@ -7,8 +7,18 @@
 
 base=${1:?usage: tools/audit.sh BASE [HEAD]}
 head=${2:-HEAD}
+# A base that no longer exists (a force-push) or a new branch: audit the
+# whole history instead.
+if git cat-file -e "$base^{commit}" 2>/dev/null; then
+  range="$base..$head"
+else
+  echo "audit: base $base not found; auditing all of $head"
+  base=$(git hash-object -t tree /dev/null)
+  range=$head
+fi
 fail=0
 say() { echo "audit: $*"; fail=1; }
+git rev-parse -q --verify "$head^{commit}" >/dev/null || { echo "audit: no commit $head"; exit 2; }
 
 MAX_BYTES=1048576
 MAX_BINARY_BYTES=102400
@@ -40,12 +50,12 @@ hits=$(printf '%s\n' "$added" | grep -nE "$MARKERS" | head -5)
 hits=$(printf '%s\n' "$added" | grep -nE '/home/[a-z]|/Users/[A-Za-z]' | head -5)
 [ -n "$hits" ] && say "home paths in added lines:" && printf '%s\n' "$hits" | cut -c1-160
 
-msgs=$(git log --format='%B' "$base..$head"; printf '%s\n' "${PR_TEXT:-}")
+msgs=$(git log --format='%B' "$range"; printf '%s\n' "${PR_TEXT:-}")
 hits=$(printf '%s\n' "$msgs" | grep -niE "$WORDS|$MARKERS" | head -5)
 [ -n "$hits" ] && say "internals wording in commit messages or the PR text:" && printf '%s\n' "$hits" | cut -c1-160
 
-bad=$(git log --format='%ae %ce' "$base..$head" | tr ' ' '\n' | grep -v '@users.noreply.github.com$' | grep -v '^noreply@github.com$' | sort -u)
+bad=$(git log --format='%ae %ce' "$range" | tr ' ' '\n' | grep -v '@users.noreply.github.com$' | grep -v '^noreply@github.com$' | sort -u)
 [ -n "$bad" ] && say "commit e-mail addresses that aren't GitHub no-reply ones: $bad"
 
-[ "$fail" -eq 0 ] && echo "audit: clean ($(git rev-list --count "$base..$head") commits)"
+[ "$fail" -eq 0 ] && echo "audit: clean ($(git rev-list --count "$range") commits)"
 exit $fail
