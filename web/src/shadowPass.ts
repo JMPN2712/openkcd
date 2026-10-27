@@ -5,6 +5,7 @@ import type { ModelRenderer } from "./renderer.ts";
 import type { ShadowMap } from "./shadow.ts";
 import { selectLods, type WorldScene } from "./world.ts";
 import type { Vec3 } from "./mat4.ts";
+import type { GpuTimer } from "./gpuTimer.ts";
 
 /** The far cascade is redrawn every this many frames (or sooner, see render). */
 const FAR_EVERY = 4;
@@ -33,7 +34,7 @@ export class ShadowCasters {
    * Place the cascades and record their passes: `world` holds the scene's items, `others` (NPCs,
    * the player) cast with all their parts. `toLight` points at the sun (or moon).
    */
-  render(enc: GPUCommandEncoder, map: ShadowMap, eye: Vec3, fwd: Vec3, toLight: Vec3, world: ModelRenderer, others: ModelRenderer[], opts: { lodScale?: number } = {}): void {
+  render(enc: GPUCommandEncoder, map: ShadowMap, eye: Vec3, fwd: Vec3, toLight: Vec3, world: ModelRenderer, others: ModelRenderer[], opts: { lodScale?: number; timer?: GpuTimer } = {}): void {
     if (!map.cascades || !this.scene) return;
     if (toLight[2] < 0.03) { map.disable(); return; }
     // the far cascade is redrawn every fourth frame (its lag doesn't show at that distance), and
@@ -58,7 +59,7 @@ export class ShadowCasters {
         this.counts[c].forEach((n, k) => world.setShadowInstances(c, k, this.out[c][k], n));
       }
       for (const r of [world, ...others]) r.setShadowCamera(c, vp);
-      const pass = map.beginPass(enc, c);
+      const pass = map.beginPass(enc, c, opts.timer?.pass(`shadow ${c}`));
       world.drawShadow(pass, c);
       for (const r of others) r.drawShadow(pass, c);
       pass.end();

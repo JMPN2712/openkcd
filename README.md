@@ -135,6 +135,9 @@ node scripts/test-interiors.ts                   # interior placement: sampled b
 node --expose-gc scripts/test-streaming.ts       # two laps through the map's towns: scene rebuild times, memory levels off with cache trimming
 node scripts/test-sky.ts                         # time-of-day profiles, sunrise/sunset, the sun's path, light levels over the day
 node scripts/bench-presets.ts --gpu both         # frame rates per quality preset (Potato/Low/Medium/High), market and fields, each GPU Dawn finds (NO_POOL=1: without texture streaming)
+node scripts/bench-presets.ts --gpu low-power --scenes market --split --ablate low   # GPU ms per pass (timestamp queries); Medium with each setting set to Low's, one at a time (--with '{"msaa":1}' changes settings)
+node scripts/triangles.ts --preset medium        # where a frame's triangles come from: per model, kind and LOD, at the market (no GPU)
+CHROME_FLAGS=--use-webgpu-power-preference=force-low-power node scripts/profile-browser.ts --preset=potato --bench --query=gpu-mem   # the in-app benchmark (every preset) in headless Chrome on the integrated GPU; gpu-mem adds memory by holder (--heap: a sampled JS heap profile)
 node scripts/build-slim.ts OUT_DIR [--potato] [--store]   # the compact package (docs/SLIM.md), built from ~/kcd1 into OUT_DIR outside the repo; --store: with the file store (run with render-player --root OUT_DIR/store --slim OUT_DIR)
 node scripts/test-slim.ts PACKAGE_DIR            # the package's codec, and a sample of its models and textures against the paks
 node scripts/bench-streaming.ts --back           # what a streaming step costs: scene build, geometry upload (in slices), the renderer rebuild and the frame after, kept geometry memory

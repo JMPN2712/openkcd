@@ -109,7 +109,15 @@ Pick one in the world view (saved per browser). Medium is the default.
 | Medium | mid-range GPUs | up to 1024 px | 2 cascades | 100%, 4× MSAA | 500 m |
 | High | recent discrete GPUs | up to 2048 px | 2 cascades, sharper | 100%, 4× MSAA | 700 m |
 
-The HUD shows the frame rate. The Potato package holds textures up to 512 px,
+**Benchmark:** the ⏱ Benchmark button flies over Rataje and walks through its
+market (about 80 s) at every preset, then copies a report to the clipboard:
+frame rates (average and 1% low), CPU and GPU time per render pass, the GPU,
+driver and browser, the render size and the memory in use. Paste it into an
+issue or a message. Shift-click runs the current preset only.
+
+The HUD shows the frame rate, the CPU and GPU time per frame (GPU time per
+pass where the browser has timestamp queries; G splits the scene pass by what
+it draws) and the memory in use. The Potato package holds textures up to 512 px,
 so with it the higher presets don't sharpen textures (shadows and distance
 still follow the preset).
 
@@ -163,8 +171,9 @@ the address starts Henry there, e.g. `?at=2522,545` by the tailor's shop.
   `--ozone-platform=x11`, the view glitches until a reload.
 - **First load:** opening the world takes a while (about 10 to 20 s for the
   world from a compact package, longer from the game's archives).
-- **The Potato preset hasn't been measured on its target** (a Vega 7 laptop)
-  yet, and macOS is still being tried (an Apple M3 Pro). See [COMPATIBILITY.md](COMPATIBILITY.md) for what has been tested.
+- **On a Vega 7 laptop** (the low-end target) Potato holds 60 fps and Low
+  40–60, but Medium runs at about 10 fps; macOS is still being tried (an
+  Apple M3 Pro). See [COMPATIBILITY.md](COMPATIBILITY.md) for what has been tested.
 
 Please report problems with the issue form, saying where in the world it
 happened (the HUD shows the coordinates). Don't attach game files.

@@ -110,8 +110,8 @@ export class ShadowMap {
   }
 
   /** A depth-only render pass into cascade `c`. */
-  beginPass(enc: GPUCommandEncoder, c: number): GPURenderPassEncoder {
-    return enc.beginRenderPass({ colorAttachments: [], depthStencilAttachment: { view: this.layers[c], depthClearValue: 1, depthLoadOp: "clear", depthStoreOp: "store" } });
+  beginPass(enc: GPUCommandEncoder, c: number, timing: { timestampWrites?: GPURenderPassTimestampWrites } = {}): GPURenderPassEncoder {
+    return enc.beginRenderPass({ ...timing, colorAttachments: [], depthStencilAttachment: { view: this.layers[c], depthClearValue: 1, depthLoadOp: "clear", depthStoreOp: "store" } });
   }
 
   destroy(): void {

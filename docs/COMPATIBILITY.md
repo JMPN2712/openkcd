@@ -16,7 +16,7 @@ player is at <https://openkcd.jmpn.workers.dev/>.
 | Same machine | same | none: Node with Dawn (`webgpu` npm), headless benchmark | RTX 5070 Ti | `bench-presets.ts`, market and fields | Potato 325 fps, Low 198, Medium 111, High 75 in the market ([PERFORMANCE.md](PERFORMANCE.md)) |
 | Same machine | same | none: Node with Dawn, headless benchmark | AMD Radeon integrated graphics (Ryzen 9 9900X, 2 RDNA2 CUs) | `bench-presets.ts`, market and fields | Potato 84 fps, Low 52 in the market. A pessimistic stand-in for the Vega 7 (2 compute units against 7). |
 | MacBook Pro, Apple M3 Pro | macOS | Google Chrome | Apple M3 Pro (integrated) | The hosted player (`openkcd.jmpn.workers.dev`) | **Being tried** (2026-10-24); results to follow. |
-| Low-end target: AMD Vega 7 laptop, 16 GB | | | AMD Radeon Vega 7 | | **Not yet tried.** Potato preset, compact Potato package, part-by-part install. |
+| Low-end target: AMD Vega 7 laptop, 16 GB (shared with graphics); a friend's | | Chrome (version to follow) | AMD Radeon Vega 7 (integrated) | The hosted player, in Rataje after loading (2026-10-26) | **Playable on Potato and Low.** Potato a locked 60 fps; Low 40–60 fps; Medium about 10 fps, at most 20. The HUD's CPU time was about 9 ms per frame, so the GPU is the limit. The in-app benchmark (⏱ Benchmark) will give per-pass GPU times, the driver and the render size. |
 
 ## Not working
 

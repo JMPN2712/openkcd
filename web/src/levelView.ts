@@ -41,12 +41,15 @@ import { Beds, sleepMinutes, WAKE_MINUTE, type Bed } from "./beds.ts";
 import { depthClear, depthFormat, type PassSetup } from "./mat4.ts";
 import type { TimeOfDay } from "./tod.ts";
 import { SkyRenderer, skyAt, pickProfile, invert } from "./sky.ts";
-import { PRESETS, savedPreset, savePreset, type PresetName } from "./quality.ts";
+import { PRESETS, savedPreset, savePreset, type PresetName, type QualityPreset } from "./quality.ts";
 import { loadDetailLayers } from "./terrainDetail.ts";
 import { levelData, levelVfs } from "./levelData.ts";
 import { openSlim } from "./slimView.ts";
 import { ShadowMap } from "./shadow.ts";
 import { ShadowCasters } from "./shadowPass.ts";
+import { GpuTimer, encodeOpaque } from "./gpuTimer.ts";
+import { trackGpuMemory } from "./gpuMemory.ts";
+import { benchStart, jsHeap, pose, report, retainedBuffers, systemInfo, PATH_SECONDS, type FrameSample, type PresetResult } from "./benchmark.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -64,10 +67,17 @@ const SPEEDS: [string, number][] = [["paused", 0], ["×15 (game speed)", 15], ["
 const SPAWN_AT = (typeof location !== "undefined" ? new URLSearchParams(location.search).get("at") : null)?.split(",").map(Number).filter(Number.isFinite);
 const SPAWN: [number, number, number] = SPAWN_AT && SPAWN_AT.length >= 2 ? [SPAWN_AT[0], SPAWN_AT[1], 0] : [2577.8, 574, 0];
 const SPAWN_YAW = SPAWN_AT && SPAWN_AT.length >= 3 ? (SPAWN_AT[2] * Math.PI) / 180 : -Math.PI / 2;
+/** A benchmark across presets (benchmark.ts): the presets still to run, the results so far, the preset to return to */
+let benchRun: { queue: PresetName[]; original: PresetName; results: PresetResult[]; system: string[] } | null = null;
+/** the last benchmark's report, shown when the view reopens at the original preset */
+let benchReport: string | null = null;
+/** the view fills the window (kept when the view is rebuilt: a preset change, the benchmark) */
+let fullWindow = false;
 /** Time between drawn frames while the world is loading (ms): about 15 fps. */
 const LOADING_FRAME = 66;
 
 export async function showLevel(host: HTMLElement, paks: PakSource[], level: string): Promise<void> {
+  const openedAt = performance.now();
   stopActive?.();
   stopActive = null;
   const status = el("p", "note", `Loading ${level}…`);
@@ -93,14 +103,16 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let decals: Decals;
   let vfs: Vfs;
   let device: GPUDevice;
+  let adapterInfo: GPUAdapterInfo | null = null;
   try {
     ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, tod, surfaceTypes, merged, roads, decals } = await levelData(paks, level, (m) => { status.textContent = m; }));
     vfs = await levelVfs(paks, level, (m) => { status.textContent = m; });
     if (!navigator.gpu) throw new Error("WebGPU is not available in this browser (chrome://flags/#enable-unsafe-webgpu).");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter) throw new Error("No WebGPU adapter.");
-    device = await adapter.requestDevice({ requiredFeatures: (["texture-compression-bc", "indirect-first-instance"] as GPUFeatureName[]).filter((f) => adapter.features.has(f)) });
+    device = await adapter.requestDevice({ requiredFeatures: [...(["texture-compression-bc", "indirect-first-instance"] as GPUFeatureName[]).filter((f) => adapter.features.has(f)), ...GpuTimer.features(adapter)] });
     setGpuBlockCompression(device.features.has("texture-compression-bc"));
+    adapterInfo = adapter.info;
   } catch (err) {
     host.replaceChildren(el("p", "error", (err as Error).message));
     return;
@@ -121,8 +133,13 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     gpuProblem = `GPU device lost (${info.reason}): ${info.message}`;
   });
 
+  // GPU memory in use (benchmark, HUD)
+  // (?gpu-mem: by creating function too, printed with the benchmark's report)
+  const gpuMem = trackGpuMemory(device, { sites: new URLSearchParams(location.search).has("gpu-mem") });
   const presetName = savedPreset();
-  const q = PRESETS[presetName];
+  // ?preset-with={"msaa":1,…}: settings changed from the preset's (debugging, measuring)
+  const presetWith = new URLSearchParams(location.search).get("preset-with");
+  const q = { ...PRESETS[presetName], ...(presetWith ? JSON.parse(presetWith) as Partial<QualityPreset> : {}) };
   const STREAM_RADIUS = q.streamRadius; // metres of objects around the camera
   const STREAM_STEP = q.streamRadius * 0.3; // rebuild after moving this far
   const NPC_MAX = q.npcMax;
@@ -157,6 +174,17 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   for (const [k, v] of Object.entries(PRESETS)) presetSel.append(new Option(`Quality: ${v.label}`, k, k === presetName, k === presetName));
   presetSel.addEventListener("change", () => { savePreset(presetSel.value as PresetName); void showLevel(host, paks, level); });
   clockBar.append(presetSel);
+  // the benchmark: every preset (shift-click: this one), then the report to the clipboard
+  const benchBtn = el("button", undefined, "⏱ Benchmark");
+  benchBtn.type = "button";
+  benchBtn.title = `Fly over Rataje and walk through its market (${Math.round(PATH_SECONDS)} s) at every quality preset, then copy the results to send (shift-click: this preset only)`;
+  benchBtn.addEventListener("click", (e) => {
+    if (benchRun) return;
+    benchRun = { queue: e.shiftKey ? [presetName] : (Object.keys(PRESETS) as PresetName[]), original: presetName, results: [], system: [] };
+    void systemInfo(adapterInfo).then((lines) => { if (benchRun) benchRun.system = lines; });
+    nextBenchPreset();
+  });
+  clockBar.append(benchBtn);
   // debug: play a dialogue sequence by id with the NPCs around Henry (how conversations start
   // waits for a research note); 46319 is the tailor's gossip about the baths
   const dlgId = el("input", "level-dialogue-id");
@@ -184,24 +212,43 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const chestPanel = el("div", "level-chest");
   chestPanel.hidden = true;
   const fade = el("div", "level-fade");
+  // the benchmark's report (copy to send)
+  const benchPanel = el("div", "level-bench");
+  benchPanel.hidden = true;
+  const showBenchReport = (text: string) => {
+    const pre = el("pre", undefined, text);
+    const copy = el("button", undefined, "Copy results");
+    copy.type = "button";
+    const close = el("button", undefined, "Close");
+    close.type = "button";
+    const note = el("span", "dim");
+    const doCopy = () => navigator.clipboard.writeText(text).then(() => { note.textContent = "Copied to the clipboard: paste it in a message."; }, () => { note.textContent = "Couldn't copy automatically: press Copy results, or select the text."; });
+    copy.addEventListener("click", () => void doCopy());
+    close.addEventListener("click", () => { benchPanel.hidden = true; canvas.focus(); });
+    benchPanel.replaceChildren(el("strong", undefined, "Benchmark results"), pre, copy, close, note);
+    benchPanel.hidden = false;
+    void doCopy();
+  };
   // what E does at the door, chest or bed Henry faces
   const prompt = el("div", "level-prompt");
   prompt.hidden = true;
   let promptText = "";
   const dialogue = new DialogueHost(vfs, paks);
   let dialogueInfo = "";
-  stage.append(canvas, fullBtn, marketBtn, clockBar, hud, chestPanel, prompt, dialogue.subtitle, dialogue.menu, fade);
+  stage.append(canvas, fullBtn, marketBtn, clockBar, hud, chestPanel, benchPanel, prompt, dialogue.subtitle, dialogue.menu, fade);
   host.replaceChildren(
     el("p", "scene-title", `${level}: ${terrain.size} × ${terrain.size} m terrain, ${objects.brushName.length.toLocaleString()} brushes, ${objects.vegGroup.length.toLocaleString()} vegetation instances`),
     stage,
     el("p", "dim", "Click the view to walk as Henry: mouse look · WASD move · Shift sprint · X walk/run · Space jump · V first/third person (wheel zooms) · F free-fly (drag to look, Q/E down/up, T puts Henry there) · Esc releases the mouse"),
   );
   const setFull = (on: boolean) => {
+    fullWindow = on;
     stage.classList.toggle("full", on);
     fullBtn.textContent = on ? "✕ Exit full window" : "⛶ Full window";
     canvas.focus();
   };
   fullBtn.addEventListener("click", () => setFull(!stage.classList.contains("full")));
+  if (fullWindow) setFull(true);
   marketBtn.addEventListener("click", () => {
     // Rataje's market under the town wall, looking south at a guard by the stalls
     if (player && mode === "player") {
@@ -274,6 +321,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const farTrees = new FarTrees(device, format, passSetup);
   void farTrees.build(vfs, terrain, objects, { maxTextureDim: q.maxTextureDim }).catch((err) => console.warn("far trees:", err));
   const sky = new SkyRenderer(device, format, passSetup);
+  // GPU time per pass (HUD); G splits the opaque pass by what it draws, to time each part
+  const timer = new GpuTimer(device);
+  let splitPasses = new URLSearchParams(location.search).has("gpu-passes");
   const todProfile = tod ? pickProfile(tod) : null;
   // Henry: the player character (loaded in the background; free-fly until then)
   let player: PlayerSession | null = null;
@@ -505,6 +555,75 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   // 100 s from the game folder before the market was complete)
   const cam: FlyCamera = { pos: [SPAWN[0], SPAWN[1], heightAt(terrain, SPAWN[0], SPAWN[1]) + 30], yaw: SPAWN_YAW, pitch: -0.4 };
 
+  // the benchmark at this preset: wait at the path's start until the world has loaded and stayed
+  // loaded for 3 s, then run the path (benchmark.ts)
+  let bench: { phase: "settle" | "run"; quietSince: number; start: number; segment: string; frames: FrameSample[]; peakJs: number; peakGpu: number } | null = null;
+  const groundAt = (x: number, y: number) => heightAt(terrain, x, y);
+  const startBench = () => {
+    mode = "fly";
+    document.exitPointerLock?.();
+    minute = 12 * 60;
+    speedSel.value = "15";
+    npcCheckedAt = -Infinity;
+    Object.assign(cam, benchStart(groundAt));
+    bench = { phase: "settle", quietSince: performance.now(), start: 0, segment: "", frames: [], peakJs: 0, peakGpu: 0 };
+    benchBtn.disabled = true;
+  };
+  /** the next preset's run (each from a fresh view and empty caches: its memory is its own), or the report */
+  const nextBenchPreset = () => {
+    const run = benchRun;
+    if (!run) return;
+    const next = run.queue[0];
+    if (!next) {
+      benchRun = null;
+      benchReport = report(run.system, run.results);
+      savePreset(run.original);
+      worldCaches.clear();
+      void showLevel(host, paks, level);
+      return;
+    }
+    savePreset(next);
+    worldCaches.clear();
+    void showLevel(host, paks, level);
+  };
+  const stepBench = (now: number) => {
+    const b = bench!;
+    mode = "fly";
+    if (b.phase === "settle") {
+      Object.assign(cam, benchStart(groundAt));
+      if (worldLoading || !npcsLoaded || streaming || grassBusy || !pool.idle || !far) b.quietSince = now;
+      // (at most 3 minutes: a world that never settles is part of the result)
+      if (now - b.quietSince > 3000 || now - openedAt > 180_000) {
+        b.phase = "run";
+        b.start = now;
+        splitPasses = true;
+        timer.recording = [];
+      }
+      return;
+    }
+    const p = pose((now - b.start) / 1000, groundAt);
+    Object.assign(cam, p.cam);
+    b.segment = p.segment;
+    if (!p.done) return;
+    bench = null;
+    splitPasses = false;
+    const run = benchRun;
+    if (!run) return;
+    run.results.push({
+      preset: q.label, resolution: `${canvas.width}×${canvas.height}${q.msaa > 1 ? ` ${q.msaa}× MSAA` : ""}`,
+      frames: b.frames, gpu: timer.recording ?? [], settleSeconds: (b.start - openedAt) / 1000,
+      memory: { end: { jsHeap: jsHeap(), gpu: { ...gpuMem }, pool: pool.bytes }, peakJs: b.peakJs, peakGpu: b.peakGpu },
+    });
+    if (gpuMem.sites) {
+      const held = retainedBuffers({ worldCaches, grassCaches, far, scene, terrain, objects, cover, merged, roads, decals, npcEntities, schedules, props, ents, npcWorld, npcs, npcAi, dialogue, pool, models, grassR, npcR, playerR, farR, farTrees, surroundings, doors, chests, beds, player, vfs, paks });
+      run.system.push(`${q.label} typed arrays by holder: ${[...held].filter(([, v]) => v > 2 ** 20).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${(v / 2 ** 20).toFixed(0)} MiB`).join("; ")}`);
+    }
+    if (gpuMem.sites) run.system.push(`${q.label} GPU memory by site: ${[...gpuMem.sites].filter(([, v]) => v > 2 ** 20).sort((a, b) => b[1] - a[1]).slice(0, 25).map(([k, v]) => `${k} ${(v / 2 ** 20).toFixed(0)} MiB`).join("; ")}`);
+    timer.recording = null;
+    run.queue.shift();
+    setTimeout(nextBenchPreset, 0);
+  };
+
   const keys = new Set<string>();
   canvas.addEventListener("keydown", (e) => {
     // in a conversation the menu takes the keys (numbers, arrows, Enter, Space)
@@ -515,6 +634,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         if (mode === "fly") document.exitPointerLock?.();
       }
       if ((e.code === "KeyX" || e.code === "CapsLock") && player) player.walk = !player.walk;
+      if (e.code === "KeyG") { splitPasses = !splitPasses; timer.smoothed.clear(); }
       if (e.code === "KeyV" && player && mode === "player") player.setView(player.viewMode === "first" ? "third" : "first");
       // E: the chest Henry faces, else the NPC, else the door
       if (e.code === "KeyE" && player && mode === "player" && !chestHint && talkHint && talkHint.ready !== false && !dialogue.talkingTo) {
@@ -586,6 +706,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     // while the world and then the first NPCs load, a frame every LOADING_FRAME ms at most:
     // drawing the growing scene at full speed took about half the main thread from loading
     if ((worldLoading || !npcsLoaded) && last && now - last < LOADING_FRAME) return;
+    const frameMs = last ? now - last : 0;
     const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
     if (last) fpsAvg += ((now - last) - fpsAvg) * 0.05;
     last = now;
@@ -672,6 +793,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       const g = heightAt(terrain, cam.pos[0], cam.pos[1]);
       if (cam.pos[2] < g + 1.7) cam.pos[2] = g + 1.7;
     }
+    if (bench) stepBench(now);
     const ground = heightAt(terrain, cam.pos[0], cam.pos[1]);
     if (!canvas.width) return;
     if (!streamedAt || Math.hypot(cam.pos[0] - streamedAt[0], cam.pos[1] - streamedAt[1]) > STREAM_STEP) void stream();
@@ -734,29 +856,25 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       lodInfo = ` · drawing ${st.drawn.toLocaleString()} (LOD ${st.perLod.map((n) => n ?? 0).join("/")}), culled ${st.culledDistance.toLocaleString()} by distance, ${st.culledFrustum.toLocaleString()} off-screen`;
     }
     const enc = device.createCommandEncoder();
+    timer.begin();
     if (shadowMap && skyState) {
       const f: [number, number, number] = [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)];
-      casters.render(enc, shadowMap, cam.pos, f, skyState.lighting.sunDir, models, player && mode === "player" ? [npcR, playerR] : [npcR], { lodScale: q.lodScale });
+      casters.render(enc, shadowMap, cam.pos, f, skyState.lighting.sunDir, models, player && mode === "player" ? [npcR, playerR] : [npcR], { lodScale: q.lodScale, timer });
     }
     const colour = (msaa ?? target).createView();
-    const pass = enc.beginRenderPass({
-      colorAttachments: [{ view: colour, clearValue: { r: 0.55, g: 0.62, b: 0.70, a: 1 }, loadOp: "clear", storeOp: "store" }],
-      depthStencilAttachment: { view: depthView!, depthClearValue: depthClear(passSetup), depthLoadOp: "clear", depthStoreOp: "store" },
-    });
-    if (skyState) sky.draw(pass);
-    renderer.draw(pass);
-    // roads and decals blend onto the terrain before anything stands on it
-    models.drawGround(pass);
-    farR.draw(pass);
-    models.draw(pass);
-    grassR.draw(pass);
-    farTrees.draw(pass);
-    npcR.draw(pass);
-    if (player && mode === "player") playerR.draw(pass);
-    pass.end();
+    encodeOpaque(enc, { view: colour, clearValue: { r: 0.55, g: 0.62, b: 0.70, a: 1 } }, { view: depthView!, depthClearValue: depthClear(passSetup) }, [
+      ["sky+terrain", (p) => { if (skyState) sky.draw(p); renderer.draw(p); }],
+      // roads and decals blend onto the terrain before anything stands on it
+      ["roads+decals", (p) => models.drawGround(p)],
+      ["objects", (p) => { farR.draw(p); models.draw(p); }],
+      ["grass", (p) => grassR.draw(p)],
+      ["far trees", (p) => farTrees.draw(p)],
+      ["characters", (p) => { npcR.draw(p); if (player && mode === "player") playerR.draw(p); }],
+    ], timer, splitPasses);
     // see-through materials (waterfalls, weirs, glass, water) over everything opaque, in a second
     // pass that holds the depth read-only: the water reads it (how deep it is under each pixel)
     const blend = enc.beginRenderPass({
+      ...timer.pass("blended+water"),
       colorAttachments: [{ view: colour, resolveTarget: msaa ? target.createView() : undefined, loadOp: "load", storeOp: msaa ? "discard" : "store" }],
       depthStencilAttachment: { view: depthView!, depthReadOnly: true },
     });
@@ -768,8 +886,16 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     water.setDepth(depthView, mode === "player" && player?.viewMode === "first" ? 0.01 : 0.1);
     water.draw(blend);
     blend.end();
+    timer.resolve(enc);
     device.queue.submit([enc.finish()]);
-    cpuAvg += (performance.now() - t0 - cpuAvg) * 0.05;
+    timer.collect();
+    const cpu = performance.now() - t0;
+    cpuAvg += (cpu - cpuAvg) * 0.05;
+    if (bench?.phase === "run") {
+      bench.frames.push({ segment: bench.segment, ms: frameMs, cpu });
+      bench.peakJs = Math.max(bench.peakJs, jsHeap());
+      bench.peakGpu = Math.max(bench.peakGpu, gpuMem.buffers + gpuMem.textures + gpuMem.targets);
+    }
     const pc = player?.controller;
     // [key, action]: key "" for a message without one
     const hint: readonly [string, string] | null = mode !== "player" || sleeping || dialogue.talkingTo ? null
@@ -784,10 +910,13 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       if (hint) prompt.replaceChildren(...(hint[0] ? [el("kbd", undefined, hint[0])] : []), hint[1]);
     }
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
-    hud.textContent = `${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms (${q.label}, ${canvas.width}×${canvas.height}) · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}${dialogueInfo ? ` · ${dialogueInfo}` : ""}`;
+    const benchInfo = bench ? `⏱ benchmark ${q.label}: ${bench.phase === "settle" ? "loading…" : `${bench.segment} ${Math.round((now - bench.start) / 1000)}/${Math.round(PATH_SECONDS)} s`} · ` : "";
+    hud.textContent = `${benchInfo}${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms${timer.available ? `, gpu ${timer.total.toFixed(1)} ms (${timer.summary()}${splitPasses ? "" : "; G splits"})` : ""} (${q.label}, ${canvas.width}×${canvas.height}) · memory: JS ${(jsHeap() / 2 ** 20).toFixed(0)} MiB, GPU ${((gpuMem.buffers + gpuMem.textures + gpuMem.targets) / 2 ** 20).toFixed(0)} MiB · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}${dialogueInfo ? ` · ${dialogueInfo}` : ""}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();
+  if (benchRun?.queue[0] === presetName) startBench();
+  else if (benchReport) { showBenchReport(benchReport); benchReport = null; }
 
   stopActive = () => {
     stopped = true;
@@ -802,6 +931,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     farR.destroy();
     pool.destroy();
     sky.destroy();
+    timer.destroy();
     shadowMap?.destroy();
     water.destroy();
     depth?.destroy();

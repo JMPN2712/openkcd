@@ -5,7 +5,7 @@
 // call crosses into the GPU process: this measures what a player gets.
 // Driven over the DevTools protocol (Node's built-in WebSocket); no npm deps.
 // usage: node scripts/profile-browser.ts [--root=GAME_ROOT] [--preset=high] [--settle=30]
-//          [--seconds=8] [--windowed] [--dialogue=SEQUENCE_ID [--shot=close_up] [--screenshot=PREFIX]] [--talk=NPC_NAME [--pick=1,2]] [--at=x,y[,yaw°]] [--fly=SECONDS [--spikes]] [--build-slim=full|potato] [--package] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080]
+//          [--seconds=8] [--windowed] [--dialogue=SEQUENCE_ID [--shot=close_up] [--screenshot=PREFIX]] [--talk=NPC_NAME [--pick=1,2]] [--at=x,y[,yaw°]] [--fly=SECONDS [--spikes]] [--build-slim=full|potato] [--package] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080] [--bench[=this]] [--query=gpu-mem] [--heap]
 //   CHROME=… picks the browser binary, CHROME_FLAGS=… adds flags, PROFILE_DIR=… keeps the profile; --probe stops after naming the
 //   WebGPU adapter; --fly then flies north-west across the map (free-fly, 60 m/s: a streaming
 //   step every few seconds) printing the HUD every 10 s, then profiles there; with --spikes it
@@ -95,7 +95,12 @@ await page("Runtime.enable");
 await page("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceScaleFactor: 1, mobile: false });
 // --at=x,y[,yaw°]: Henry starts there (the page's ?at= option)
 const at = arg("at", "");
-await page("Page.navigate", { url: `http://localhost:${PORT}/${at ? `?at=${at}` : ""}` });
+// --query=gpu-mem&…: more of the address's debugging switches
+const query = [at ? `at=${at}` : "", arg("query", "")].filter(Boolean).join("&");
+// --heap: a sampled JS heap profile from the start, its live allocations by function printed with the benchmark
+const heap = process.argv.includes("--heap");
+if (heap) { await page("HeapProfiler.enable"); await page("HeapProfiler.startSampling", { samplingInterval: 256 * 1024 }); }
+await page("Page.navigate", { url: `http://localhost:${PORT}/${query ? `?${query}` : ""}` });
 await waitFor("the page", () => evaluate<boolean>(`document.readyState === "complete" && !!document.getElementById("open-input")`).then((v) => v || undefined));
 await evaluate(`localStorage.setItem("openkcd.quality", ${JSON.stringify(preset)})`);
 const adapter = await evaluate<string>(`navigator.gpu ? navigator.gpu.requestAdapter().then((a) => a ? a.info.vendor + " " + a.info.architecture + " " + a.info.description : "no adapter") : "no WebGPU"`);
@@ -193,6 +198,40 @@ await sleep(settle * 1000);
 const readings: string[] = [];
 for (let k = 0; k < 3; k++) { readings.push((await hud()).replace(/ · .*?x /, " · x ").replace(/ · (terrain|textures)[^·]*/g, "").slice(0, 300)); await sleep(1000); }
 console.log(readings.join("\n"));
+
+// --bench[=this]: the in-app benchmark (every preset, or this one), printing its report
+const benchArg = process.argv.find((a) => a === "--bench" || a.startsWith("--bench="));
+if (benchArg) {
+  await evaluate(`[...document.querySelectorAll("button")].find((b) => /Benchmark/.test(b.textContent)).dispatchEvent(new MouseEvent("click", { shiftKey: ${benchArg === "--bench=this"} }))`);
+  let lastHud = "";
+  const text = await waitFor("the benchmark", async () => {
+    const h = (await hud()).match(/⏱ [^·]*/)?.[0] ?? "";
+    // (the preset and phase as they change, not every second)
+    const key = h.replace(/\d+\/\d+ s/, "");
+    if (h && key !== lastHud) { console.log(h); lastHud = key; }
+    return evaluate<string>(`(() => { const p = document.querySelector(".level-bench"); return p && !p.hidden ? p.querySelector("pre").textContent : undefined; })()`);
+  }, 3600_000);
+  console.log(text);
+  if (heap) {
+    // live bytes by allocating function (self), and by the app's functions on the stack (total)
+    type H = { callFrame: { functionName: string; url: string; lineNumber: number }; selfSize: number; children: H[] };
+    const { profile: hp } = await page("HeapProfiler.getSamplingProfile");
+    const self = new Map<string, number>(), incl = new Map<string, number>();
+    const name = (n: H) => `${n.callFrame.functionName || "(anonymous)"} ${n.callFrame.url.split("/").pop()}:${n.callFrame.lineNumber}`;
+    const walk = (n: H, stack: string[]) => {
+      const k = name(n);
+      const s2 = n.callFrame.url.includes("localhost") && !stack.includes(k) ? [...stack, k] : stack;
+      if (n.selfSize) { self.set(k, (self.get(k) ?? 0) + n.selfSize); for (const f of s2) incl.set(f, (incl.get(f) ?? 0) + n.selfSize); }
+      for (const c of n.children) walk(c, s2);
+    };
+    walk(hp.head as H, []);
+    const m = (v: number) => `${(v / 2 ** 20).toFixed(0)} MiB`;
+    console.log(`JS heap (sampled, live): ${m([...self.values()].reduce((a, b) => a + b, 0))}`);
+    console.log(`  self: ${[...self].sort((a, b) => b[1] - a[1]).slice(0, 25).map(([k, v]) => `${k} ${m(v)}`).join("\n        ")}`);
+    console.log(`  total: ${[...incl].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([k, v]) => `${k} ${m(v)}`).join("\n         ")}`);
+  }
+  process.exit(0);
+}
 
 // --dialogue=ID: play a dialogue sequence with the NPCs near Henry (the debug control) and print
 // its subtitles as they appear, and how many of its lines decoded to audio

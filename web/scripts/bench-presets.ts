@@ -4,7 +4,11 @@
 // LOD selection, NPC animation, encoding) until the GPU has finished it, so CPU and GPU time add
 // up (a browser overlaps them: this is the pessimistic figure). The output is 1920×1080 scaled by
 // the preset's render scale; nothing is presented to a screen.
+// GPU time per pass comes from timestamp queries (gpuTimer.ts); --split times each part of the
+// opaque pass on its own. --ablate low runs Medium, then Medium with each setting that differs
+// from Low set to Low's value, one at a time (which settings make Medium cost more).
 // usage: node scripts/bench-presets.ts [--gpu high-performance|low-power|both] [--frames N] [--presets potato,low,…]
+//          [--scenes market,fields,river] [--size 1920x1080] [--split] [--ablate low] [--with JSON]
 
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -21,7 +25,8 @@ import { PlayerSession } from "../src/playerSession.ts";
 import { CollisionWorld } from "../src/collision.ts";
 import { depthClear, depthFormat, type PassSetup } from "../src/mat4.ts";
 import { SkyRenderer, skyAt, pickProfile, invert } from "../src/sky.ts";
-import { PRESETS, type PresetName } from "../src/quality.ts";
+import { PRESETS, type PresetName, type QualityPreset } from "../src/quality.ts";
+import { GpuTimer, encodeOpaque } from "../src/gpuTimer.ts";
 import { setGpuBlockCompression } from "../src/model.ts";
 import { NpcWorld, npcItems, animateNpcs } from "../src/npcs.ts";
 import { parseNpcEntities, parseEntityIndex } from "../src/levelEntities.ts";
@@ -36,10 +41,24 @@ import { ShadowCasters } from "../src/shadowPass.ts";
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
 const root = opt("--root", join(homedir(), "kcd1"));
-const gpus = opt("--gpu", "both") === "both" ? ["high-performance", "low-power"] as const : [opt("--gpu", "high-performance")] as GPUPowerPreference[];
+const gpuOpt = opt("--gpu", "both");
+const gpus = (gpuOpt === "both" ? ["high-performance", "low-power"] : [gpuOpt]) as GPUPowerPreference[];
 const FRAMES = Number(opt("--frames", "240"));
 const presets = opt("--presets", "potato,low,medium,high").split(",") as PresetName[];
-const W = 1920, H = 1080;
+const [W, H] = opt("--size", "1920x1080").split("x").map(Number);
+const sceneNames = opt("--scenes", "market,fields,river").split(",");
+const split = args.includes("--split");
+const ablate = opt("--ablate", "") as PresetName | "";
+// the runs: presets by name, or Medium and its one-setting variants
+type Run = { name: PresetName; label: string; q: QualityPreset };
+const runs: Run[] = ablate
+  ? [{ name: "medium" as PresetName, label: "Medium", q: PRESETS.medium }, ...(Object.keys(PRESETS.medium) as (keyof QualityPreset)[])
+    .filter((k) => k !== "label" && JSON.stringify(PRESETS.medium[k]) !== JSON.stringify(PRESETS[ablate][k]))
+    .map((k) => ({ name: "medium" as PresetName, label: `Medium, ${k} ${JSON.stringify(PRESETS[ablate][k])}`, q: { ...PRESETS.medium, [k]: PRESETS[ablate][k] } })), { name: ablate, label: PRESETS[ablate].label, q: PRESETS[ablate] }]
+  : presets.map((name) => ({ name, label: PRESETS[name].label, q: PRESETS[name] }));
+// --with '{"msaa":1,…}': the presets with these settings changed
+const over = opt("--with", "");
+if (over) for (const r of runs) { r.q = { ...r.q, ...JSON.parse(over) }; r.label += ` with ${over}`; }
 
 const lvl = await openRataje(root);
 // pak reads on worker threads, as in the browser (NO_WORKERS=1: on the main thread)
@@ -69,12 +88,12 @@ for (const pp of gpus) {
   const adapter = await gpu.requestAdapter({ powerPreference: pp as GPUPowerPreference });
   if (!adapter) { console.log(`no ${pp} adapter`); continue; }
   const gpuName = `${adapter.info.vendor} ${adapter.info.device}`.replace(/-/g, " ");
-  const device = await adapter.requestDevice({ requiredFeatures: (["texture-compression-bc", "indirect-first-instance"] as GPUFeatureName[]).filter((f) => adapter.features.has(f)) });
+  const device = await adapter.requestDevice({ requiredFeatures: [...(["texture-compression-bc", "indirect-first-instance"] as GPUFeatureName[]).filter((f) => adapter.features.has(f)), ...GpuTimer.features(adapter)] });
+  const timer = new GpuTimer(device);
   setGpuBlockCompression(device.features.has("texture-compression-bc"));
   device.addEventListener("uncapturederror", (e) => console.log("GPU ERROR:", (e as GPUUncapturedErrorEvent).error.message));
   const format: GPUTextureFormat = "rgba8unorm";
-  for (const name of presets) {
-    const q = PRESETS[name];
+  for (const { name, label, q } of runs) {
     const pass: PassSetup = { sampleCount: q.msaa, reversedZ: true };
     const w = Math.round(W * q.renderScale), hgt = Math.round(H * q.renderScale);
     const terrainR = new TerrainRenderer(device, format, lvl.terrain, lvl.cover, pass, await loadDetailLayers(lvl.vfs, lvl.surfaceTypes, q.terrainDetail), { detailFade: q.detailFade });
@@ -104,7 +123,7 @@ for (const pp of gpus) {
     // shared with an earlier preset's run comes back with stand-ins (a preset switch, not a start)
     let caches = cachesByDim.get(`${name}:${q.maxTextureDim}`);
     if (!caches) cachesByDim.set(`${name}:${q.maxTextureDim}`, (caches = newWorldCaches()));
-    for (const sc of SCENES) {
+    for (const sc of SCENES.filter((s) => sceneNames.includes(s.name))) {
       const scene = await buildWorldScene(lvl.vfs, lvl.terrain, lvl.objects, sc.at, q.streamRadius, { maxModels: 20000, maxTextureDim: q.maxTextureDim, caches, props: lvl.props, hiddenLayers: lvl.hiddenLayers, normalMaps: q.normalMaps && !process.env.NO_NORMAL, ground: process.env.NO_ROADS ? undefined : [lvl.roads, lvl.decals] });
       const items = lodItems(scene);
       models.setModels(items, models.indexed ? sceneMatrices(scene) : undefined);
@@ -162,6 +181,7 @@ for (const pp of gpus) {
         ms = performance.now() - t;
       }
       // PROFILE_RUN=file: a CPU profile of this run's measured frames (first scene only)
+      timer.recording = [];
       const prof = process.env.PROFILE_RUN && sc === SCENES[0] ? new (await import("node:inspector/promises")).Session() : null;
       if (prof) { prof.connect(); await prof.post("Profiler.enable"); await prof.post("Profiler.start"); }
       for (let f = 0; f < FRAMES + 30; f++) {
@@ -197,36 +217,34 @@ for (const pp of gpus) {
         farTrees.setCamera(vp, cam.pos, state.lighting, { center: sc.at, radius: q.streamRadius, distanceScale: q.distanceScale });
         water.setCamera(vp, cam.pos, state.lighting.sunDir, undefined, state.lighting, state.horizon);
         const enc = device.createCommandEncoder();
-        if (shadowMap) casters.render(enc, shadowMap, cam.pos, [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)], state.lighting.sunDir, models, [npcR, playerR], { lodScale: q.lodScale });
+        timer.begin();
+        if (f === 30) timer.recording = [];
+        if (shadowMap) casters.render(enc, shadowMap, cam.pos, [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)], state.lighting.sunDir, models, [npcR, playerR], { lodScale: q.lodScale, timer });
         // (as the level view: blended surfaces and water in a second pass, unless OLD_WATER)
         const colour = (msaa ?? target).createView();
         const resolve = msaa ? target.createView() : undefined;
-        const p = enc.beginRenderPass({
-          colorAttachments: [{ view: colour, resolveTarget: oldWater ? resolve : undefined, loadOp: "clear", storeOp: oldWater && msaa ? "discard" : "store", clearValue: [0, 0, 0, 1] }],
-          depthStencilAttachment: { view: depthView, depthClearValue: depthClear(pass), depthLoadOp: "clear", depthStoreOp: oldWater ? "discard" : "store" },
+        // (as the level view)
+        encodeOpaque(enc, { view: colour, clearValue: [0, 0, 0, 1] }, { view: depthView, depthClearValue: depthClear(pass) }, [
+          ["sky+terrain", (p) => { sky.draw(p); terrainR.draw(p); }],
+          ["roads+decals", (p) => models.drawGround(p)],
+          ["objects", (p) => models.draw(p)],
+          ["grass", (p) => grassR.draw(p)],
+          ["far trees", (p) => farTrees.draw(p)],
+          ["characters", (p) => { npcR.draw(p); playerR.draw(p); }],
+        ], timer, split);
+        const b = enc.beginRenderPass({
+          ...timer.pass("blended+water"),
+          colorAttachments: [{ view: colour, resolveTarget: resolve, loadOp: "load", storeOp: msaa ? "discard" : "store" }],
+          depthStencilAttachment: { view: depthView, depthReadOnly: true },
         });
-        sky.draw(p);
-        terrainR.draw(p);
-        models.drawGround(p);
-        models.draw(p);
-        grassR.draw(p);
-        farTrees.draw(p);
-        npcR.draw(p);
-        playerR.draw(p);
-        let b = p;
-        if (!oldWater) {
-          p.end();
-          b = enc.beginRenderPass({
-            colorAttachments: [{ view: colour, resolveTarget: resolve, loadOp: "load", storeOp: msaa ? "discard" : "store" }],
-            depthStencilAttachment: { view: depthView, depthReadOnly: true },
-          });
-        }
         models.drawBlended(b);
         npcR.drawBlended(b);
         playerR.drawBlended(b);
         water.draw(b);
         b.end();
+        timer.resolve(enc);
         device.queue.submit([enc.finish()]);
+        timer.collect();
         mark("encode");
         await device.queue.onSubmittedWorkDone();
         mark("gpu");
@@ -245,9 +263,16 @@ for (const pp of gpus) {
       times.sort((a, b) => a - b);
       const mean = times.reduce((a, b) => a + b, 0) / times.length;
       const p95 = times[Math.floor(times.length * 0.95)];
-      const line = `${gpuName} | ${q.label} | ${sc.name} | ${w}×${hgt}${q.msaa > 1 ? ` ${q.msaa}× MSAA` : ""} | ${(1000 / mean).toFixed(0)} fps | ${mean.toFixed(1)} ms | ${p95.toFixed(1)} ms | ${(tris / times.length / 1e6).toFixed(2)}M | ${Math.round(drawn / times.length)} | ${Math.round(calls / times.length)} | ${npcs.length} | ${scene.models.length}`;
+      // GPU ms per pass, averaged over the measured frames (read back a frame or two late)
+      await new Promise((r) => setTimeout(r, 50));
+      const rec = timer.recording ?? [];
+      const gpuPasses = new Map<string, number>();
+      for (const fr of rec) for (const [k, v] of fr.passes) gpuPasses.set(k, (gpuPasses.get(k) ?? 0) + v / rec.length);
+      const gpuTotal = rec.reduce((a, fr) => a + [...fr.passes.values()].reduce((x, y) => x + y, 0), 0) / (rec.length || 1);
+      const line = `${gpuName} | ${label} | ${sc.name} | ${w}×${hgt}${q.msaa > 1 ? ` ${q.msaa}× MSAA` : ""} | ${(1000 / mean).toFixed(0)} fps | ${mean.toFixed(1)} ms | ${p95.toFixed(1)} ms | ${gpuTotal.toFixed(2)} ms | ${(tris / times.length / 1e6).toFixed(2)}M | ${Math.round(drawn / times.length)} | ${Math.round(calls / times.length)} | ${npcs.length} | ${scene.models.length}`;
       console.log(line);
       results.push(line);
+      console.log(`     GPU per pass (ms): ${[...gpuPasses].map(([k, v]) => `${k} ${v.toFixed(2)}`).join(", ")}`);
       console.log(`     per frame: ${Object.entries(phase).map(([k, v]) => `${k} ${(v / (FRAMES + 30)).toFixed(2)} ms`).join(", ")}`);
       console.log(`     draw calls (camera, cascades): world ${models.viewCalls().join("/")}, NPCs ${npcR.viewCalls().join("/")}, grass ${grassR.viewCalls().join("/")}`);
       if (pool) console.log(`     ${pool.summary()}; settled in ${ramp} frames (${(ms / 1000).toFixed(1)} s); ${pool.stats.loads} loads, ${pool.stats.shrinks} shrinks, ${pool.stats.evicted} evicted`);
@@ -257,8 +282,9 @@ for (const pp of gpus) {
     shadowMap?.destroy();
     for (const t of [target, msaa, depth]) t?.destroy();
   }
+  timer.destroy();
   device.destroy();
 }
-console.log("\nGPU | preset | scene | resolution | fps (mean) | frame (mean) | frame (p95) | triangles | instances drawn | draw calls | NPCs | models streamed");
+console.log("\nGPU | preset | scene | resolution | fps (mean) | frame (mean) | frame (p95) | GPU passes | triangles | instances drawn | draw calls | NPCs | models streamed");
 console.log(results.join("\n"));
 lvl.vfs.workers?.terminate();

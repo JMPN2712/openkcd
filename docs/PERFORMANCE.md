@@ -21,6 +21,95 @@
 The world view has a preset menu (saved per browser) and an fps counter in
 its HUD.
 
+## The low-end target: measuring (2026-10-26)
+
+**Report from the Vega 7 laptop** (16 GB shared with graphics, hosted player):
+Potato a locked 60 fps, Low 40–60, Medium about 10 (at most 20), the HUD's
+CPU time about 9 ms: the GPU is the limit. Goal: Medium at 60, less memory.
+
+**Tools added:**
+- `gpuTimer.ts`: GPU time per render pass from timestamp queries, in the HUD
+  and in `bench-presets.ts`. With G (or while benchmarking) the opaque pass is
+  split by what it draws: sky+terrain, roads+decals, objects, grass, far
+  trees, characters. Splitting costs little (Low in Dawn: 32.5 ms in one
+  pass, 34.3 split).
+- `gpuMemory.ts`: GPU memory by kind (buffers, textures, render targets),
+  counted from the device's create calls; `?gpu-mem` adds the creating
+  function, and the typed arrays each part of the view holds.
+- The ⏱ Benchmark button (`benchmark.ts`): a 78 s flight over Rataje (river,
+  fields, back) then a walk through the market, per preset, from a fresh view
+  each; fps (average, 1% low), CPU and GPU ms per pass, adapter and driver,
+  render size, memory; copied to the clipboard.
+  `profile-browser.ts --bench` runs it in headless Chrome.
+- `bench-presets.ts --ablate low`: Medium with each setting set to Low's,
+  one at a time; `--with JSON` changes settings. `?preset-with=JSON` does the
+  same in the browser.
+- `scripts/triangles.ts`: triangles per model, kind and LOD in a view.
+
+**Chrome on the 2-CU integrated Radeon** (only the AMD Vulkan driver visible
+to Chrome; with the NVIDIA one too, `force-low-power` lost the device sharing
+the canvas between the GPUs), the in-app benchmark, 1920×1080 window:
+
+| Preset | Render size | fps | 1% low | GPU ms | sky+terrain | roads+decals | objects | far trees | characters | shadows |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Potato | 960×540 | 122 | 14.5 | 8.1 | 2.1 | 0.9 | 3.2 | 1.2 | 0.5 | – |
+| Low | 1440×810 | 60 | 4.8 | 17.4 | 4.2 | 1.6 | 6.6 | 1.6 | 1.0 | 1.7 |
+| Medium | 1920×1080, 4× MSAA | 13.3 | 1.4 | 70.3 | 10.7 | 4.4 | 37.7 | 2.0 | 2.6 | 10.1 |
+| High | 1920×1080, 4× MSAA | 9.0 | 1.0 | 108.9 | 13.6 | 6.2 | 53.4 | 1.3 | 4.6 | 25.8 |
+
+This matches the Vega 7 report closely (Low 40–60, Medium 10–20), so the
+iGPU in Chrome stands in for the laptop. The HUD's CPU time is inflated when
+the GPU is behind (`getCurrentTexture` waits): 68 ms on Medium here.
+
+**Medium with one change, same run** (fps, GPU ms):
+
+| Change | fps | GPU ms |
+|---|---|---|
+| none | 13.3 | 70 |
+| MSAA off | 17.0 | 56 |
+| render scale 0.75 | 17.0 | 54 |
+| Low's shadows (1 cascade, 1024², 40 m) | 14.8 | 64 |
+| Low's geometry (stream 300 m, view ×0.65, LOD ×0.7, 16 NPCs, terrain LOD 160 m) | 23.9 | 40 |
+| Low's texture budget (640 MiB) | 12.9 | 74 |
+
+Headless Dawn (`bench-presets.ts --ablate low`, market) agrees on the order
+(geometry, then resolution and MSAA, then shadows; grass, terrain detail and
+textures nothing) but sees a smaller gap (Medium 76 ms, Low 34 ms).
+
+**Why Medium costs 4× Low:** the objects pass (38 ms against 6.6) is limited
+by geometry and draw count more than by pixels: 7.7M object triangles in the
+market view at Medium in 2,100 draws (`triangles.ts`: rocks, bushes and firs
+at LOD 1–2 lead, a long tail after; props inside houses count too, such as a
+45k-triangle bookshelf, a 21k shelf). Resolution and MSAA each take about a
+fifth of the frame, the shadow cascades a seventh. No single setting
+explains it: they multiply.
+
+**1% lows** are poor on every preset (Potato 14.5 fps, Medium 1.4) during
+the flight: streaming steps stall frames on this machine.
+
+**Regression:** the 2-CU iGPU in Dawn ran Low at 52 fps on 2026-10-20 and
+runs it at 22 now (the market scene gained roads and decals, interiors,
+normal maps on Low, water). Not yet traced.
+
+**Memory (same runs, end of each):**
+
+| Preset | JS heap (peak) | GPU | of which geometry buffers | textures (pool) | render targets |
+|---|---|---|---|---|---|
+| Potato | 3.5 GiB (3.9) | 2.6 GiB | 2.3 GiB | 314 MiB (215) | 26 MiB |
+| Low | 3.7 GiB (4.4) | 3.0 GiB | 2.3 GiB | 735 MiB (636) | 36 MiB |
+| Medium | 3.8 GiB (3.8) | 3.6 GiB | 2.6 GiB | 987 MiB (863) | 119 MiB |
+| High | 4.1 GiB (4.8) | 4.8 GiB | 2.6 GiB | 2.1 GiB (2.0) | 159 MiB |
+
+- **Geometry:** each of the five model renderers has its own vertex and
+  index stores growing in 128 MiB chunks (`GEOMETRY_CHUNK`), so even Potato
+  holds 2.3 GiB; vertices are 64 bytes.
+- **JS:** of Potato's 3.5 GiB, typed arrays reachable from the view are
+  about 1.1 GiB: the model caches 773 MiB (the CPU copies of meshes kept
+  after upload), the schedules and navmesh 101 MiB, terrain, cover and
+  objects about 140 MiB. The sampled heap of JS objects is 0.55 GiB
+  (animation databases, zip directories, behaviour trees, tables). The rest
+  is garbage not yet collected and memory outside these roots.
+
 ## Measured frame rates (2026-10-20, after the draw and CPU work below)
 
 From `scripts/bench-presets.ts`.
