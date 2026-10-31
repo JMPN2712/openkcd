@@ -52,6 +52,7 @@ import { trackGpuMemory } from "./gpuMemory.ts";
 import { benchStart, jsHeap, pose, report, retainedBuffers, systemInfo, PATH_SECONDS, type FrameSample, type PresetResult } from "./benchmark.ts";
 import { setFrameWorkMs } from "./frameBudget.ts";
 import { CoverageBuffer, type Occluders } from "./occlusion.ts";
+import { Upscaler, nextScale } from "./upscale.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -504,6 +505,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let depth: GPUTexture | null = null;
   // (one view for the texture's life: the water's bind group holds it)
   let depthView: GPUTextureView | null = null;
+  // dynamic resolution (q.upscale): the scene's texture, its scale of the canvas, and the scales
+  // the benchmark ran at
+  const upscaler = q.upscale ? new Upscaler(device, format) : null;
+  let sceneTex: GPUTexture | null = null;
+  let scale = q.upscale?.max ?? 1;
+  let scaleCheckedAt = 0;
   let msaa: GPUTexture | null = null;
   let streamedAt: [number, number] | null = null;
   let streaming = false;
@@ -563,7 +570,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
 
   // the benchmark at this preset: wait at the path's start until the world has loaded and stayed
   // loaded for 3 s, then run the path (benchmark.ts)
-  let bench: { phase: "settle" | "run"; quietSince: number; start: number; segment: string; frames: FrameSample[]; peakJs: number; peakGpu: number } | null = null;
+  let bench: { phase: "settle" | "run"; quietSince: number; start: number; segment: string; frames: FrameSample[]; peakJs: number; peakGpu: number; scaleSum: number } | null = null;
   const groundAt = (x: number, y: number) => heightAt(terrain, x, y);
   const startBench = () => {
     mode = "fly";
@@ -572,7 +579,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     speedSel.value = "15";
     npcCheckedAt = -Infinity;
     Object.assign(cam, benchStart(groundAt));
-    bench = { phase: "settle", quietSince: performance.now(), start: 0, segment: "", frames: [], peakJs: 0, peakGpu: 0 };
+    bench = { phase: "settle", quietSince: performance.now(), start: 0, segment: "", frames: [], peakJs: 0, peakGpu: 0, scaleSum: 0 };
     benchBtn.disabled = true;
   };
   /** the next preset's run (each from a fresh view and empty caches: its memory is its own), or the report */
@@ -616,7 +623,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const run = benchRun;
     if (!run) return;
     run.results.push({
-      preset: q.label, resolution: `${canvas.width}×${canvas.height}${q.msaa > 1 ? ` ${q.msaa}× MSAA` : ""}`,
+      preset: q.label, resolution: `${canvas.width}×${canvas.height}${q.msaa > 1 ? ` ${q.msaa}× MSAA` : ""}${q.upscale ? `, dynamic ${q.upscale.min}–${q.upscale.max}× (average ${(b.scaleSum / Math.max(1, b.frames.length)).toFixed(2)})` : ""}`,
       frames: b.frames, gpu: timer.recording ?? [], settleSeconds: (b.start - openedAt) / 1000,
       memory: { end: { jsHeap: jsHeap(), gpu: { ...gpuMem }, pool: pool.bytes }, peakJs: b.peakJs, peakGpu: b.peakGpu },
     });
@@ -697,7 +704,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   });
 
   const ro = new ResizeObserver(() => {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2) * q.renderScale;
+    // (with dynamic resolution the canvas is full size: the scene is scaled before the upscale pass)
+    const dpr = Math.min(window.devicePixelRatio || 1, 2) * (q.upscale ? 1 : q.renderScale);
     canvas.width = Math.max(1, Math.round(canvas.clientWidth * dpr));
     canvas.height = Math.max(1, Math.round(canvas.clientHeight * dpr));
   });
@@ -819,16 +827,32 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (document.activeElement !== clockRange) clockRange.value = String(Math.floor(minute));
     if (streamedAt && !worldLoading && now - npcCheckedAt > 500) { npcCheckedAt = now; void updateNpcs(); }
     const target = ctx.getCurrentTexture();
-    if (!depth || depth.width !== target.width || depth.height !== target.height) {
+    // dynamic resolution: every half second, the scale from the GPU's frame time
+    if (q.upscale && timer.available && !worldLoading && now - scaleCheckedAt > 500) {
+      scaleCheckedAt = now;
+      scale = nextScale(scale, timer.total, q.upscale);
+    }
+    // the scene's size: the canvas's, or scaled (then drawn into sceneTex and upscaled)
+    // (at full scale straight to the canvas: the upscale pass cost 2 ms there for nothing)
+    const scaled = !!q.upscale && scale < 1;
+    const sw = scaled ? Math.max(1, Math.round(target.width * scale)) : target.width;
+    const sh = scaled ? Math.max(1, Math.round(target.height * scale)) : target.height;
+    if (!scaled && sceneTex) { sceneTex.destroy(); sceneTex = null; }
+    if (scaled && (!sceneTex || sceneTex.width !== sw || sceneTex.height !== sh)) {
+      sceneTex?.destroy();
+      sceneTex = device.createTexture({ size: [sw, sh], format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+    }
+    if (!depth || depth.width !== sw || depth.height !== sh) {
       depth?.destroy();
       msaa?.destroy();
-      depth = device.createTexture({ size: [target.width, target.height], format: depthFormat(passSetup), sampleCount: passSetup.sampleCount, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+      depth = device.createTexture({ size: [sw, sh], format: depthFormat(passSetup), sampleCount: passSetup.sampleCount, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
       depthView = depth.createView();
-      msaa = passSetup.sampleCount > 1 ? device.createTexture({ size: [target.width, target.height], format, sampleCount: passSetup.sampleCount, usage: GPUTextureUsage.RENDER_ATTACHMENT }) : null;
+      msaa = passSetup.sampleCount > 1 ? device.createTexture({ size: [sw, sh], format, sampleCount: passSetup.sampleCount, usage: GPUTextureUsage.RENDER_ATTACHMENT }) : null;
     }
+    const sceneTarget = sceneTex ?? target;
     const vp = TerrainRenderer.viewProj(cam, target.width / target.height, { reversed: true, near: mode === "player" && player?.viewMode === "first" ? 0.01 : 0.1 });
     // streamed textures that finished loading go in before anything is drawn
-    pool.setViewport(target.height, FOV_Y);
+    pool.setViewport(sh, FOV_Y);
     pool.beginFrame();
     // day and night from the level's time of day at the game clock
     const skyState = todProfile ? skyAt(todProfile, minute / 60) : null;
@@ -872,7 +896,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       const f: [number, number, number] = [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.cos(cam.pitch) * Math.sin(cam.yaw), Math.sin(cam.pitch)];
       casters.render(enc, shadowMap, cam.pos, f, skyState.lighting.sunDir, models, player && mode === "player" ? [npcR, playerR] : [npcR], { lodScale: q.lodScale, timer });
     }
-    const colour = (msaa ?? target).createView();
+    const colour = (msaa ?? sceneTarget).createView();
     encodeOpaque(enc, { view: colour, clearValue: { r: 0.55, g: 0.62, b: 0.70, a: 1 } }, { view: depthView!, depthClearValue: depthClear(passSetup) }, [
       ["sky+terrain", (p) => { if (skyState) sky.draw(p); renderer.draw(p); }],
       // roads and decals blend onto the terrain before anything stands on it
@@ -886,7 +910,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     // pass that holds the depth read-only: the water reads it (how deep it is under each pixel)
     const blend = enc.beginRenderPass({
       ...timer.pass("blended+water"),
-      colorAttachments: [{ view: colour, resolveTarget: msaa ? target.createView() : undefined, loadOp: "load", storeOp: msaa ? "discard" : "store" }],
+      colorAttachments: [{ view: colour, resolveTarget: msaa ? sceneTarget.createView() : undefined, loadOp: "load", storeOp: msaa ? "discard" : "store" }],
       depthStencilAttachment: { view: depthView!, depthReadOnly: true },
     });
     farR.drawBlended(blend);
@@ -897,6 +921,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     water.setDepth(depthView, mode === "player" && player?.viewMode === "first" ? 0.01 : 0.1);
     water.draw(blend);
     blend.end();
+    if (upscaler && sceneTex) upscaler.draw(enc, sceneTex, target.createView(), q.upscale!.sharpness, timer.pass("upscale"));
     timer.resolve(enc);
     device.queue.submit([enc.finish()]);
     timer.collect();
@@ -905,6 +930,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (bench?.phase === "run") {
       bench.frames.push({ segment: bench.segment, ms: frameMs, cpu });
       bench.peakJs = Math.max(bench.peakJs, jsHeap());
+      bench.scaleSum += q.upscale ? scale : 1;
       bench.peakGpu = Math.max(bench.peakGpu, gpuMem.buffers + gpuMem.textures + gpuMem.targets);
     }
     const pc = player?.controller;
@@ -922,7 +948,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     }
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
     const benchInfo = bench ? `⏱ benchmark ${q.label}: ${bench.phase === "settle" ? "loading…" : `${bench.segment} ${Math.round((now - bench.start) / 1000)}/${Math.round(PATH_SECONDS)} s`} · ` : "";
-    hud.textContent = `${benchInfo}${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms${timer.available ? `, gpu ${timer.total.toFixed(1)} ms (${timer.summary()}${splitPasses ? "" : "; G splits"})` : ""} (${q.label}, ${canvas.width}×${canvas.height}) · memory: JS ${(jsHeap() / 2 ** 20).toFixed(0)} MiB, GPU ${((gpuMem.buffers + gpuMem.textures + gpuMem.targets) / 2 ** 20).toFixed(0)} MiB · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}${dialogueInfo ? ` · ${dialogueInfo}` : ""}`;
+    hud.textContent = `${benchInfo}${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms${timer.available ? `, gpu ${timer.total.toFixed(1)} ms (${timer.summary()}${splitPasses ? "" : "; G splits"})` : ""} (${q.label}, ${canvas.width}×${canvas.height}${q.upscale ? `, scene ×${scale.toFixed(2)}` : ""}) · memory: JS ${(jsHeap() / 2 ** 20).toFixed(0)} MiB, GPU ${((gpuMem.buffers + gpuMem.textures + gpuMem.targets) / 2 ** 20).toFixed(0)} MiB · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}${dialogueInfo ? ` · ${dialogueInfo}` : ""}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();
@@ -947,6 +973,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     water.destroy();
     depth?.destroy();
     msaa?.destroy();
+    sceneTex?.destroy();
+    upscaler?.destroy();
     ro.disconnect();
     renderer.destroy();
     ctx.unconfigure();

@@ -200,6 +200,13 @@ await sleep(settle * 1000);
 const readings: string[] = [];
 for (let k = 0; k < 3; k++) { readings.push((await hud()).replace(/ · .*?x /, " · x ").replace(/ · (terrain|textures)[^·]*/g, "").slice(0, 300)); await sleep(1000); }
 console.log(readings.join("\n"));
+// --shot=FILE.png: a screenshot of the view after the readings
+const shot = arg("shot", "");
+if (shot) {
+  const { data } = await page("Page.captureScreenshot", { format: "png" });
+  await writeFile(shot, Buffer.from(data, "base64"));
+  console.log(`screenshot: ${shot}`);
+}
 
 // --memory: is the JS heap real? The page's figure, then after a forced collection, V8's own
 // breakdown, measureUserAgentSpecificMemory (cross-origin isolated pages only), and what the

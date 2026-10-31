@@ -6,7 +6,7 @@
 |---|---|---|---|---|---|---|---|---|---|
 | Potato | 0.5 | off | 200 m | 0.45 | 0.5 | 100 m | 8 | 128 → 512 | 256 MiB |
 | Low | 0.75 | off | 300 m | 0.65 | 0.7 | 160 m | 16 | 256 → 1024 | 640 MiB |
-| Medium | 1 | 4× | 500 m | 1 | 1 | 250 m | 40 | 256 → 1024 | 1 GiB |
+| Medium | 1 (dynamic 0.5–1, upscaled) | off | 500 m | 1 | 1 | 250 m | 40 | 256 → 1024 | 1 GiB |
 | High | 1 | 4× | 700 m | 1.4 | 1.3 | 350 m | 60 | 512 → 2048 | 2 GiB |
 
 **Shadows and terrain detail by preset:**
@@ -357,6 +357,32 @@ rasterising shows and the GPU saving doesn't; on Medium and High fewer draws
 cut both. The preset setting `occlusion` is on for Low, Medium and High,
 off for Potato (little is drawn within its 200 m). The Vega 7 is GPU-bound
 from Low up, so Low should gain there: to measure on the laptop.
+
+### The new Medium: no MSAA, dynamic resolution (2026-10-31, M3 Pro)
+
+Medium drops 4× MSAA and draws the scene at a scale of the canvas between
+0.5 and 1, chosen every half second from the GPU's frame time (target
+14 ms: the span from the frame's first timestamp to its last), then
+upscales it with a contrast-adaptive sharpening pass (`upscale.ts`). At
+full scale it draws straight to the canvas (the upscale pass cost 2 ms
+there for nothing). `?preset-with={"upscale":{"min":0.6,"max":0.6,…}}`
+pins a scale; the HUD shows it (`scene ×0.60`), and the benchmark report
+gives the average.
+
+The in-app benchmark, Medium, interleaved runs:
+
+| | fps | 1% low | CPU ms | GPU ms (sum of passes) | walk fps |
+|---|---|---|---|---|---|
+| before (4× MSAA, full resolution) | 77.8, 81.3 | 6.6, 8.1 | 9.6, 8.6 | 30.2, 30.3 | 73.9, 78.4 |
+| after | 91.5, 92.4 | 10.5, 11.4 | 7.7, 7.6 | 20.2, 20.3 | 87.2, 84.3 |
+
+The scale averaged 0.98 here: the M3 Pro holds 14 ms at full resolution
+almost everywhere, so the gain on this machine is the MSAA. The report's GPU
+column sums the passes, which overlap on this GPU, so it reads higher than
+the frame's span. At a pinned 0.6 the market's opaque pass fell from 4.8 to
+3.9 ms; the upscale pass costs about 1.3 ms at 1080p. Not yet measured on
+the Vega 7, where the scaling should matter most. `bench-presets.ts`
+(Dawn) draws Medium without MSAA now but doesn't scale.
 
 ## Measured frame rates (2026-10-20, after the draw and CPU work below)
 

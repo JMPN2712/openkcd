@@ -14,9 +14,8 @@ waits for a research session.
   ([PERFORMANCE.md](PERFORMANCE.md)).
 - **Priority (the user's list of 2026-10-31):** 1. JS heap (find what holds
   it, cut it; per-category breakdown in the report); 2. 1% lows; 3. occlusion
-  culling (a separate session: branch `occlusion`, worktree
-  `~/kcd-web-occlusion`); 4. the new Medium: no MSAA, upscaling with dynamic
-  resolution; 5. CPU in the walk segment; 6. far trees cheaper on low
+  culling (done, #24); 4. the new Medium: no MSAA, upscaling with dynamic
+  resolution (done: Medium 79 → 92 fps, 1% low 7 → 11); 5. CPU in the walk segment; 6. far trees cheaper on low
   presets (done: culled by cell, Potato 1.18 → 0.55 ms). Earlier order, for reference:
   1. RAM. The JS heap is real (array buffers, not garbage): see
      PERFORMANCE.md "Is the JS heap real?". Animation databases no longer
