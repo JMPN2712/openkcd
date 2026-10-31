@@ -51,6 +51,7 @@ import { GpuTimer, encodeOpaque } from "./gpuTimer.ts";
 import { trackGpuMemory } from "./gpuMemory.ts";
 import { benchStart, jsHeap, pose, report, retainedBuffers, systemInfo, PATH_SECONDS, type FrameSample, type PresetResult } from "./benchmark.ts";
 import { setFrameWorkMs } from "./frameBudget.ts";
+import { CoverageBuffer, type Occluders } from "./occlusion.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -102,11 +103,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let merged: MergedMeshes;
   let roads: Roads;
   let decals: Decals;
+  let occluders: Occluders | null;
   let vfs: Vfs;
   let device: GPUDevice;
   let adapterInfo: GPUAdapterInfo | null = null;
   try {
-    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, tod, surfaceTypes, merged, roads, decals } = await levelData(paks, level, (m) => { status.textContent = m; }));
+    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, tod, surfaceTypes, merged, roads, decals, occluders } = await levelData(paks, level, (m) => { status.textContent = m; }));
     vfs = await levelVfs(paks, level, (m) => { status.textContent = m; });
     if (!navigator.gpu) throw new Error("WebGPU is not available in this browser (chrome://flags/#enable-unsafe-webgpu).");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
@@ -325,6 +327,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   // GPU time per pass (HUD); G splits the opaque pass by what it draws, to time each part
   const timer = new GpuTimer(device);
   let splitPasses = new URLSearchParams(location.search).has("gpu-passes");
+  const useOcclusion = !!occluders && q.occlusion && !new URLSearchParams(location.search).has("no-occlusion");
+  const coverage = new CoverageBuffer();
   const todProfile = tod ? pickProfile(tod) : null;
   // Henry: the player character (loaded in the background; free-fly until then)
   let player: PlayerSession | null = null;
@@ -856,9 +860,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       animateNpcs(npcs, npcWorld, minute, simSeconds, npcR, cam.pos);
     }
     if (scene) {
-      const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts, { lodScale: q.lodScale, distanceScale: q.distanceScale, indices: models.indexed });
+      // occlusion by the level's occluder shells (the camera's view only; ?no-occlusion: off)
+      if (useOcclusion) coverage.render(occluders!, vp, cam.pos);
+      const st = selectLods(scene, cam.pos, vp, lodOut, lodCounts, { lodScale: q.lodScale, distanceScale: q.distanceScale, indices: models.indexed, occlusion: useOcclusion ? coverage : undefined });
       lodCounts.forEach((n, k) => models.setInstances(k, lodOut[k], n));
-      lodInfo = ` · drawing ${st.drawn.toLocaleString()} (LOD ${st.perLod.map((n) => n ?? 0).join("/")}), culled ${st.culledDistance.toLocaleString()} by distance, ${st.culledFrustum.toLocaleString()} off-screen`;
+      lodInfo = ` · drawing ${st.drawn.toLocaleString()} (LOD ${st.perLod.map((n) => n ?? 0).join("/")}), culled ${st.culledDistance.toLocaleString()} by distance, ${st.culledFrustum.toLocaleString()} off-screen, ${st.culledOcclusion.toLocaleString()} hidden`;
     }
     const enc = device.createCommandEncoder();
     timer.begin();

@@ -19,6 +19,7 @@ import { parseLayerNames, defaultHiddenLayers, layerDoors } from "./levelLayers.
 import { ASSET_RE } from "./assets.ts";
 import { parseTimeOfDay, type TimeOfDay } from "./tod.ts";
 import { parseSurfaceTypes } from "./terrainDetail.ts";
+import { parseOccluders, type Occluders } from "./occlusion.ts";
 
 export interface LevelData {
   terrain: Terrain;
@@ -34,6 +35,8 @@ export interface LevelData {
   merged: MergedMeshes;
   roads: Roads;
   decals: Decals;
+  /** the level's occluder shells (occluder.ocm), for occlusion culling; null when missing or unreadable */
+  occluders: Occluders | null;
 }
 
 const dataCache = new Map<string, Promise<LevelData>>();
@@ -103,7 +106,15 @@ export function levelData(paks: PakSource[], level: string, status: (s: string) 
       // the level's time of day (sun, sky, fog over the day, per weather profile)
       const me = entries.find((e) => e.name.toLowerCase() === "mission_mission0.xml");
       const tod = me ? parseTimeOfDay(new TextDecoder().decode(await readEntry(blob, me, undefined, false))) : null;
-      return { terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(blob, entries), roads: new Roads(blob, dataStart(blob, entry), objects.roads), decals: new Decals(objects.decalIndex, terrain) };
+      // the occluder shells hide interiors and what stands behind buildings (occlusion.ts)
+      const ocm = entries.find((e) => e.name.toLowerCase() === "occluder.ocm");
+      let occluders: Occluders | null = null;
+      try {
+        if (ocm) occluders = parseOccluders(await readEntry(blob, ocm, undefined, false));
+      } catch (err) {
+        console.warn("occluder.ocm:", err);
+      }
+      return { occluders, terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(blob, entries), roads: new Roads(blob, dataStart(blob, entry), objects.roads), decals: new Decals(objects.decalIndex, terrain) };
     })();
     p.catch(() => dataCache.delete(pakPath));
     dataCache.set(pakPath, p);

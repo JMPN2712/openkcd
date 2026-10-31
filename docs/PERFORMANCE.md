@@ -259,6 +259,54 @@ benchmark, interleaved runs, far-tree GPU time:
 |---|---|---|
 | Potato | 1.18 ms | 0.55 ms |
 | Low | 1.37 ms | 0.90 ms |
+### Occlusion culling (2026-10-31, M3 Pro)
+
+From the research note `interiors-visibility.md`: the original hides house
+interiors and what stands behind buildings with a small CPU depth buffer of
+the level's occluder shells (`occluder.ocm`, `docs/LEVELS.md`) plus the
+previous frame's reprojected depth. `occlusion.ts` does the first half:
+
+- each frame the shells in view within 150 m, and not small on screen
+  (bounding radius under 2% of the distance), are rasterised into a 128×64
+  buffer of 1 / view depth (near-plane clipped, one winding of each
+  double-sided face);
+- shells whose box (grown by 1 m) holds the eye are left out: standing in a
+  house, a market stall or one of the 256 m terrain tiles, a shell covers
+  the whole view from inside (the first version culled nearly everything in
+  town for that reason);
+- `selectLods` (the camera's selection only; shadows keep theirs) skips a
+  cluster or instance whose bounding sphere's screen rectangle, plus a
+  pixel, is everywhere behind a nearer occluder (8×8 tile minima first).
+
+Not done yet: reprojecting the previous frame's depth, the note's other
+source.
+
+**Correctness.** `render-world.ts --occlusion` in six views (the market at
+street level and from above, the tailor's house, the fields, Rattay from the
+south): the culled renders match the unculled ones (at most 3 levels on
+single pixels). In the market at street level 11,000 drawn instances drop to
+527.
+
+**Cost.** Rasterising takes 0.2–0.7 ms of CPU a frame on the M3 Pro (steady
+state, six views). In Chrome at the market spawn on Medium: 12,927 instances
+hidden, 917 drawn.
+
+**In-app benchmark** on the M3 Pro, the market walk (the flight over fields
+gains nothing), interleaved runs with and without (`?no-occlusion`) in one
+build (another Chrome was busy on the machine):
+
+| Preset | fps with / without | CPU ms with / without |
+|---|---|---|
+| Potato | 233 / 271 | 2.9 / 2.3 |
+| Low | 152 / 168 | 3.8 / 3.3 |
+| Medium | 101 / 64 | 7.6 / 11.9 |
+| High | 76 / 57 | 10.3 / 12.9 |
+
+At Potato's and Low's frame rates this machine is CPU-bound, so the
+rasterising shows and the GPU saving doesn't; on Medium and High fewer draws
+cut both. The preset setting `occlusion` is on for Low, Medium and High,
+off for Potato (little is drawn within its 200 m). The Vega 7 is GPU-bound
+from Low up, so Low should gain there: to measure on the laptop.
 
 ## Measured frame rates (2026-10-20, after the draw and CPU work below)
 

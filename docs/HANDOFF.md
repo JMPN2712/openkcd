@@ -32,8 +32,11 @@ waits for a research session.
      frames in a flight 140 → 95, loading 13 → 11 s. Left: garbage
      collection, `selectLods` per frame, main-thread inflates, GPU uploads.
      New background work should `await workSlice()` between pieces.
-  3. Occlusion culling from `notes/interiors-visibility.md` (coverage
-     buffer from reprojected depth plus `occluder.ocm`).
+  3. Occlusion culling. The occluder shells (`occluder.ocm`) in a 128×64
+     CPU buffer each frame (`occlusion.ts`, preset setting `occlusion`,
+     `?no-occlusion`): Medium in the market 64 → 101 fps on the M3 Pro.
+     Left: the previous frame's reprojected depth (the note's other
+     source), terrain occlusion, and measuring Low/Potato on the Vega 7.
   4. Upscaling (render below the canvas size, upscale with sharpening).
   5. The new Medium: the console profile from `notes/graphics-settings.md`
      §6 and §10 (Medium groups, items at half view distance, 900p-like).

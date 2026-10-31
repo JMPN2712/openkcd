@@ -16,8 +16,18 @@ as decoded by `web/src/terrain.ts`. Verified by `web/scripts/test-terrain.ts`
 | `brush/*.cgf` | 4,007 | Level-specific geometry |
 | `levelinfo.xml`, `leveldata.xml` | small | Heightmap size (4096), unit (1 m), sector size (64 m), max height (270 m), surface types |
 
-Also present: `occluder.ocm`, `ubernav.tmm`, `whdata_0/1`, `newgame.whs`,
+Also present: `ubernav.tmm`, `whdata_0/1`, `newgame.whs`,
 `triggerareas.fubar`, and a few smaller files.
+
+**`occluder.ocm`** (research note `interiors-visibility.md`): the level's
+occluder shells, simple double-sided building shells (doorways open) and a
+few 256 m terrain tiles; Rataje has 2,022 instances of 1,046 shapes, 130,005
+triangles. Version −6 (big-endian first word), then shape count, instance
+count and the instance table's offset; shapes are plain triangle lists of
+`x, y, z, 1` floats; each 64-byte instance holds a 3×4 world matrix, its
+world-space box half size and its shape's offset. Three instances name the
+empty shape with a placeholder box of about 1e15 m. `occlusion.ts` reads it
+and culls with it (`docs/PERFORMANCE.md`).
 
 ## terrain.dat
 

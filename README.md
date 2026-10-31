@@ -109,6 +109,7 @@ node scripts/test-terrain.ts /tmp/rataje.png      # decode the Rataje heightmap,
 node scripts/render-terrain.ts /tmp/t "1500,1800,0,30,-8"   # headless 3D terrain views (x,y,z|0=ground,yaw,pitch)
 node scripts/test-level-objects.ts               # parse Rataje's object octree (brushes, vegetation), check against terrain
 node scripts/render-world.ts /tmp/w "2192,1050,0,90,-3"   # headless terrain + objects around a point
+node scripts/render-world.ts /tmp/w "2560,560,0,20,0" --occlusion   # also world_N_occ.png with occlusion culling: it should match _lod pixel for pixel (OCC=128x64,150,0.02 tries other buffer sizes, distances, minimum sizes)
 node scripts/test-npcs.ts                        # NPC placements from objects_mission0.xml, matched to souls
 node scripts/test-schedule.ts                    # where every NPC is at six times of day (schedules, beds, areas)
 node scripts/test-navmesh.ts                     # Rataje navmesh: routes stay on the mesh

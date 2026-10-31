@@ -22,6 +22,7 @@ import type { Terrain } from "./terrain.ts";
 import type { Vfs } from "./vfs.ts";
 import type { MergedMeshes } from "./mergedMeshes.ts";
 import type { SlimPackage } from "./slim.ts";
+import type { CoverageBuffer } from "./occlusion.ts";
 
 export interface WorldModel {
   path: string;
@@ -492,6 +493,8 @@ export interface LodStats {
   drawn: number;
   culledDistance: number;
   culledFrustum: number;
+  /** behind the occluders (occlusion.ts) */
+  culledOcclusion: number;
   perLod: number[];
 }
 
@@ -517,6 +520,8 @@ export function selectLods(
     indices?: boolean;
     /** shrink instances into the ground between these distances (grass: no hard edge where it ends) */
     fade?: [number, number];
+    /** the occluders in view (the camera's selection only): instances behind them are left out */
+    occlusion?: CoverageBuffer;
   } = {},
 ): LodStats {
   const m = viewProj;
@@ -529,7 +534,8 @@ export function selectLods(
     r2, r3.map((v, k) => v - r2[k]),
   ].map((p) => { const l = Math.hypot(p[0], p[1], p[2]) || 1; return p.map((v) => v / l); });
   const lodScale = opts.lodScale ?? 1, distScale = opts.distanceScale ?? 1, maxD = opts.maxDistance ?? Infinity, minR = opts.minRadius ?? 0, fade = opts.fade;
-  const stats: LodStats = { drawn: 0, culledDistance: 0, culledFrustum: 0, perLod: [] };
+  const stats: LodStats = { drawn: 0, culledDistance: 0, culledFrustum: 0, culledOcclusion: 0, perLod: [] };
+  const occ = opts.occlusion;
   const P = new Float64Array(24);
   planes.forEach((p, k) => P.set(p, k * 4));
   const ex = eye[0], ey = eye[1], ez = eye[2];
@@ -561,6 +567,7 @@ export function selectLods(
         if (s < R + rmax) allInside = false;
       }
       if (outside) { stats.culledFrustum += end - j; continue; }
+      if (occ && !wm.uber && !occ.sphereVisible(cx, cy, cz, R + rmax)) { stats.culledOcclusion += end - j; continue; }
       for (let i = j; i < end; i++) {
         const x = S[i * 4], y = S[i * 4 + 1], z = S[i * 4 + 2], r = S[i * 4 + 3];
         const d = Math.sqrt((x - ex) * (x - ex) + (y - ey) * (y - ey) + (z - ez) * (z - ez));
@@ -571,6 +578,7 @@ export function selectLods(
         let inside = true;
         if (!allInside) for (let k = 0; k < 24; k += 4) if (P[k] * x + P[k + 1] * y + P[k + 2] * z + P[k + 3] < -r) { inside = false; break; }
         if (!inside) { stats.culledFrustum++; continue; }
+        if (occ && !wm.uber && !occ.sphereVisible(x, y, z, r)) { stats.culledOcclusion++; continue; }
         const lod = Math.min(nl, Math.floor(Math.max(0, d - r) / ((8 * r + 10) * lodScale)));
         const dst = base + lod;
         if (indices) {

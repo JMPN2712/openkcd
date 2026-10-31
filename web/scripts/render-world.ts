@@ -32,6 +32,7 @@ import { TerrainRenderer, type FlyCamera } from "../src/terrainRenderer.ts";
 import { setGpuBlockCompression } from "../src/model.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 import { buildWorldScene, lodItems, newWorldCaches, selectLods } from "../src/world.ts";
+import { CoverageBuffer, parseOccluders } from "../src/occlusion.ts";
 
 Object.assign(globalThis, globals);
 const args = process.argv.slice(2);
@@ -80,6 +81,14 @@ const ctc = levelEntries.find((e) => e.name.toLowerCase() === "terrain/cover.ctc
 const bytes = await readEntry(levelBlob, tdat);
 const terrain = parseTerrain(bytes);
 const objects = parseLevelObjects(bytes, terrain.objectsOffset);
+// --occlusion: also a view with the occluder shells' culling (occlusion.ts), drawn as world_N_occ.png
+const withOcclusion = args.includes("--occlusion");
+const ocmEntry = levelEntries.find((e) => e.name.toLowerCase() === "occluder.ocm");
+const occluders = withOcclusion && ocmEntry ? parseOccluders(await readEntry(levelBlob, ocmEntry)) : null;
+if (occluders) console.log(`occluders: ${occluders.tris.length} instances, ${occluders.triangles} triangles`);
+// OCC=W×H,maxDistance,minSize tries other settings
+const [occSize, occDist, occMin] = (process.env.OCC ?? "").split(",");
+const coverage = occSize ? new CoverageBuffer(...(occSize.split("x").map(Number) as [number, number])) : new CoverageBuffer();
 const cover = ctc && !args.includes("--no-cover") ? parseCover(await readEntry(levelBlob, ctc), terrain.size) : undefined;
 
 let list = views;
@@ -212,9 +221,14 @@ for (const [i, v] of list.entries()) {
   const out = items.map((it) => new Float32Array(it.capacity * 16));
   const counts = items.map(() => 0);
   const vp = TerrainRenderer.viewProj(cam, W / H);
-  for (const mode of ["lod", "full"] as const) {
-  // "full": every instance at LOD 0, no culling, for comparison
-  const st = selectLods(scene, cam.pos, vp, out, counts, mode === "lod" ? {} : { lodScale: 1e9, distanceScale: 1e9 });
+  for (const mode of occluders ? (["lod", "full", "occ"] as const) : (["lod", "full"] as const)) {
+  // "full": every instance at LOD 0, no culling, for comparison; "occ": "lod" with occlusion culling
+  let occMs = 0;
+  if (mode === "occ") { const t = performance.now(); coverage.render(occluders!, vp, cam.pos, occDist ? Number(occDist) : undefined, occMin ? Number(occMin) : undefined); occMs = performance.now() - t; }
+  const ts = performance.now();
+  const st = selectLods(scene, cam.pos, vp, out, counts, mode === "full" ? { lodScale: 1e9, distanceScale: 1e9 } : mode === "occ" ? { occlusion: coverage } : {});
+  if (mode === "lod") console.log(`  selection ${(performance.now() - ts).toFixed(1)} ms`);
+  if (mode === "occ") console.log(`  occlusion: ${coverage.drawn} occluder triangles drawn in ${occMs.toFixed(1)} ms; ${st.culledOcclusion} instances culled; selection ${(performance.now() - ts).toFixed(1)} ms`);
   counts.forEach((n, k) => models.setInstances(k, out[k], n));
   terrainR.prepare(cam, vp);
   if (npcWorld) {

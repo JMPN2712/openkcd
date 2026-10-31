@@ -25,8 +25,9 @@ const settle = Number(arg("settle", "15"));
 const seconds = Number(arg("seconds", "8"));
 const out = arg("out", "");
 const [W, H] = arg("size", "1920x1080").split("x").map(Number);
-const PORT = 5198;
-const DEBUG = 9338;
+// PORT=… and DEBUG_PORT=…: other ports, so two runs (two checkouts) don't collide
+const PORT = Number(process.env.PORT ?? 5198);
+const DEBUG = Number(process.env.DEBUG_PORT ?? 9338);
 
 const children: ChildProcess[] = [];
 process.on("exit", () => children.forEach((c) => c.kill()));
@@ -42,7 +43,7 @@ async function waitFor<T>(what: string, fn: () => Promise<T | undefined>, ms = 6
 }
 
 // (not minified: the profile names real functions)
-const dist = join(tmpdir(), "openkcd-profile-dist");
+const dist = join(tmpdir(), `openkcd-profile-dist-${PORT}`);
 const build = spawn("node_modules/.bin/vite", ["build", "--outDir", dist, "--emptyOutDir", "--minify", "false"], { stdio: "ignore" });
 if ((await new Promise((r) => build.once("exit", r))) !== 0) throw new Error("vite build failed");
 children.push(spawn("node_modules/.bin/vite", ["preview", "--outDir", dist, "--port", String(PORT), "--strictPort"], { stdio: "ignore" }));

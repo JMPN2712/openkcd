@@ -33,13 +33,16 @@ export interface QualityPreset {
   farTrees: number;
   /** sun shadows: cascades (0 = off), map size, and where each cascade ends (m) */
   shadows: { cascades: 0 | 1 | 2; size: number; splits: number[] };
+  /** occlusion culling by the level's occluder shells (occlusion.ts): saves GPU time where much is
+   * drawn, costs about 0.3–0.7 ms of CPU a frame, more than it saves at Potato's distances */
+  occlusion: boolean;
 }
 
 export const PRESETS: Record<PresetName, QualityPreset> = {
-  potato: { grass: 20, farTrees: 2000, label: "Potato", renderScale: 0.5, msaa: 1, streamRadius: 200, distanceScale: 0.45, lodScale: 0.5, terrainLod: 100, npcMax: 8, maxTextureDim: 128, textures: { maxDim: 512, budgetMiB: 256 }, normalMaps: false, terrainDetail: 256, detailFade: [25, 80], shadows: { cascades: 0, size: 1, splits: [] } },
-  low: { grass: 35, farTrees: 3000, label: "Low", renderScale: 0.75, msaa: 1, streamRadius: 300, distanceScale: 0.65, lodScale: 0.7, terrainLod: 160, npcMax: 16, maxTextureDim: 256, textures: { maxDim: 1024, budgetMiB: 640 }, normalMaps: true, terrainDetail: 256, detailFade: [35, 120], shadows: { cascades: 1, size: 1024, splits: [40] } },
-  medium: { grass: 55, farTrees: Infinity, label: "Medium", renderScale: 1, msaa: 4, streamRadius: 500, distanceScale: 1, lodScale: 1, terrainLod: 250, npcMax: 40, maxTextureDim: 256, textures: { maxDim: 1024, budgetMiB: 1024 }, normalMaps: true, terrainDetail: 512, detailFade: [40, 160], shadows: { cascades: 2, size: 2048, splits: [20, 120] } },
-  high: { grass: 80, farTrees: Infinity, label: "High", renderScale: 1, msaa: 4, streamRadius: 700, distanceScale: 1.4, lodScale: 1.3, terrainLod: 350, npcMax: 60, maxTextureDim: 512, textures: { maxDim: 2048, budgetMiB: 2048 }, normalMaps: true, terrainDetail: 512, detailFade: [60, 220], shadows: { cascades: 2, size: 3072, splits: [25, 160] } },
+  potato: { grass: 20, farTrees: 2000, label: "Potato", renderScale: 0.5, msaa: 1, streamRadius: 200, distanceScale: 0.45, lodScale: 0.5, terrainLod: 100, npcMax: 8, maxTextureDim: 128, textures: { maxDim: 512, budgetMiB: 256 }, normalMaps: false, terrainDetail: 256, detailFade: [25, 80], shadows: { cascades: 0, size: 1, splits: [] }, occlusion: false },
+  low: { grass: 35, farTrees: 3000, label: "Low", renderScale: 0.75, msaa: 1, streamRadius: 300, distanceScale: 0.65, lodScale: 0.7, terrainLod: 160, npcMax: 16, maxTextureDim: 256, textures: { maxDim: 1024, budgetMiB: 640 }, normalMaps: true, terrainDetail: 256, detailFade: [35, 120], shadows: { cascades: 1, size: 1024, splits: [40] }, occlusion: true },
+  medium: { grass: 55, farTrees: Infinity, label: "Medium", renderScale: 1, msaa: 4, streamRadius: 500, distanceScale: 1, lodScale: 1, terrainLod: 250, npcMax: 40, maxTextureDim: 256, textures: { maxDim: 1024, budgetMiB: 1024 }, normalMaps: true, terrainDetail: 512, detailFade: [40, 160], shadows: { cascades: 2, size: 2048, splits: [20, 120] }, occlusion: true },
+  high: { grass: 80, farTrees: Infinity, label: "High", renderScale: 1, msaa: 4, streamRadius: 700, distanceScale: 1.4, lodScale: 1.3, terrainLod: 350, npcMax: 60, maxTextureDim: 512, textures: { maxDim: 2048, budgetMiB: 2048 }, normalMaps: true, terrainDetail: 512, detailFade: [60, 220], shadows: { cascades: 2, size: 3072, splits: [25, 160] }, occlusion: true },
 };
 
 const KEY = "openkcd.quality";
