@@ -56,7 +56,10 @@ Other commands, from `web/`:
 Most test scripts read an extracted copy of the game, by default from `kcd1`
 in your home folder; pass `--root PATH` (or the path as the first argument,
 as each script's usage line says) to use another. Headless renders use Dawn
-through the `webgpu` npm package, so they need a working Vulkan driver.
+through the `webgpu` npm package: Vulkan on Linux, Metal on macOS. The
+headless Chrome harnesses (`profile-browser.ts`, `test-install-browser.ts`)
+find Chrome in its usual place on Linux, macOS and Windows (`CHROME=` picks
+another binary) and pass the Linux flags below only on Linux.
 
 ## Linux: Chrome flags
 
@@ -76,8 +79,9 @@ For example:
 google-chrome --enable-features=Vulkan --ozone-platform=x11 http://localhost:5173/
 ```
 
-Windows and macOS need no flags in current Chrome (macOS on an M3 Pro is
-being tried; Windows is untested; see [COMPATIBILITY.md](COMPATIBILITY.md)).
+Windows and macOS need no flags in current Chrome. On macOS WebGPU runs on
+Metal: no Vulkan or `--ozone-platform` flags (tried on an Apple M3 Pro;
+Windows is untested; see [COMPATIBILITY.md](COMPATIBILITY.md)).
 
 ## Deploying the hosted player
 

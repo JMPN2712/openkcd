@@ -16,6 +16,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { chromeBinary, chromeGpuFlags } from "./chrome.ts";
 
 const arg = (k: string, d: string) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3) ?? d;
 const root = arg("root", join(homedir(), "kcd1"));
@@ -24,7 +25,6 @@ const settle = Number(arg("settle", "15"));
 const seconds = Number(arg("seconds", "8"));
 const out = arg("out", "");
 const [W, H] = arg("size", "1920x1080").split("x").map(Number);
-const chrome = process.env.CHROME ?? "google-chrome";
 const PORT = 5198;
 const DEBUG = 9338;
 
@@ -52,9 +52,8 @@ await waitFor("Vite", async () => ((await fetch(`http://localhost:${PORT}/`)).ok
 const keepProfile = !!process.env.PROFILE_DIR;
 const profile = process.env.PROFILE_DIR ?? await mkdtemp(join(tmpdir(), "openkcd-profile-"));
 children.push(
-  // Chrome on Linux has no WebGPU adapter without Vulkan, and headless falls back to SwiftShader
-  // (software) unless ANGLE runs on Vulkan and the GPU blocklist is off; frames unthrottled
-  spawn(chrome, ["--headless=new", "--enable-features=Vulkan", "--use-angle=vulkan", "--ignore-gpu-blocklist", "--enable-unsafe-webgpu", "--disable-gpu-vsync", "--disable-frame-rate-limit",
+  // the hardware adapter (Vulkan on Linux, chrome.ts) with the GPU blocklist off; frames unthrottled
+  spawn(chromeBinary, ["--headless=new", ...chromeGpuFlags, "--ignore-gpu-blocklist", "--enable-unsafe-webgpu", "--disable-gpu-vsync", "--disable-frame-rate-limit",
     ...(process.env.CHROME_FLAGS ?? "").split(" ").filter(Boolean), `--window-size=${W},${H}`, `--remote-debugging-port=${DEBUG}`, `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "about:blank"], { stdio: "ignore" }),
 );
 const version = await waitFor("Chrome", async () => (await fetch(`http://127.0.0.1:${DEBUG}/json/version`)).json() as Promise<{ webSocketDebuggerUrl: string }>);

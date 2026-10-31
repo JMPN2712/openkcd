@@ -92,8 +92,12 @@ questlines whole and never cuts anything the main quest depends on.
 
 ## Hardware targets
 
-- **Development machine:** Linux (KDE Plasma on Wayland), Ryzen 9 9900X,
-  64 GB RAM, RTX 5070 Ti plus the CPU's integrated Radeon, Google Chrome.
+- **Development machine (since 2026-10-30):** MacBook Pro, Apple M3 Pro,
+  24 GB unified memory, macOS, Google Chrome. WebGPU runs on Metal; no
+  flags needed. Benchmarks from it are M3 Pro numbers: label them so.
+- **Earlier development machine** (the numbers in the docs before
+  2026-10-30): Linux (KDE Plasma on Wayland), Ryzen 9 9900X, 64 GB RAM,
+  RTX 5070 Ti plus the CPU's integrated Radeon, Google Chrome.
   Chrome on Linux needs Vulkan turned on for WebGPU
   (`chrome://flags/#enable-vulkan`, or `--enable-features=Vulkan`) **and**
   `--ozone-platform=x11`: Chrome 156 on Wayland logs "not compatible with

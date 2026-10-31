@@ -45,7 +45,10 @@ const target: Target = {
 
 // a folder of links to the base game's installer and its first slices (the installer itself is
 // only read)
-const exe = (await readdir(srcDir)).find((n) => n.startsWith("setup_") && n.endsWith(".exe"))!;
+// (the one with the most slices: DLC installers may sit beside it)
+const names = await readdir(srcDir);
+const sliceCount = (e: string) => { let i = 0; while (names.includes(sliceName(e, i))) i++; return i; };
+const exe = names.filter((n) => n.startsWith("setup_") && n.endsWith(".exe")).reduce((a, b) => (sliceCount(b) > sliceCount(a) ? b : a));
 const dir = join(tmpdir(), `openkcd-part-${process.pid}`);
 await mkdir(dir);
 const link = (i: number) => symlink(join(srcDir, sliceName(exe, i)), join(dir, sliceName(exe, i)));

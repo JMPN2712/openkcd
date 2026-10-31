@@ -68,8 +68,9 @@ console.log(`globals defined by the game's scripts after boot (plain tables and 
 // remaining errors are engine APIs not implemented yet (e.g. Database.GetTableInfo in Events.lua)
 const souls = host.lua.doStringSync(`local c = DatabaseUtils.LoadTableColumns("soul", { "soul_id", "soul_name" }) return #c.soul_id .. " " .. tostring(c.soul_name[1] ~= nil)`);
 check("Database API: DatabaseUtils.LoadTableColumns('soul', …)", /^\d{4,} true$/.test(souls), souls);
-const line = host.lua.doStringSync(`local l = Database.GetTableLine("soul_archetype", 0) return tostring(l.soul_archetype_name) .. " " .. type(l.soul_archetype_id)`);
-check("Database API: GetTableLine typed values", line === "NPC number", line);
+// (a table the shipped scripts name, so preloadTables has it)
+const line = host.lua.doStringSync(`local l = Database.GetTableLine("game_over", 0) return tostring(l.game_over_name) .. " " .. type(l.game_over_id)`);
+check("Database API: GetTableLine typed values", line === "DiedUnknown number", line);
 const pools = host.lua.doStringSync(`local n = 0 for _, c in pairs(EventSystem.classes or {}) do n = n + #c.souls end return n`);
 console.log(`EventSystem soul pools filled from the soul table: ${pools} souls`);
 check("main.lua and OnInit run to the end", ok, host.errors.length ? `known gaps: ${host.errors.slice(0, 3).join(" | ")}` : "no errors");

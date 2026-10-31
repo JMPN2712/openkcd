@@ -16,7 +16,8 @@ const root = process.argv.find((a) => a.startsWith("--root="))?.slice(7) ?? join
 let exes = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 if (!exes.length) {
   const dir = join(homedir(), "Downloads/kingdom_come_deliverance");
-  const inDir = async (d: string) => (await readdir(d)).filter((n) => n.endsWith(".exe")).map((n) => join(d, n));
+  // the DLC installers sit beside the base game's or in a DLC subfolder
+  const inDir = async (d: string) => (await readdir(d).catch(() => [])).filter((n) => n.endsWith(".exe")).map((n) => join(d, n));
   exes = [...(await inDir(dir)), ...(await inDir(join(dir, "DLC")))];
 }
 

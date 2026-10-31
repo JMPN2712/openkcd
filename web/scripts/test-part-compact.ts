@@ -39,14 +39,19 @@ await rm(work, { recursive: true, force: true });
 const dir = join(work, "installer"), stagingDir = join(work, "staging");
 await mkdir(join(dir, "DLC"), { recursive: true });
 await mkdir(stagingDir);
-const exe = (await readdir(srcDir)).find((n) => n.startsWith("setup_") && n.endsWith(".exe"))!;
-await symlink(join(srcDir, exe), join(dir, exe));
+// the DLC installers sit beside the base game's or in a DLC subfolder; the base game's is the one
+// with the most slices
+const list = async (sub: string) => (await readdir(join(srcDir, sub)).catch(() => [] as string[])).map((n) => ({ n, sub }));
+const all = [...(await list("")), ...(await list("DLC"))];
 const where = new Map<string, string>(); // slice name -> its folder ("" or "DLC")
-for (const n of await readdir(srcDir)) if (n.endsWith(".bin")) where.set(n, "");
-for (const n of await readdir(join(srcDir, "DLC"))) {
-  if (/hd_(texture|voice|sound)/.test(n)) continue;
-  if (n.endsWith(".exe")) await symlink(join(srcDir, "DLC", n), join(dir, "DLC", n));
-  else where.set(n, "DLC");
+for (const x of all) if (x.n.endsWith(".bin")) where.set(x.n, x.sub);
+const sliceCount = (e: string) => { let i = 0; while (where.has(sliceName(e, i))) i++; return i; };
+const exes = all.filter((x) => x.n.startsWith("setup_") && x.n.endsWith(".exe"));
+const base = exes.reduce((a, b) => (sliceCount(b.n) > sliceCount(a.n) ? b : a));
+const exe = base.n;
+for (const x of exes) {
+  if (x !== base && /hd_(texture|voice|sound)/.test(x.n)) continue;
+  await symlink(join(srcDir, x.sub, x.n), join(dir, x.sub, x.n));
 }
 const add = (n: string) => symlink(join(srcDir, where.get(n)!, n), join(dir, where.get(n)!, n));
 let last = 0;

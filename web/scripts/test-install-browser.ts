@@ -25,6 +25,7 @@ import { copyFile, mkdir, open, readdir, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { sliceName } from "../src/inno.ts";
+import { chromeBinary, chromeGpuFlags } from "./chrome.ts";
 
 const srcDir = resolve(process.argv.slice(2).find((a) => !a.startsWith("--")) ?? "");
 const root = process.argv.find((a) => a.startsWith("--root="))?.slice(7) ?? join(homedir(), "kcd1");
@@ -33,7 +34,6 @@ const compact = process.argv.find((a) => a.startsWith("--compact="))?.slice(10);
 const part = Number(process.argv.find((a) => a.startsWith("--part="))?.slice(7) ?? 0);
 if (part && !compact) throw new Error("--part needs --compact");
 let interrupt = process.argv.includes("--interrupt");
-const chrome = process.env.CHROME ?? "google-chrome";
 // a throwaway profile on disk (not tmpdir(): /tmp is often a small tmpfs); with --keep it stays for a later run
 const profile = join(process.env.PROFILE_DIR ?? join(homedir(), ".cache"), "openkcd-test-profile");
 // part by part: a work folder with the installers (not the HD packs, which the package leaves
@@ -84,8 +84,7 @@ if ((await new Promise((r) => build.once("exit", r))) !== 0) throw new Error("vi
 children.push(spawn("node_modules/.bin/vite", ["preview", "--outDir", dist, "--port", String(PORT), "--strictPort"], { stdio: "ignore" }));
 await waitFor("Vite", async () => ((await fetch(`http://localhost:${PORT}/`)).ok ? true : undefined));
 children.push(
-  // Chrome on Linux has no WebGPU adapter without Vulkan
-  spawn(chrome, ["--headless=new", "--enable-features=Vulkan", `--remote-debugging-port=${DEBUG}`, `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "about:blank"], { stdio: "ignore" }),
+  spawn(chromeBinary, ["--headless=new", ...chromeGpuFlags, `--remote-debugging-port=${DEBUG}`, `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "about:blank"], { stdio: "ignore" }),
 );
 const version = await waitFor("Chrome", async () => (await fetch(`http://127.0.0.1:${DEBUG}/json/version`)).json() as Promise<{ webSocketDebuggerUrl: string }>);
 
