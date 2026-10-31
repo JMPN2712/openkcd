@@ -110,6 +110,33 @@ normal maps on Low, water). Not yet traced.
   (animation databases, zip directories, behaviour trees, tables). The rest
   is garbage not yet collected and memory outside these roots.
 
+## Apple M3 Pro baseline (2026-10-30)
+
+**These are Apple M3 Pro GPU numbers** (14-core GPU, 24 GB unified memory,
+macOS, Chrome 143 headless on Metal), from the development machine since
+2026-10-30. They are **not** RTX 5070 Ti or Vega 7 numbers; compare changes
+only against other runs on this machine. `profile-browser.ts --bench
+--query=gpu-mem`, 1920×1080, the game read from `~/kcd1`:
+
+| Preset | Render size | fps | 1% low | CPU ms | GPU ms | sky+terrain | roads+decals | objects | grass | far trees | characters | shadows |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Potato | 960×540 | 297.4 | 24.0 | 1.8 | 3.8 | 0.3 | 0.3 | 1.2 | 0.5 | 1.2 | 0.2 | – |
+| Low | 1440×810 | 196.2 | 17.8 | 3.1 | 6.8 | 0.7 | 0.6 | 1.8 | 0.9 | 1.5 | 0.4 | 0.7 |
+| Medium | 1920×1080, 4× MSAA | 80.5 | 7.6 | 8.2 | 24.1 | 1.7 | 2.3 | 7.2 | 3.1 | 3.3 | 2.3 | 2.1 |
+| High | 1920×1080, 4× MSAA | 56.9 | 5.7 | 12.9 | 30.2 | 2.7 | 3.1 | 11.2 | 2.9 | 3.1 | 2.2 | 3.6 |
+
+| Preset | JS heap (peak) | GPU | geometry buffers | textures (pool) | world caches (typed arrays) | loaded in |
+|---|---|---|---|---|---|---|
+| Potato | 5.1 GiB (5.3) | 2.6 GiB | 2.3 GiB | 326 MiB (226) | 765 MiB | 16 s |
+| Low | 5.4 GiB (5.5) | 3.1 GiB | 2.4 GiB | 738 MiB (639) | 959 MiB | 21 s |
+| Medium | 5.7 GiB (5.7) | 3.8 GiB | 2.5 GiB | 1.1 GiB (1023) | 1.1 GiB | 28 s |
+| High | 5.9 GiB (6.0) | 5.1 GiB | 2.8 GiB | 2.1 GiB (2047) | 1.3 GiB | 38 s |
+
+- The 1% lows (5.7–24 fps) are the streaming stalls seen on the 2-CU Radeon,
+  on a far faster GPU: they are CPU-side.
+- The JS heap is about 1.6 GiB above the 2026-10-26 Linux run on every
+  preset (Chrome 143 here against 156 there; not yet traced).
+
 ## Measured frame rates (2026-10-20, after the draw and CPU work below)
 
 From `scripts/bench-presets.ts`.
