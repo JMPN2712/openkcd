@@ -18,6 +18,8 @@ import { ModelRenderer } from "./renderer.ts";
 import { lookAt, multiply, depthCompare, depthFormat, type Lighting, type Mat4, type PassSetup, type Vec3 } from "./mat4.ts";
 
 const CELL_W = 128, CELL_H = 256;
+/** Instances are grouped in square cells of this side (m) for culling. */
+const CELL = 128;
 const MIPS = 6; // 128×256 down to 4×8
 /** Only models at least this tall count as trees (marsh sticks and saplings stay real-only). */
 const MIN_HEIGHT = 4;
@@ -127,6 +129,10 @@ export class FarTrees {
   private atlas: GPUTexture | null = null;
   private module: GPUShaderModule;
   count = 0;
+  /** cards drawn by the last setCamera's cells */
+  drawn = 0;
+  private cells: { first: number; count: number; min: number[]; max: number[] }[] = [];
+  private runs: [number, number][] = [];
   types = 0;
 
   constructor(device: GPUDevice, format: GPUTextureFormat, pass: PassSetup) {
@@ -204,14 +210,33 @@ export class FarTrees {
     this.mips(layers);
     this.types = types.size;
 
-    // instances: base position, layer; half width, height, radius (scaled)
-    const data: number[] = [];
+    // instances: base position, layer; half width, height, radius (scaled); sorted by grid cell,
+    // so a frame draws only the cells in view (setCamera) as runs of instances
+    const cols = Math.ceil(terrain.size / CELL);
+    const byCell = new Map<number, number[]>();
     for (let i = 0; i < objects.vegGroup.length; i++) {
       const t = types.get(objects.vegGroup[i]);
       if (!t) continue;
-      const s = objects.vegScale[i];
-      data.push(objects.vegPos[i * 3], objects.vegPos[i * 3 + 1], objects.vegPos[i * 3 + 2], t.layer, t.halfWidth * s, t.height * s, t.radius * s, 0);
+      const x = objects.vegPos[i * 3], y = objects.vegPos[i * 3 + 1];
+      const c = Math.min(cols - 1, Math.max(0, Math.floor(y / CELL))) * cols + Math.min(cols - 1, Math.max(0, Math.floor(x / CELL)));
+      (byCell.get(c) ?? byCell.set(c, []).get(c)!).push(i);
     }
+    const data: number[] = [];
+    this.cells = [];
+    for (const c of [...byCell.keys()].sort((a, b) => a - b)) {
+      const cell = { first: data.length / 8, count: 0, min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
+      for (const i of byCell.get(c)!) {
+        const t = types.get(objects.vegGroup[i])!;
+        const s = objects.vegScale[i];
+        const x = objects.vegPos[i * 3], y = objects.vegPos[i * 3 + 1], z = objects.vegPos[i * 3 + 2], hw = t.halfWidth * s, h = t.height * s;
+        data.push(x, y, z, t.layer, hw, h, t.radius * s, 0);
+        cell.min = [Math.min(cell.min[0], x - hw), Math.min(cell.min[1], y - hw), Math.min(cell.min[2], z)];
+        cell.max = [Math.max(cell.max[0], x + hw), Math.max(cell.max[1], y + hw), Math.max(cell.max[2], z + h)];
+        cell.count++;
+      }
+      this.cells.push(cell);
+    }
+    this.runs = [[0, data.length / 8]];
     this.count = data.length / 8;
     this.instances = this.device.createBuffer({ size: Math.max(32, data.length * 4), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     this.device.queue.writeBuffer(this.instances, 0, new Float32Array(data));
@@ -244,8 +269,13 @@ export class FarTrees {
     this.device.queue.submit([enc.finish()]);
   }
 
-  /** Camera, light and where the real trees are: streamed around `stream` within `radius`, culled at their view distance × distanceScale. */
-  setCamera(viewProj: Float32Array, eye: Vec3, L: Lighting, stream: { center: [number, number]; radius: number; distanceScale: number }): void {
+  /**
+   * Camera, light and where the real trees are: streamed around `stream` within `radius`, culled
+   * at their view distance × distanceScale. Cells outside the view or beyond `maxDistance` aren't
+   * drawn (every card used to be: 293k a frame).
+   */
+  setCamera(viewProj: Float32Array, eye: Vec3, L: Lighting, stream: { center: [number, number]; radius: number; distanceScale: number; maxDistance?: number }): void {
+    this.cullCells(viewProj, eye, stream.maxDistance ?? Infinity);
     const u = new Float32Array(48);
     u.set(viewProj, 0);
     u.set([...eye, 0], 16);
@@ -258,12 +288,42 @@ export class FarTrees {
     this.device.queue.writeBuffer(this.uniforms, 0, u);
   }
 
+  /** The runs of instances (first, count) in cells inside the frustum and within `maxDistance`. */
+  private cullCells(m: Float32Array, eye: Vec3, maxDistance: number): void {
+    if (!this.cells.length) return;
+    const row = (i: number) => [m[i], m[4 + i], m[8 + i], m[12 + i]];
+    const r0 = row(0), r1 = row(1), r3 = row(3);
+    // the four side planes (near and far: the distance test)
+    const planes = [r3.map((v, k) => v + r0[k]), r3.map((v, k) => v - r0[k]), r3.map((v, k) => v + r1[k]), r3.map((v, k) => v - r1[k])];
+    const runs: [number, number][] = [];
+    let drawn = 0;
+    for (const c of this.cells) {
+      // the farthest cell corner along each plane's normal must be in front
+      let inside = true;
+      for (const p of planes) {
+        const x = p[0] >= 0 ? c.max[0] : c.min[0], y = p[1] >= 0 ? c.max[1] : c.min[1], z = p[2] >= 0 ? c.max[2] : c.min[2];
+        if (p[0] * x + p[1] * y + p[2] * z + p[3] < 0) { inside = false; break; }
+      }
+      if (inside && maxDistance < Infinity) {
+        const dx = Math.max(c.min[0] - eye[0], 0, eye[0] - c.max[0]), dy = Math.max(c.min[1] - eye[1], 0, eye[1] - c.max[1]);
+        inside = dx * dx + dy * dy <= maxDistance * maxDistance;
+      }
+      if (!inside) continue;
+      const last = runs[runs.length - 1];
+      if (last && last[0] + last[1] === c.first) last[1] += c.count;
+      else runs.push([c.first, c.count]);
+      drawn += c.count;
+    }
+    this.runs = runs;
+    this.drawn = drawn;
+  }
+
   draw(pass: GPURenderPassEncoder): void {
     if (!this.bind || !this.instances || !this.count) return;
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.bind);
     pass.setVertexBuffer(0, this.instances);
-    pass.draw(6, this.count);
+    for (const [first, count] of this.runs) pass.draw(6, count, 0, first);
   }
 
   destroy(): void {

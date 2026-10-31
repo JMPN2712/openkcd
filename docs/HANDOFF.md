@@ -17,7 +17,7 @@ waits for a research session.
   culling (a separate session: branch `occlusion`, worktree
   `~/kcd-web-occlusion`); 4. the new Medium: no MSAA, upscaling with dynamic
   resolution; 5. CPU in the walk segment; 6. far trees cheaper on low
-  presets. Earlier order, for reference:
+  presets (done: culled by cell, Potato 1.18 → 0.55 ms). Earlier order, for reference:
   1. RAM. The JS heap is real (array buffers, not garbage): see
      PERFORMANCE.md "Is the JS heap real?". Animation databases no longer
      all kept (−818 MiB of buffers on Potato). Target from the user:
@@ -78,6 +78,8 @@ waits for a research session.
   (`frameBudget.ts`): long frames in a flight 140 → 95, loading 13 → 11 s.
 - #20 (2026-10-31): clocks from the research notes (dialogue cooldowns in
   play time, Wait durations; see "Clocks checked" below).
+- #21 (2026-10-31): the JS heap is real; animation databases no longer all
+  kept (−818 MiB); `--memory`, `--snapshot`, `heap-buffers.ts`.
 
 ## Clocks checked against the research notes (2026-10-31)
 

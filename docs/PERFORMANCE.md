@@ -247,6 +247,19 @@ machines is the same RAM.
 scene builds whole; the renderer only needs a mesh's CPU copy to upload it
 again. Henry's database (117 MiB) holds every clip of his.
 
+### Far trees culled by cell (2026-10-31, M3 Pro)
+
+Every far-tree card (293k) was drawn every frame, wherever the camera
+looked. They are now grouped in 128 m cells; a frame draws only the cells
+inside the view frustum, and on Potato and Low only within 2,000 m and
+3,000 m (`farTrees` in `quality.ts`; Medium and High uncapped). The in-app
+benchmark, interleaved runs, far-tree GPU time:
+
+| Preset | before | after |
+|---|---|---|
+| Potato | 1.18 ms | 0.55 ms |
+| Low | 1.37 ms | 0.90 ms |
+
 ## Measured frame rates (2026-10-20, after the draw and CPU work below)
 
 From `scripts/bench-presets.ts`.

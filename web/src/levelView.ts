@@ -845,7 +845,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     playerR.setCamera(vp, cam.pos);
     farR.setCamera(vp, cam.pos);
     grassR.setCamera(vp, cam.pos);
-    farTrees.setCamera(vp, cam.pos, skyState?.lighting ?? models.lighting, { center: streamedAt ?? [cam.pos[0], cam.pos[1]], radius: scene ? STREAM_RADIUS : 0, distanceScale: q.distanceScale });
+    farTrees.setCamera(vp, cam.pos, skyState?.lighting ?? models.lighting, { center: streamedAt ?? [cam.pos[0], cam.pos[1]], radius: scene ? STREAM_RADIUS : 0, distanceScale: q.distanceScale, maxDistance: q.farTrees });
     if (grass) {
       const g = grass;
       selectLods(g.scene, cam.pos, vp, g.out, g.counts, { maxDistance: q.grass, fade: [q.grass * 0.67, q.grass] });

@@ -214,7 +214,7 @@ for (const pp of gpus) {
         npcR.setCamera(vp, cam.pos);
         playerR.setCamera(vp, cam.pos);
         grassR.setCamera(vp, cam.pos);
-        farTrees.setCamera(vp, cam.pos, state.lighting, { center: sc.at, radius: q.streamRadius, distanceScale: q.distanceScale });
+        farTrees.setCamera(vp, cam.pos, state.lighting, { maxDistance: q.farTrees, center: sc.at, radius: q.streamRadius, distanceScale: q.distanceScale });
         water.setCamera(vp, cam.pos, state.lighting.sunDir, undefined, state.lighting, state.horizon);
         const enc = device.createCommandEncoder();
         timer.begin();
