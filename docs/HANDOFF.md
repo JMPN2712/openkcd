@@ -84,6 +84,11 @@ waits for a research session.
   (`occlusion.ts`, a 128×64 CPU buffer; on for Low/Medium/High): Medium in
   the market 64 → 101 fps on the M3 Pro; renders unchanged.
 
+- #25 (2026-10-31): the user's Mac benchmark recorded in full.
+- #26 (2026-10-31): the new Medium: no MSAA, the scene at a dynamic
+  0.5–1× scale upscaled with sharpening (`upscale.ts`): Medium 79 → 92 fps,
+  1% low 7 → 11 on the M3 Pro (scale stayed near 1 there).
+
 ## Findings not yet acted on
 
 - **The user's Mac benchmark (2026-10-31)** is in PERFORMANCE.md. It ran
