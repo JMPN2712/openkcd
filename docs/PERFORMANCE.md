@@ -197,15 +197,65 @@ profile doesn't attribute (GPU uploads).
 
 ### The user's benchmark on the Mac (2026-10-31)
 
-The ⏱ Benchmark button in the user's own Chrome 143 on this Mac (Apple M3
-Pro). Only these figures came with the request (the report itself was not
-pasted; see HANDOFF.md):
+The ⏱ Benchmark button in the user's own Chrome 143.0.7499.170 on this Mac
+(Apple M3 Pro, Metal; a 1512×982 screen at 2×), the hosted player, report
+of 2026-10-31 18:11 UTC. The figures place it after #18 (geometry buffers
+1,148 MiB on Potato) and before #22 (far trees still 1.76 ms), so without
+far-tree culling and occlusion; the JS heap matches the time before #21's
+animation fix. **These are Apple M3 Pro numbers.**
 
-- JS heap at the end of a preset: 6.7 GiB on Potato, 8.2 GiB on High.
-- 1% lows 9–10 fps on Low and Medium, in the walk segment too.
-- Medium: the objects pass 6.4 ms of 18.7 ms of GPU time; CPU 7.4 ms in the
-  walk against 4.1 ms in the flight.
-- Far trees about 1.8 ms of GPU time even on Potato.
+| Preset | Render size | Segment | fps | 1% low | CPU ms |
+|---|---|---|---|---|---|
+| Potato | 577×324 | flight | 108.2 | 15.5 | 1.69 |
+| Potato | | walk | 117.7 | 39.7 | 2.18 |
+| Potato | | all | 112.7 | 20.5 | 1.93 |
+| Low | 866×486 | flight | 96.7 | 11.0 | 2.64 |
+| Low | | walk | 76.3 | 9.7 | 4.44 |
+| Low | | all | 86.9 | 10.4 | 3.40 |
+| Medium | 1154×648, 4× MSAA | flight | 80.8 | 8.8 | 4.07 |
+| Medium | | walk | 51.9 | 10.6 | 7.37 |
+| Medium | | all | 67.0 | 9.4 | 5.29 |
+| High | 1154×648, 4× MSAA | flight | 47.1 | 3.2 | 7.36 |
+| High | | walk | 35.3 | 3.1 | 10.98 |
+| High | | all | 41.4 | 3.2 | 8.85 |
+
+GPU ms per pass, whole run:
+
+| Preset | GPU ms | sky+terrain | roads+decals | objects | grass | far trees | characters | blended+water | shadow 0 | shadow 1 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Potato | 6.30 | 0.35 | 0.35 | 2.34 | 1.00 | 1.76 | 0.34 | 0.17 | – | – |
+| Low | 9.50 | 0.69 | 0.59 | 3.33 | 1.41 | 1.86 | 0.46 | 0.25 | 0.91 | – |
+| Medium | 18.69 | 1.26 | 1.54 | 6.37 | 2.44 | 2.53 | 1.57 | 1.22 | 1.15 | 0.61 |
+| High | 24.78 | 2.18 | 2.36 | 9.25 | 2.36 | 2.52 | 1.68 | 1.16 | 2.17 | 1.09 |
+
+Memory at the end of each preset:
+
+| Preset | JS heap (peak) | GPU (peak) | buffers | textures (pool) | render targets | loaded in |
+|---|---|---|---|---|---|---|
+| Potato | 6,734 MiB (6,818) | 1,440 MiB (1,440) | 1,148 MiB | 268 MiB (169) | 24 MiB | 12 s |
+| Low | 7,144 MiB (7,285) | 1,868 MiB (1,879) | 1,171 MiB | 664 MiB (565) | 33 MiB | 17 s |
+| Medium | 7,519 MiB (7,626) | 2,401 MiB (2,401) | 1,363 MiB | 960 MiB (835) | 78 MiB | 24 s |
+| High | 8,198 MiB (8,319) | 3,525 MiB (3,525) | 1,565 MiB | 1,841 MiB (1,717) | 118 MiB | 29 s |
+
+Against the headless runs on the same machine:
+
+- **Render sizes are smaller.** The canvas is the window's size in CSS
+  pixels (1154×648 for the full presets) without the 2× device pixel
+  ratio; headless renders 1920×1080. Compare frame rates only between runs
+  in the same window.
+- **Potato and Low are capped by the display.** In a visible window Chrome
+  waits for the display's refresh (about 120 Hz on this MacBook Pro), so
+  Potato's 108–118 fps is a ceiling, not a GPU limit (6.3 ms of GPU). The
+  headless runs turn vsync off.
+- **The JS heap is higher here** (6.7–8.2 GiB against 3.8–5.9 headless):
+  the presets run one after another in one page and the figure includes
+  uncollected garbage; the headless memory report shows the real part
+  (3.9 GiB on Potato after a forced collection, before #21).
+- **1% lows of 3–11 fps** on every preset but Potato's walk: the stalls #19
+  works on. Medium's walk spends 7.4 ms of CPU against 4.1 ms in the flight;
+  a profile puts most of the walk's main thread in `writeBuffer` waiting
+  for the GPU (HANDOFF.md).
+- **Far trees** cost 1.76–2.53 ms here, before #22's culling.
 
 ### Is the JS heap real? (2026-10-31, M3 Pro, headless)
 

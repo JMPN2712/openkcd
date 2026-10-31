@@ -44,11 +44,7 @@ waits for a research session.
 
 ## Waiting for me (the user)
 
-- **The Mac benchmark output (2026-10-31).** The message that asked to
-  record it held the placeholder "[paste the benchmark output here]"
-  instead of the report. Only the figures quoted with it are recorded in
-  PERFORMANCE.md; paste the report (the ⏱ Benchmark button copies it) to
-  record it in full.
+- Nothing yet.
 
 ## Questions for a research session
 
@@ -90,6 +86,11 @@ waits for a research session.
   the market 64 → 101 fps on the M3 Pro; renders unchanged.
 
 ## Findings not yet acted on
+
+- **The user's Mac benchmark (2026-10-31)** is in PERFORMANCE.md. It ran
+  before far-tree culling, occlusion and the animation-memory fix, in a
+  1154×648 window with vsync (Potato is capped by the display). Re-run it
+  in the same window to compare.
 
 - **Walk CPU on Medium (priority 5):** a CPU profile in the market
   (`profile-browser.ts --preset=medium`) puts 44% of the main thread in
