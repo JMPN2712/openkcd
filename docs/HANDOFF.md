@@ -83,6 +83,9 @@ waits for a research session.
   play time, Wait durations; see "Clocks checked" below).
 - #21 (2026-10-31): the JS heap is real; animation databases no longer all
   kept (−818 MiB); `--memory`, `--snapshot`, `heap-buffers.ts`.
+- #24 (2026-10-31): occlusion culling by the level's occluder shells
+  (`occlusion.ts`, a 128×64 CPU buffer; on for Low/Medium/High): Medium in
+  the market 64 → 101 fps on the M3 Pro; renders unchanged.
 
 ## Clocks checked against the research notes (2026-10-31)
 
