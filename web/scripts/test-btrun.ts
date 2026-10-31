@@ -11,6 +11,7 @@ import { parseTreeFile, type BtTree } from "../src/bt.ts";
 import { Runner, type Host, type Status, type Value } from "../src/btRuntime.ts";
 import type { PakSource } from "../src/paks.ts";
 import { Vfs } from "../src/vfs.ts";
+import { durationMs, timerClock } from "../src/duration.ts";
 
 let fails = 0;
 const check = (name: string, ok: boolean, detail = "") => {
@@ -84,6 +85,36 @@ const expr = (s: string) => `<Expression expressions="${q(s)}" />`;
   const lib = trees(tree("t", v("p", "params"), `<Sequence>${expr("$p.d = '1m 30s'")}<Wait duration="${q("$p.d")}" timeType="${q("GameTime")}" /></Sequence>`));
   const r = run(lib, "t", { ticks: 200, dt: 1 });
   check("Wait reads a duration string from a variable ('1m 30s')", r.s === "success" && r.ticks >= 90 && r.ticks <= 92, `${r.s} after ${r.ticks} ticks`);
+}
+// Wait, from the research notes (bt-rules.md): forever forms, units, added-only variation, clocks
+{
+  const wait = (d: string, extra = "") => trees(tree("t", "", `<Wait duration="${q(d)}" ${extra} timeType="${q("GameTime")}" />`));
+  for (const f of ["oo", "infinite", "-1"]) {
+    const r = run(wait(f), "t", { ticks: 50 });
+    check(`Wait "${f}" waits forever`, r.s === "running", `${r.s} after ${r.ticks} ticks`);
+  }
+  let r = run(wait("500"), "t", { dt: 0.1 });
+  check("Wait \"500\" (no unit) is 500 ms", r.s === "success" && r.ticks >= 5 && r.ticks <= 6, `${r.s} after ${r.ticks} ticks`);
+  // variation 4 s at random 0.25 adds 1 s; at 0 adds nothing (never subtracted)
+  r = run(wait("2s", `variation="${q("4s")}"`), "t", { dt: 0.1, rnd: 0.25 });
+  check("Wait 2s + variation 4s at random 0.25 ends after 3 s", r.ticks >= 30 && r.ticks <= 31, `${r.s} after ${r.ticks} ticks`);
+  r = run(wait("2s", `variation="${q("4s")}"`), "t", { dt: 0.1, rnd: 0 });
+  check("Wait variation is added only (random 0: exactly the duration)", r.ticks >= 20 && r.ticks <= 21, `${r.s} after ${r.ticks} ticks`);
+  const world = trees(tree("t", "", `<Wait duration="${q("15s")}" timeType="${q("WorldTime")}" />`));
+  r = run(world, "t", { dt: 0.1 });
+  check("Wait 15s of WorldTime is 1 s of play time (15x)", r.ticks >= 10 && r.ticks <= 12, `${r.s} after ${r.ticks} ticks`);
+  const suffixed = trees(tree("t", v("s", "_string", ""), `<Sequence>${expr("$s = '10s #GT'")}<Wait duration="${q("$s")}" timeType="${q("GameTime")}" /></Sequence>`));
+  r = run(suffixed, "t", { dt: 1 });
+  check("Wait reads '10s #GT' as 10 s (parsing stops at #)", r.s === "success" && r.ticks >= 10 && r.ticks <= 11, `${r.s} after ${r.ticks} ticks`);
+}
+// quest timers (quest-system.md): #WT the world clock, #GT or none the play clock
+{
+  const cases: [string, number | null, "world" | "play"][] = [
+    ["2h #WT", 7_200_000, "world"], ["1d #WT", 86_400_000, "world"], ["10s #GT", 10_000, "play"], ["1m 30s", 90_000, "play"],
+    ["0s #WT", 0, "world"], ["500ms", 500, "play"], ["-1", Infinity, "play"], ["", null, "play"],
+  ];
+  const bad = cases.filter(([s, ms, clock]) => durationMs(s) !== ms || timerClock(s) !== clock);
+  check("duration strings and timer clocks (ms, s, m, h, d; #WT / #GT / none)", !bad.length, bad.map(([s]) => `${s}: ${durationMs(s)} ${timerClock(s)}`).join("; "));
 }
 {
   const lib = trees(tree("t", v("r", "_string", ""), `<RandomGate opensWithChance="${q("0.5")}"><Then>${expr("$r = 'then'")}</Then><Else>${expr("$r = 'else'")}</Else></RandomGate>`));

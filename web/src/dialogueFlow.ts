@@ -68,7 +68,7 @@ export const SHOP_GLOBALS = ["shop_min", "shop_max", "shop_keeper_price", "shop_
 
 /** What a conversation reads from and does to the game. */
 export interface FlowHost {
-  /** game time in seconds (sequence timeouts) */
+  /** play time in seconds, not world time (sequence timeouts; dialogue.md) */
   now(): number;
   /**
    * A condition function on a participant (or, for a name nobody in the conversation has, on

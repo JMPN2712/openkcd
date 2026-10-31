@@ -15,6 +15,7 @@ import { Conversation, DialogueState, luaScripts, menuOrder, neutralWorld, parti
 import { parseNpcEntities } from "../src/levelEntities.ts";
 import { Localization } from "../src/localization.ts";
 import { LuaHost } from "../src/luaHost.ts";
+import { prepareSequence } from "../src/dialoguePlayer.ts";
 import { readTable } from "../src/tables.ts";
 import { Vfs } from "../src/vfs.ts";
 import { readCentralDirectory, readEntry } from "../src/zip.ts";
@@ -130,6 +131,26 @@ check(fifth.menus.length >= 2 && fifth.menus[0].length === 4, `with q_revenge: t
 const cands: Candidate[] = db.topicSequences(6807).map((e) => ({ topic: 6807, sequence: db.sequence(e.sequence)!, npcEntryCondition: "", branchType: 0, branchPriority: 0, topicPriority: db.topic(6807).priority, owner: db.owner(6807), requested: false }));
 console.log(`  topic 6807: table order ${cands.map((c) => c.sequence.priority).join(", ")}, menu ${menuOrder(cands).map((c) => c.sequence.priority).join(", ")}, limit ${db.topic(6807).timeLimit} s`);
 check(menuOrder(cands).map((c) => c.sequence.priority).join(",") === "0,1,2" && db.topic(6807).timeLimit === 10, "topic 6807: menu 0, 1, 2 (a timeout picks the first), 10 s");
+
+// clocks (dialogue.md): a cooldown is `timeout` seconds of play time since the sequence was used;
+// -1 once only, 0 always. The view passes play seconds (real time at game speed), not world time.
+{
+  const seq = (timeout: number) => ({ ...db.sequence(42432)!, id: 900000 + timeout + 1, timeout });
+  const st = new DialogueState();
+  const s300 = seq(300), once = seq(-1), always = seq(0);
+  for (const s of [s300, once, always]) st.used.set(s.id, 1000);
+  check(!st.available(s300, 1299) && st.available(s300, 1300), "timeout 300: available again 300 s of play time after use, not before");
+  check(!st.available(once, 1e9) && st.available(always, 1000), "timeout -1: once only; 0: always available");
+  // world time runs 15x: 300 s of it is 20 s of play time, far short of the cooldown
+  check(!st.available(s300, 1000 + 300 / 15), "300 world seconds (20 s of play) don't end a 300 s cooldown");
+}
+// line types 2 and 4 are skipped at playback: no event, no time
+{
+  const base = db.sequence(42432)!;
+  const lines = [{ id: 1, order: 0, type: 4 }, { id: 2, order: 1, type: 2 }, { id: 3, order: 2, type: 1, role: 0, text: "x" }, { id: 4, order: 3, type: 2 }];
+  const tl = await prepareSequence(db, { ...base, lines } as typeof base, new Map(), null, null);
+  check(tl.events.length === 1 && tl.events[0].kind === "say", `line types 2 and 4 are skipped (${tl.events.map((e) => e.kind).join(", ")})`);
+}
 
 if (reports.size) console.log(`not modelled (counted as 0): ${[...reports].slice(0, 12).join("; ")}`);
 if (lua.errors.length) console.log(`Lua errors: ${[...new Set(lua.errors)].slice(0, 5).join(" | ")}`);

@@ -351,8 +351,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let bedHint: { bed: Bed; taken: boolean } | null = null;
   // talking (dialogueView.ts): E with the NPC Henry faces, when it has something to say
   let talkHint: { npc: WorldNpc; name: string; ready: boolean | undefined } | null = null;
-  let gameSeconds = 0; // game time since the view opened (dialogue cooldowns)
-  dialogue.clock = () => ({ seconds: gameSeconds, hour: minute / 60 });
+  // dialogue cooldowns run on the play clock, not world time (dialogue.md: timeout 300 is about
+  // 5 real minutes); simSeconds is that clock: real time at game speed, stopped while paused
+  dialogue.clock = () => ({ seconds: simSeconds, hour: minute / 60 });
   let sleeping = false;
   const sleepIn = (bed: Bed) => {
     if (!player || sleeping) return;
@@ -716,7 +717,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const doorsMoved = doors.step(dt);
     for (const id of doorsMoved) showDoor(id);
     for (const id of chests.step(dt)) showChest(id);
-    dialogue.update(dt);
+    // (timed choices count play time: the game clock's speed over its normal ×15, 0 when paused)
+    dialogue.update(dt, (dt * Number(speedSel.value)) / 15);
     if (dialogue.info) { dialogueInfo = dialogue.info; dialogue.info = ""; }
     if (mode === "player" && player) {
       // Henry stands still while he talks
@@ -802,7 +804,6 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (!streamedAt || Math.hypot(cam.pos[0] - streamedAt[0], cam.pos[1] - streamedAt[1]) > STREAM_STEP) void stream();
     if (!grass || Math.hypot(cam.pos[0] - grass.at[0], cam.pos[1] - grass.at[1]) > q.grass / 4) void streamGrass();
     minute = (minute + (dt * Number(speedSel.value)) / 60) % 1440;
-    gameSeconds += dt * Number(speedSel.value);
     // one simulation clock for behaviour trees and NPC animation, scaled like the game clock
     // (×15 = real time): legs keep pace with movement at every speed, and pausing freezes both
     const simDt = (dt * Number(speedSel.value)) / 15;

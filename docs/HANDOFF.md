@@ -33,12 +33,21 @@ waits for a research session.
 
 ## Waiting for me (the user)
 
-- Nothing yet.
+- **The Mac benchmark output (2026-10-31).** The message that asked to
+  record it held the placeholder "[paste the benchmark output here]"
+  instead of the report. Only the figures quoted with it are recorded in
+  PERFORMANCE.md; paste the report (the ⏱ Benchmark button copies it) to
+  record it in full.
 
 ## Questions for a research session
 
-- Nothing new yet. Open ones are listed in ROADMAP section 4 ("Research
-  note needed").
+- **Durations without a unit** (bt-rules.md, Wait): 11 Waits write
+  `"500"` or `"200"` beside the usual `"500ms"`. We read them as
+  milliseconds, the parser's base unit (marked ASSUMPTION in
+  `duration.ts`). Is that right? And when a Wait's duration comes from a
+  variable holding a number, which unit applies?
+- Open ones from before are listed in ROADMAP section 4 ("Research note
+  needed").
 
 ## Known gaps in the tests
 
@@ -57,3 +66,25 @@ waits for a research session.
   baseline in PERFORMANCE.md.
 - #18 (2026-10-30): geometry memory halved (44-byte vertices, stores that
   grow from 4 MiB): Potato GPU 2.6 → 1.3 GiB on the M3 Pro.
+
+## Clocks checked against the research notes (2026-10-31)
+
+dialogue.md, bt-rules.md and quest-system.md (the calendar's clocks):
+
+- **Dialogue cooldowns** (`timeout`) ran on world time (15×), so 300 s
+  passed in 20 real seconds. Now play time (`simSeconds`: real time at
+  game speed, stopped while paused). Timed topic menus count play time
+  too (they counted real frames, also while paused).
+- **Behaviour-tree Wait:** `infinite` and `oo` waited 0 s (now forever,
+  like `-1`); a `#WT`/`#GT` suffix made the duration 0 (parsing now stops
+  at `#`); a number without a unit was seconds (now milliseconds, see the
+  research question above). Variation was already added only; GameTime
+  1× and WorldTime 15× were already right.
+- **Quest timers:** no quest code yet. `web/src/duration.ts` has the
+  parser and `timerClock()` (`#WT` world, `#GT` or none play) ready for
+  it, with tests.
+- **Line types 2 and 4** were already skipped at playback; now tested.
+- Tests: `test-btrun.ts` (Wait forms, units, variation, clocks, timer
+  strings), `test-dialogue-flow.ts` (cooldowns in play seconds, line
+  types).
+

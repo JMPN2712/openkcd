@@ -53,7 +53,7 @@ export class DialogueHost {
   private shown: SayEvent | undefined;
   /** the game's Lua (sequence scripts, metaroles); set once the behaviour trees have loaded */
   lua: LuaHost | null = null;
-  /** game time: seconds since start, and the hour of day */
+  /** play time in seconds (1× real time, stopped while paused: sequence cooldowns), and the hour of day */
   clock: () => { seconds: number; hour: number } = () => ({ seconds: 0, hour: 12 });
   /** what happened, for the HUD */
   info = "";
@@ -332,10 +332,13 @@ export class DialogueHost {
     this.hideMenu();
   }
 
-  /** Advance by `dt` real seconds: start each line's recording, show its subtitle, count a timed choice down. */
-  update(dt: number): void {
+  /**
+   * Advance by `dt` real seconds: start each line's recording, show its subtitle; count a timed
+   * choice down by `playDt`, seconds of play time (stopped while the game is paused; dialogue.md).
+   */
+  update(dt: number, playDt = dt): void {
     if (this.timer) {
-      this.timer.left -= dt;
+      this.timer.left -= playDt;
       this.timer.bar.style.width = `${Math.max(0, (100 * this.timer.left) / this.timer.total)}%`;
       // at zero the highlighted option is taken (untouched: the first)
       if (this.timer.left <= 0) { this.timer = null; this.pick(this.highlight); }

@@ -10,6 +10,7 @@
 // through the host: unknown tags are reported and, by default, succeed.
 
 import { parseExpr, quoted, isTextProp, type BtNode, type BtTree, type BtVariable, type Expr } from "./bt.ts";
+import { durationMs } from "./duration.ts";
 
 export type Status = "success" | "failure" | "running";
 export type Value = null | boolean | number | string | Value[] | { [k: string]: Value };
@@ -572,15 +573,27 @@ export class Runner {
         };
       }
       case "Wait": {
+        // (bt-rules.md: end = now + duration + a uniform 0..variation, added only; GameTime the
+        // play clock, WorldTime the world clock; "infinite", "-1", "oo" wait until aborted)
         let until: number | null = null;
         const clock = () => (text("timeType") === "WorldTime" ? this.host.worldTime() : this.host.realTime());
+        // a literal ("2s", "500", "oo", "2h #WT") is parsed from its text, so a number without a
+        // unit stays milliseconds; an expression ($p.d) gives seconds (duration literals compile to
+        // seconds) or a duration string
+        const ms = (prop: string): number => {
+          const raw = text(prop).trim();
+          if (raw && !raw.startsWith("$")) return durationMs(raw) ?? 0;
+          const v = c.eval(prop, 0);
+          if (typeof v === "number") return v < 0 ? Infinity : v * 1000;
+          return typeof v === "string" ? durationMs(v) ?? 0 : 0;
+        };
         return {
           tick: () => {
             if (until === null) {
-              const d = num(c.eval("duration", 0));
-              if (d < 0) return "running"; // -1: wait forever (until aborted)
-              // ASSUMPTION: variation adds 0..variation seconds
-              until = clock() + d + this.host.random() * num(c.eval("variation", 0));
+              const d = ms("duration");
+              if (d === Infinity) return "running";
+              const variation = ms("variation");
+              until = clock() + (d + (variation === Infinity ? 0 : this.host.random() * variation)) / 1000;
             }
             if (clock() < until) return "running";
             until = null;
