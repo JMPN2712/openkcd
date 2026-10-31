@@ -12,8 +12,16 @@ waits for a research session.
   find it there (`web/scripts/chrome.ts`). Benchmarks from this machine are
   **M3 Pro numbers**, not the RTX 5070 Ti's or the Vega 7's
   ([PERFORMANCE.md](PERFORMANCE.md)).
-- **Priority: the Vega 7 performance work**, in this order:
-  1. RAM. Geometry stores halved (44-byte vertices, chunks grown from
+- **Priority (the user's list of 2026-10-31):** 1. JS heap (find what holds
+  it, cut it; per-category breakdown in the report); 2. 1% lows; 3. occlusion
+  culling (a separate session: branch `occlusion`, worktree
+  `~/kcd-web-occlusion`); 4. the new Medium: no MSAA, upscaling with dynamic
+  resolution; 5. CPU in the walk segment; 6. far trees cheaper on low
+  presets. Earlier order, for reference:
+  1. RAM. The JS heap is real (array buffers, not garbage): see
+     PERFORMANCE.md "Is the JS heap real?". Animation databases no longer
+     all kept (−818 MiB of buffers on Potato). Target from the user:
+     Potato under 2 GiB for the tab, Medium under 3 GiB. Geometry stores halved (44-byte vertices, chunks grown from
      4 MiB: Potato GPU 2.6 → 1.3 GiB). Left: the world store's
      fragmentation (holds up to twice what it uses); the CPU copies of
      meshes in the world caches (765 MiB on Potato), kept for three
@@ -66,6 +74,10 @@ waits for a research session.
   baseline in PERFORMANCE.md.
 - #18 (2026-10-30): geometry memory halved (44-byte vertices, stores that
   grow from 4 MiB): Potato GPU 2.6 → 1.3 GiB on the M3 Pro.
+- #19 (2026-10-31): one work budget per frame for background tasks
+  (`frameBudget.ts`): long frames in a flight 140 → 95, loading 13 → 11 s.
+- #20 (2026-10-31): clocks from the research notes (dialogue cooldowns in
+  play time, Wait durations; see "Clocks checked" below).
 
 ## Clocks checked against the research notes (2026-10-31)
 

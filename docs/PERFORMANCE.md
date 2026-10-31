@@ -195,6 +195,58 @@ to 1.1–2.0 ms. Left in the long frames: garbage collection, `selectLods` on
 the frame itself, reads inflated on the main thread, and native time the
 profile doesn't attribute (GPU uploads).
 
+### The user's benchmark on the Mac (2026-10-31)
+
+The ⏱ Benchmark button in the user's own Chrome 143 on this Mac (Apple M3
+Pro). Only these figures came with the request (the report itself was not
+pasted; see HANDOFF.md):
+
+- JS heap at the end of a preset: 6.7 GiB on Potato, 8.2 GiB on High.
+- 1% lows 9–10 fps on Low and Medium, in the walk segment too.
+- Medium: the objects pass 6.4 ms of 18.7 ms of GPU time; CPU 7.4 ms in the
+  walk against 4.1 ms in the flight.
+- Far trees about 1.8 ms of GPU time even on Potato.
+
+### Is the JS heap real? (2026-10-31, M3 Pro, headless)
+
+`profile-browser.ts --memory` (after loading, or with `--bench` after the
+run) reports the page's heap, then after a forced collection, V8's own split
+and each Chrome process's footprint; `--snapshot=FILE` saves a heap snapshot
+and `scripts/heap-buffers.ts FILE` sums its array buffers by retaining path.
+
+**It is real, and almost all array buffers:** Potato right after loading,
+1.5 GiB (V8 objects 271 MiB, array buffers 1,256 MiB); after the benchmark,
+3.9 GiB that a forced collection does not free (V8 objects 667 MiB, array
+buffers 3,333 MiB). The renderer process's footprint was 5.0 GB, the GPU
+process's 0.7 GB.
+
+**What held the array buffers after the Potato benchmark** (2,980 MiB of
+buffers of 4 KiB or more):
+
+| Holder | MiB |
+|---|---|
+| NPC animation databases (`AnimLibrary`: every male `.dba`, read to index the aliases and kept) | 713 |
+| world models' CPU mesh copies (world caches: tangents 384, positions 300, normals 300, indices 272, UVs 197, colours 18) | 1,471 |
+| Henry's animation database (`PlayerAvatar.clips`) | 117 |
+| navmesh | 91 |
+| terrain (cover mosaics, heights, surface) | 91 |
+| other | about 200 |
+
+**Fixed:** `AnimLibrary` indexes the aliases from databases it doesn't keep,
+keeps the 8 last used (clips are decoded into arrays of their own) and
+caches the clips it resolves. Array buffers after the Potato benchmark:
+2,980 → 2,162 MiB.
+
+**Tried and dropped:** keeping world meshes' GPU geometry while they are
+cached and dropping the CPU copies' normals, tangents, UVs and colours. The
+CPU memory barely fell (the arrays stay reachable) while the kept geometry
+tripled (637 → 1,970 MiB in `bench-streaming.ts --back`), which on these
+machines is the same RAM.
+
+**Next for memory:** the world caches keep the models of the last four
+scene builds whole; the renderer only needs a mesh's CPU copy to upload it
+again. Henry's database (117 MiB) holds every clip of his.
+
 ## Measured frame rates (2026-10-20, after the draw and CPU work below)
 
 From `scripts/bench-presets.ts`.

@@ -144,6 +144,8 @@ node scripts/bench-streaming.ts --back           # what a streaming step costs: 
 node scripts/profile-browser.ts --at=2522,545 --dialogue=46319   # the same, Henry by the tailor's shop: plays the gossip there and prints its subtitles as Chrome shows them
 node scripts/profile-browser.ts --preset=potato --at=2524,546 --talk=rat_tailor --pick=3   # a conversation with the tailor in Chrome: subtitles, each menu, the options pressed
 node scripts/profile-browser.ts --trace          # the world view in headless Chrome on the real GPU (opens ~/kcd1 through the folder input): HUD fps, a CPU profile, and with --trace how busy Chrome's GPU process is
+node scripts/profile-browser.ts --preset=potato --bench=this --memory --snapshot=/tmp/p.heapsnapshot   # is the JS heap real: the page's heap, after a forced collection, V8's split, each Chrome process's footprint; a heap snapshot
+node --max-old-space-size=16000 scripts/heap-buffers.ts /tmp/p.heapsnapshot   # what retains the array buffers: bytes by retaining path
 node scripts/test-texture-pool.ts                # texture streaming: grow, shrink under a budget (read back from the GPU), reads on worker threads
 node scripts/render-player.ts /tmp/p --walk "1:;2:w;1.5:w+shift;1:"   # headless walk as Henry with scripted input, a frame per segment (--textures 1024,1024 or --no-pool)
 node scripts/render-model.ts /tmp/r soul:henry --anim <clip.caf | db.dba#anim.caf> --frames 0,20,40   # animated headless renders

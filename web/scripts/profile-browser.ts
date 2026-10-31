@@ -65,8 +65,10 @@ let nextId = 1;
 const pending = new Map<number, { ok: (v: any) => void; err: (e: Error) => void }>();
 const traceEvents: any[] = [];
 let traceDone: (() => void) | null = null;
+let snapshotChunk: ((c: string) => void) | null = null;
 ws.addEventListener("message", (m) => {
   const msg = JSON.parse(String(m.data));
+  if (msg.method === "HeapProfiler.addHeapSnapshotChunk") snapshotChunk?.(msg.params.chunk);
   if (msg.method === "Tracing.dataCollected") traceEvents.push(...msg.params.value);
   if (msg.method === "Tracing.tracingComplete") traceDone?.();
   if (msg.method === "Runtime.exceptionThrown") console.log("page exception:", msg.params.exceptionDetails.exception?.description ?? msg.params.exceptionDetails.text);
@@ -198,6 +200,47 @@ const readings: string[] = [];
 for (let k = 0; k < 3; k++) { readings.push((await hud()).replace(/ · .*?x /, " · x ").replace(/ · (terrain|textures)[^·]*/g, "").slice(0, 300)); await sleep(1000); }
 console.log(readings.join("\n"));
 
+// --memory: is the JS heap real? The page's figure, then after a forced collection, V8's own
+// breakdown, measureUserAgentSpecificMemory (cross-origin isolated pages only), and what the
+// operating system charges each of this profile's Chrome processes
+async function memoryReport(): Promise<void> {
+  const mib = (b: number) => `${(b / 2 ** 20).toFixed(0)} MiB`;
+  const pageHeap = () => evaluate<number>(`performance.memory?.usedJSHeapSize ?? 0`);
+  console.log(`page heap (performance.memory): ${mib(await pageHeap())}`);
+  await page("HeapProfiler.enable");
+  await page("HeapProfiler.collectGarbage");
+  await sleep(1000);
+  console.log(`page heap after a forced collection: ${mib(await pageHeap())}`);
+  const u = await page("Runtime.getHeapUsage");
+  console.log(`V8: used ${mib(u.usedSize)} of ${mib(u.totalSize)}${u.embedderHeapUsedSize !== undefined ? `, embedder ${mib(u.embedderHeapUsedSize)}` : ""}${u.backingStorageSize !== undefined ? `, array buffer backing stores ${mib(u.backingStorageSize)}` : ""}`);
+  const ua = await evaluate<string>(`self.crossOriginIsolated && performance.measureUserAgentSpecificMemory ? performance.measureUserAgentSpecificMemory().then((m) => JSON.stringify({ bytes: m.bytes, breakdown: m.breakdown.filter((b) => b.bytes > 1 << 20).map((b) => [b.types.join("+"), b.bytes]) })) : "not available (" + (self.crossOriginIsolated ? "no API" : "not cross-origin isolated") + ")"`).catch((e) => String(e));
+  console.log(`measureUserAgentSpecificMemory: ${ua}`);
+  // --snapshot=FILE: a heap snapshot for scripts/heap-buffers.ts (what retains the array buffers)
+  const snapFile = arg("snapshot", "");
+  if (snapFile) {
+    const { createWriteStream } = await import("node:fs");
+    const out = createWriteStream(snapFile);
+    snapshotChunk = (c) => out.write(c);
+    await page("HeapProfiler.takeHeapSnapshot", { reportProgress: false });
+    snapshotChunk = null;
+    await new Promise((r) => out.end(r));
+    console.log(`heap snapshot: ${snapFile}`);
+  }
+  const { execFileSync } = await import("node:child_process");
+  const ps = execFileSync("ps", ["-axo", "pid=,rss=,command="], { encoding: "utf8", maxBuffer: 64 << 20 });
+  const mine = ps.split("\n").filter((l) => l.includes(profile)).map((l) => {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(l)!;
+    const type = /--type=([a-z-]+)/.exec(m[3])?.[1] ?? "browser";
+    let footprint = "";
+    if (process.platform === "darwin") {
+      try { footprint = /phys_footprint:\s*([\d.]+ [KMG]B)/.exec(execFileSync("footprint", ["-p", m[1]], { encoding: "utf8" }))?.[1] ?? ""; } catch { /* (not allowed) */ }
+    }
+    return { pid: m[1], rss: Number(m[2]) * 1024, type, footprint };
+  });
+  for (const p of mine.sort((a, b) => b.rss - a.rss)) console.log(`  ${p.type.padEnd(10)} pid ${p.pid}: resident ${mib(p.rss)}${p.footprint ? `, footprint ${p.footprint}` : ""}`);
+}
+if (process.argv.includes("--memory") && !process.argv.some((a) => a.startsWith("--bench"))) { await memoryReport(); process.exit(0); }
+
 // --bench[=this]: the in-app benchmark (every preset, or this one), printing its report
 const benchArg = process.argv.find((a) => a === "--bench" || a.startsWith("--bench="));
 if (benchArg) {
@@ -229,6 +272,8 @@ if (benchArg) {
     console.log(`  self: ${[...self].sort((a, b) => b[1] - a[1]).slice(0, 25).map(([k, v]) => `${k} ${m(v)}`).join("\n        ")}`);
     console.log(`  total: ${[...incl].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([k, v]) => `${k} ${m(v)}`).join("\n         ")}`);
   }
+  // --memory with --bench: the same report after the run (is the end-of-run heap real?)
+  if (process.argv.includes("--memory")) await memoryReport();
   process.exit(0);
 }
 

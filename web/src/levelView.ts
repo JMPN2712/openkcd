@@ -616,7 +616,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       frames: b.frames, gpu: timer.recording ?? [], settleSeconds: (b.start - openedAt) / 1000,
       memory: { end: { jsHeap: jsHeap(), gpu: { ...gpuMem }, pool: pool.bytes }, peakJs: b.peakJs, peakGpu: b.peakGpu },
     });
-    if (gpuMem.sites) {
+    // (always: what holds the JS memory, by part of the view; GPU memory by site needs ?gpu-mem)
+    {
       const held = retainedBuffers({ worldCaches, grassCaches, far, scene, terrain, objects, cover, merged, roads, decals, npcEntities, schedules, props, ents, npcWorld, npcs, npcAi, dialogue, pool, models, grassR, npcR, playerR, farR, farTrees, surroundings, doors, chests, beds, player, vfs, paks });
       run.system.push(`${q.label} typed arrays by holder: ${[...held].filter(([, v]) => v > 2 ** 20).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${(v / 2 ** 20).toFixed(0)} MiB`).join("; ")}`);
     }
