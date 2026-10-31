@@ -83,9 +83,25 @@ waits for a research session.
   play time, Wait durations; see "Clocks checked" below).
 - #21 (2026-10-31): the JS heap is real; animation databases no longer all
   kept (−818 MiB); `--memory`, `--snapshot`, `heap-buffers.ts`.
+- #22 (2026-10-31): far trees drawn by cell inside the view, within a
+  distance per preset (Potato 1.18 → 0.55 ms).
 - #24 (2026-10-31): occlusion culling by the level's occluder shells
   (`occlusion.ts`, a 128×64 CPU buffer; on for Low/Medium/High): Medium in
   the market 64 → 101 fps on the M3 Pro; renders unchanged.
+
+## Findings not yet acted on
+
+- **Walk CPU on Medium (priority 5):** a CPU profile in the market
+  (`profile-browser.ts --preset=medium`) puts 44% of the main thread in
+  `writeBuffer` under the characters' shadow pass (`drawShadow` →
+  `uploadPalettes`). Palettes are already shared per NPC (about 640 KiB a
+  frame for 40 NPCs), so this is most likely `writeBuffer` waiting for the
+  GPU process while Medium is GPU-bound, like `getCurrentTexture`: the GPU
+  items (occlusion, the new Medium) should cut it. Real CPU costs left:
+  `selectLods` 12%, NPC animation 7%, behaviour trees 4–8%, crowd 4%,
+  route searches 2%.
+- **World models' CPU copies** (1.5 GiB on Potato after a flight): see
+  PERFORMANCE.md "Is the JS heap real?" for what was tried.
 
 ## Clocks checked against the research notes (2026-10-31)
 
