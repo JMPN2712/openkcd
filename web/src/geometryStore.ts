@@ -16,6 +16,9 @@ interface Chunk {
   free: [number, number][];
 }
 
+/** The first chunk's size; each later one matches the total held, up to the store's chunk size. */
+const MIN_CHUNK = 4 * 2 ** 20;
+
 export class GeometryStore {
   private chunks: Chunk[] = [];
 
@@ -44,8 +47,11 @@ export class GeometryStore {
         return { buf: c.buf, at, bytes: need };
       }
     }
-    // a new chunk (larger than the usual size for a mesh that doesn't fit one)
-    const size = Math.max(this.chunkSize, need);
+    // a new chunk: as large as everything held so far (from MIN_CHUNK up to the usual size), so
+    // small stores (Henry, NPCs) don't hold a full chunk each; larger for a mesh that doesn't fit
+    const held = this.chunks.reduce((a, c) => a + c.size, 0);
+    const grown = Math.ceil(Math.min(this.chunkSize, Math.max(MIN_CHUNK, held)) / this.align) * this.align;
+    const size = Math.max(Math.min(grown, this.chunkSize), need);
     const c: Chunk = { buf: this.device.createBuffer({ size, usage: this.bufferUsage | GPUBufferUsage.COPY_DST }), size, free: need < size ? [[need, size - need]] : [] };
     this.chunks.push(c);
     return { buf: c.buf, at: 0, bytes: need };

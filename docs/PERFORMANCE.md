@@ -137,6 +137,33 @@ only against other runs on this machine. `profile-browser.ts --bench
 - The JS heap is about 1.6 GiB above the 2026-10-26 Linux run on every
   preset (Chrome 143 here against 156 there; not yet traced).
 
+### Geometry memory halved (2026-10-30, M3 Pro)
+
+Two changes to the model renderers' vertex and index stores:
+
+- **44-byte vertices instead of 64:** normals and tangents as 8-bit snorm
+  (at most about 0.5° off) instead of float32; positions and UVs stay
+  float32. Renders against the old layout: at most 0.005% of pixels off by
+  more than 8 levels (`render-world.ts`, `render-model.ts`). Potato's world
+  geometry in the market: 740 → 509 MiB of vertices.
+- **Chunks grow from 4 MiB:** each store's next chunk is as large as what it
+  already holds, up to 128 MiB. Before, every one of the ten stores (five
+  renderers, vertices and indices) took a full 128 MiB chunk, even Henry's.
+
+Same benchmark, before → after:
+
+| Preset | fps | 1% low | GPU ms | GPU memory | of which buffers |
+|---|---|---|---|---|---|
+| Potato | 297.4 → 323.2 | 24.0 → 27.5 | 3.84 → 3.75 | 2671 → 1372 MiB | 2320 → 1020 MiB |
+| Low | 196.2 → 210.7 | 17.8 → 19.9 | 6.77 → 6.36 | 3225 → 1937 MiB | 2451 → 1163 MiB |
+| Medium | 80.5 → 84.1 | 7.6 → 8.7 | 24.07 → 22.71 | 3853 → 2612 MiB | 2587 → 1347 MiB |
+| High | 56.9 → 58.6 | 5.7 → 6.1 | 30.21 → 28.62 | 5182 → 3830 MiB | 2852 → 1502 MiB |
+
+On the Vega 7 (16 GB shared with graphics) this is about 1.3 GiB more RAM
+for everything else on every preset. The world store still holds up to
+twice what it uses after a few streaming steps (fragmentation: a chunk is
+only given back when empty).
+
 ## Measured frame rates (2026-10-20, after the draw and CPU work below)
 
 From `scripts/bench-presets.ts`.

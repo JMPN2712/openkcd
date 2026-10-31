@@ -18,7 +18,7 @@ import { ShadowMap, SHADOW_FORMAT, SHADOW_WGSL } from "./shadow.ts";
 import { DEFAULT_LIGHTING, depthCompare, depthFormat, lookAt, multiply, perspective, type Lighting, type PassSetup, type Vec3 } from "./mat4.ts";
 
 // position 3f, normal 3f, uv 2f, bone ids u16×4, weights unorm8×4, tangent 4f (w handedness), colour unorm8×4
-const VERTEX_BYTES = 64;
+const VERTEX_BYTES = 44;
 /**
  * Largest shared vertex or index buffer (meshes are packed into as many as needed). One buffer per
  * mesh made Chrome's GPU process check thousands of buffers on every submit.
@@ -395,16 +395,18 @@ interface View {
   calls: number;
 }
 
+// position, normal (snorm8, w unused), uv, bone ids, bone weights, tangent (snorm8, w the
+// bitangent sign), vertex colour
 const VERTEX_LAYOUT: GPUVertexBufferLayout[] = [{
   arrayStride: VERTEX_BYTES,
   attributes: [
     { shaderLocation: 0, offset: 0, format: "float32x3" },
-    { shaderLocation: 1, offset: 12, format: "float32x3" },
-    { shaderLocation: 2, offset: 24, format: "float32x2" },
-    { shaderLocation: 3, offset: 32, format: "uint16x4" },
-    { shaderLocation: 4, offset: 40, format: "unorm8x4" },
-    { shaderLocation: 9, offset: 44, format: "float32x4" },
-    { shaderLocation: 10, offset: 60, format: "unorm8x4" },
+    { shaderLocation: 1, offset: 12, format: "snorm8x4" },
+    { shaderLocation: 2, offset: 16, format: "float32x2" },
+    { shaderLocation: 3, offset: 24, format: "uint16x4" },
+    { shaderLocation: 4, offset: 32, format: "unorm8x4" },
+    { shaderLocation: 9, offset: 36, format: "snorm8x4" },
+    { shaderLocation: 10, offset: 40, format: "unorm8x4" },
   ],
 }, {
   arrayStride: 64,
@@ -841,25 +843,26 @@ export class ModelRenderer {
     const raw = new ArrayBuffer((to - from) * VERTEX_BYTES);
     const verts = new Float32Array(raw);
     const ids = new Uint16Array(raw);
-    const wts = new Uint8Array(raw);
+    const bytes = new Uint8Array(raw);
+    const sb = new Int8Array(raw);
     const F = VERTEX_BYTES / 4, U = VERTEX_BYTES / 2;
+    const snorm = (v: number) => Math.round(Math.max(-1, Math.min(1, v)) * 127);
     // (plain indexed copies: a subarray per attribute and vertex made big meshes cost tens of ms)
     const P = mesh.positions, N = mesh.normals, T = mesh.uvs, G = mesh.tangents, C = mesh.colors;
     for (let i = from; i < to; i++) {
-      const j = i - from, o = j * F;
+      const j = i - from, o = j * F, b = j * VERTEX_BYTES;
       verts[o] = P[i * 3]; verts[o + 1] = P[i * 3 + 1]; verts[o + 2] = P[i * 3 + 2];
-      if (N) { verts[o + 3] = N[i * 3]; verts[o + 4] = N[i * 3 + 1]; verts[o + 5] = N[i * 3 + 2]; } else verts[o + 5] = 1;
-      if (T) { verts[o + 6] = T[i * 2]; verts[o + 7] = T[i * 2 + 1]; }
-      if (G) { verts[o + 11] = G[i * 4]; verts[o + 12] = G[i * 4 + 1]; verts[o + 13] = G[i * 4 + 2]; verts[o + 14] = G[i * 4 + 3]; }
-      const w = j * VERTEX_BYTES + 60;
-      if (C) { wts[w] = C[i * 4]; wts[w + 1] = C[i * 4 + 1]; wts[w + 2] = C[i * 4 + 2]; wts[w + 3] = C[i * 4 + 3]; } else { wts[w] = wts[w + 1] = wts[w + 2] = wts[w + 3] = 255; }
+      if (N) { sb[b + 12] = snorm(N[i * 3]); sb[b + 13] = snorm(N[i * 3 + 1]); sb[b + 14] = snorm(N[i * 3 + 2]); } else sb[b + 14] = 127;
+      if (T) { verts[o + 4] = T[i * 2]; verts[o + 5] = T[i * 2 + 1]; }
+      if (G) { sb[b + 36] = snorm(G[i * 4]); sb[b + 37] = snorm(G[i * 4 + 1]); sb[b + 38] = snorm(G[i * 4 + 2]); sb[b + 39] = snorm(G[i * 4 + 3]); }
+      if (C) { bytes[b + 40] = C[i * 4]; bytes[b + 41] = C[i * 4 + 1]; bytes[b + 42] = C[i * 4 + 2]; bytes[b + 43] = C[i * 4 + 3]; } else { bytes[b + 40] = bytes[b + 41] = bytes[b + 42] = bytes[b + 43] = 255; }
       if (paletteCount) {
         for (let k = 0; k < 4; k++) {
-          ids[j * U + 16 + k] = Math.min(mesh.boneIds![i * 4 + k], paletteCount - 1);
-          wts[j * VERTEX_BYTES + 40 + k] = mesh.boneWeights![i * 4 + k];
+          ids[j * U + 12 + k] = Math.min(mesh.boneIds![i * 4 + k], paletteCount - 1);
+          bytes[b + 32 + k] = mesh.boneWeights![i * 4 + k];
         }
       } else {
-        wts[j * VERTEX_BYTES + 40] = 255; // bone 0 of the identity palette
+        bytes[b + 32] = 255; // bone 0 of the identity palette
       }
     }
     this.device.queue.writeBuffer(range.buf, range.at + from * VERTEX_BYTES, verts);

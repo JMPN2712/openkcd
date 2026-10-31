@@ -92,7 +92,7 @@ for (const [k, s] of route.entries()) {
   trimWorldCaches(caches, 4);
   lap("trim");
   const rebuild = performance.now() - t;
-  if (k === 0) console.log(`world geometry: ${(models.stats.vertices * 64 / 2 ** 20).toFixed(0)} MiB of vertices, ${models.stats.meshes} meshes, ${models.stats.draws} draws`);
+  if (k === 0) console.log(`world geometry: ${(models.stats.vertices * 44 / 2 ** 20).toFixed(0)} MiB of vertices, ${models.stats.meshes} meshes, ${models.stats.draws} draws`);
   const frame = async () => {
     const t0 = performance.now();
     const eye: [number, number, number] = [at[0], at[1], heightAt(lvl.terrain, at[0], at[1]) + 1.7];
