@@ -41,7 +41,7 @@ let dialogueRig: Promise<DialogueCameraRig> | null = null;
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
 const root = opt("--root", join(homedir(), "kcd1"));
-const [ax, ay, ayaw] = opt("--at", "2577.8,574,-90").split(",").map(Number);
+const [ax, ay, ayaw = -90] = opt("--at", "2577.8,574,-90").split(",").map(Number); // yaw in degrees, optional
 const walk = opt("--walk", "0.5:;2:w;1.5:w+shift;1:");
 const view = opt("--view", "third");
 const pitch0 = Number(opt("--pitch", "-10"));
