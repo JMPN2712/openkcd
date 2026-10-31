@@ -20,7 +20,10 @@ waits for a research session.
      rebuilds so models can be uploaded again (dropping them needs the GPU
      geometry kept as long, or reloading); the JS heap (5.1 GiB on Potato
      in Chrome 143 here).
-  2. Streaming stalls (1% lows of 1.4–14.5 fps during the benchmark flight).
+  2. Streaming stalls. One work budget per frame (`frameBudget.ts`): long
+     frames in a flight 140 → 95, loading 13 → 11 s. Left: garbage
+     collection, `selectLods` per frame, main-thread inflates, GPU uploads.
+     New background work should `await workSlice()` between pieces.
   3. Occlusion culling from `notes/interiors-visibility.md` (coverage
      buffer from reprojected depth plus `occluder.ocm`).
   4. Upscaling (render below the canvas size, upscale with sharpening).
@@ -52,3 +55,5 @@ waits for a research session.
   headless harnesses, installer tests take either DLC layout, `test-lua`
   without extra files, `render-player --at x,y` without a yaw, the M3 Pro
   baseline in PERFORMANCE.md.
+- #18 (2026-10-30): geometry memory halved (44-byte vertices, stores that
+  grow from 4 MiB): Potato GPU 2.6 → 1.3 GiB on the M3 Pro.

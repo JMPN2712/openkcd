@@ -7,6 +7,7 @@ import { decodeMip, mipData, openTexture, type Texture } from "./texture.ts";
 import { mipDims } from "./dds.ts";
 import { decodeBC1, decodeBC2, decodeBC3, decodeBC4, decodeBC5, decodeBC7 } from "./bcn.ts";
 import type { Vfs, VfsHit } from "./vfs.ts";
+import { workSlice } from "./frameBudget.ts";
 
 export const MODEL_RE = /\.(cgf|cga|skin|chr)$/;
 export const MTL_RE = /\.mtl$/;
@@ -216,6 +217,8 @@ export async function loadModelParts(vfs: Vfs, path: string, opts: { material?: 
   let skeleton: Skeleton | null = null;
   for (const v of versions) {
     const bytes = await vfs.read(v);
+    // (parsing in the frame's shared work budget: a streaming step loads hundreds of models)
+    await workSlice();
     const c = parseCgf(bytes);
     if (c.meshes.length) {
       hit = v;

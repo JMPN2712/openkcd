@@ -11,6 +11,7 @@
 
 import type { LoadedModel, MipChain } from "./model.ts";
 import type { CgfMesh, Subset } from "./cgf.ts";
+import { workSlice } from "./frameBudget.ts";
 import { GeometryStore, type Range } from "./geometryStore.ts";
 import { uploadChain, type PooledTexture, type TexturePool } from "./texturePool.ts";
 import { colorizeOf } from "./mtl.ts";
@@ -272,8 +273,17 @@ interface DrawItem {
  * slice per await then takes one slice per frame. With a plain setTimeout(0) the browser ran
  * every ready slice and read before the next frame, and they added up to long frames.
  */
-function afterNextFrame(): Promise<void> {
-  return new Promise((r) => (typeof requestAnimationFrame === "function" ? requestAnimationFrame(() => setTimeout(r, 0)) : setTimeout(r, 0)));
+/** Wait for room in the frame's work budget (frameBudget.ts), noting the longest run without a wait. */
+async function sliceWork(slice: { t: number; longest: number }): Promise<void> {
+  slice.longest = Math.max(slice.longest, performance.now() - slice.t);
+  await workSlice();
+  slice.t = performance.now();
+}
+
+/** A unit-range float as snorm8. */
+function q8(v: number): number {
+  const x = v * 127;
+  return x >= 127 ? 127 : x <= -127 ? -127 : x < 0 ? (x - 0.5) | 0 : (x + 0.5) | 0;
 }
 
 /** Kept draws' uniforms: 256-byte slots in buffers of 1,024, handed out and taken back. */
@@ -760,8 +770,8 @@ export class ModelRenderer {
    * then costs no frame much more than `sliceMs` (returns the longest slice, ms). Unskinned meshes only (the world, grass); meshes the
    * next setModels doesn't use are freed by it.
    */
-  async prepare(items: { model: LoadedModel; transform?: Float32Array; layer?: number }[], sliceMs = 4): Promise<number> {
-    let t = performance.now(), longest = 0;
+  async prepare(items: { model: LoadedModel; transform?: Float32Array; layer?: number }[]): Promise<number> {
+    const slice = { t: performance.now(), longest: 0 };
     for (const { model, transform, layer } of items) {
       const skinned = model.cgf.meshes.some((m) => m.boneIds && m.boneWeights && model.skeleton);
       // the draws setModels would keep for this model (see modelDraws), built now
@@ -769,14 +779,12 @@ export class ModelRenderer {
       const draws: DrawItem[] = [];
       for (const mesh of model.cgf.meshes) {
         if (mesh.boneIds && mesh.boneWeights) continue;
+        // (each mesh, and each part of a large one, in the frame's shared work budget)
+        await sliceWork(slice);
         let geo = this.meshGeo.get(mesh)?.get(0);
         if (!geo) {
-          // (large meshes a part per frame)
-          const slice = { t, longest };
-          geo = await this.uploadMeshSliced(mesh, 32768, slice);
+          geo = await this.uploadMeshSliced(mesh, 16384, slice);
           (this.meshGeo.get(mesh) ?? this.meshGeo.set(mesh, new Map()).get(mesh)!).set(0, geo);
-          t = slice.t;
-          longest = slice.longest;
         }
         if (!transform && !meshExtents.has(mesh)) meshExtents.set(mesh, meshExtent(mesh, mesh.transform));
         for (const s of mesh.subsets) {
@@ -789,22 +797,11 @@ export class ModelRenderer {
           });
           if (d) { this.keep(d); draws.push(d); }
         }
-        // (after each mesh: a model can hold several large ones)
-        if (performance.now() - t > sliceMs) {
-          longest = Math.max(longest, performance.now() - t);
-          await afterNextFrame();
-          t = performance.now();
-        }
       }
       // (gen: the current set's, so a setModels that leaves the model out gives them back)
       if (keep) this.modelDraws.set(model, { draws, gen: this.generation });
-      if (performance.now() - t > sliceMs) {
-        longest = Math.max(longest, performance.now() - t);
-        await afterNextFrame();
-        t = performance.now();
-      }
     }
-    return Math.max(longest, performance.now() - t);
+    return Math.max(slice.longest, performance.now() - slice.t);
   }
 
   /** A mesh's vertices in the renderer's layout (bone ids clamped to a palette of `paletteCount`; 0: not skinned), uploaded. */
@@ -820,11 +817,7 @@ export class ModelRenderer {
     const nv = mesh.positions.length / 3;
     const geo = this.allocMesh(mesh);
     for (let from = 0; from < nv; from += part) {
-      if (from) {
-        slice.longest = Math.max(slice.longest, performance.now() - slice.t);
-        await afterNextFrame();
-        slice.t = performance.now();
-      }
+      if (from) await sliceWork(slice);
       this.writeVertices(mesh, 0, geo.v, from, Math.min(nv, from + part));
     }
     return geo;
@@ -846,15 +839,15 @@ export class ModelRenderer {
     const bytes = new Uint8Array(raw);
     const sb = new Int8Array(raw);
     const F = VERTEX_BYTES / 4, U = VERTEX_BYTES / 2;
-    const snorm = (v: number) => Math.round(Math.max(-1, Math.min(1, v)) * 127);
     // (plain indexed copies: a subarray per attribute and vertex made big meshes cost tens of ms)
     const P = mesh.positions, N = mesh.normals, T = mesh.uvs, G = mesh.tangents, C = mesh.colors;
     for (let i = from; i < to; i++) {
       const j = i - from, o = j * F, b = j * VERTEX_BYTES;
       verts[o] = P[i * 3]; verts[o + 1] = P[i * 3 + 1]; verts[o + 2] = P[i * 3 + 2];
-      if (N) { sb[b + 12] = snorm(N[i * 3]); sb[b + 13] = snorm(N[i * 3 + 1]); sb[b + 14] = snorm(N[i * 3 + 2]); } else sb[b + 14] = 127;
+      // (snorm8: round, clamped to ±127; an Int8Array would wrap 128 to −128)
+      if (N) { sb[b + 12] = q8(N[i * 3]); sb[b + 13] = q8(N[i * 3 + 1]); sb[b + 14] = q8(N[i * 3 + 2]); } else sb[b + 14] = 127;
       if (T) { verts[o + 4] = T[i * 2]; verts[o + 5] = T[i * 2 + 1]; }
-      if (G) { sb[b + 36] = snorm(G[i * 4]); sb[b + 37] = snorm(G[i * 4 + 1]); sb[b + 38] = snorm(G[i * 4 + 2]); sb[b + 39] = snorm(G[i * 4 + 3]); }
+      if (G) { sb[b + 36] = q8(G[i * 4]); sb[b + 37] = q8(G[i * 4 + 1]); sb[b + 38] = q8(G[i * 4 + 2]); sb[b + 39] = q8(G[i * 4 + 3]); }
       if (C) { bytes[b + 40] = C[i * 4]; bytes[b + 41] = C[i * 4 + 1]; bytes[b + 42] = C[i * 4 + 2]; bytes[b + 43] = C[i * 4 + 3]; } else { bytes[b + 40] = bytes[b + 41] = bytes[b + 42] = bytes[b + 43] = 255; }
       if (paletteCount) {
         for (let k = 0; k < 4; k++) {

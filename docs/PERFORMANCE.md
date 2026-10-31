@@ -164,6 +164,37 @@ for everything else on every preset. The world store still holds up to
 twice what it uses after a few streaming steps (fragmentation: a chunk is
 only given back when empty).
 
+### One work budget per frame (2026-10-31, M3 Pro)
+
+Streaming stalls came from background tasks that each kept to their own few
+milliseconds but ran in the same gap between two frames: geometry uploads
+(`prepare`), model parsing, animation databases, an NPC's hidden-skin test
+(up to 100 ms at once). `frameBudget.ts` gives them one shared budget: work
+waits in `workSlice()` until the frame has room (4 ms after loading; while
+the world and first NPCs load, when frames are capped at 66 ms anyway, most
+of a frame), resumed one piece at a time in arrival order.
+
+`profile-browser.ts --preset=potato --fly=60 --spikes` (a 60 s flight north-west, two
+runs each):
+
+| | frames over 25 ms | p99 | worst | world complete |
+|---|---|---|---|---|
+| before | 140, 149 | 18.8, 18.0 ms | 135, 125 ms | 13, 14 s |
+| after | 95, 94 | 17.7, 15.5 ms | 129, 91 ms | 11, 11 s |
+
+The in-app benchmark, interleaved before/after runs at one preset (another
+Chrome was busy on the machine, so compare within each row only):
+
+| Preset | before: fps, 1% low | after: fps, 1% low |
+|---|---|---|
+| Potato | 184.0, 11.3; 183.4, 10.7 | 210.2, 13.3; 212.4, 13.0 |
+| Medium | 79.3, 7.5 | 85.0, 10.2; 87.5, 8.5 |
+
+The Node streaming benchmark's longest slice per step went from 4.4–5.2 ms
+to 1.1–2.0 ms. Left in the long frames: garbage collection, `selectLods` on
+the frame itself, reads inflated on the main thread, and native time the
+profile doesn't attribute (GPU uploads).
+
 ## Measured frame rates (2026-10-20, after the draw and CPU work below)
 
 From `scripts/bench-presets.ts`.

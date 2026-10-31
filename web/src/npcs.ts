@@ -18,6 +18,7 @@ import { multiply } from "./mat4.ts";
 import { avoid, CA, NPC_PATH_RADIUS, type CrowdAgent, type Vec3 } from "./crowd.ts";
 import { parseSmartObjectHelpers, type SoHelper } from "./btWorld.ts";
 import { parseAdb } from "./mannequin.ts";
+import { workSlice } from "./frameBudget.ts";
 
 const CLIPS: Record<"male" | "female", [string, Record<Pose, string[]>]> = {
   male: ["animations/humans/male/male_general.dba", {
@@ -181,7 +182,9 @@ export class NpcWorld {
         const [dbPath, names] = CLIPS[female ? "female" : "male"];
         const dh = this.vfs.lookup(dbPath);
         if (dh) {
-          const dba = new Dba(await this.vfs.read(dh));
+          const bytes = await this.vfs.read(dh);
+          await workSlice();
+          const dba = new Dba(bytes);
           for (const pose of ["stand", "sleep", "walk"] as const) {
             const name = names[pose].find((n) => dba.anims.some((a) => a.name === n));
             if (name) clips[pose] = dba.clip(name);

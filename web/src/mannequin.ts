@@ -15,6 +15,7 @@ import { parseXml, type XmlNode } from "./xml.ts";
 import { Dba } from "./dba.ts";
 import type { Clip } from "./anim.ts";
 import type { Vfs } from "./vfs.ts";
+import { workSlice } from "./frameBudget.ts";
 
 export interface FragmentVariant {
   tags: string;
@@ -65,7 +66,8 @@ export class AnimLibrary {
   private dba(path: string): Promise<Dba> {
     let d = this.dbas.get(path);
     if (!d) {
-      d = this.vfs.read(this.vfs.lookup(path)!).then((b) => new Dba(b));
+      // (decoded in the frame's shared work budget)
+      d = this.vfs.read(this.vfs.lookup(path)!).then(async (b) => { await workSlice(); return new Dba(b); });
       this.dbas.set(path, d);
     }
     return d;

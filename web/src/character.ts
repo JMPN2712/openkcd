@@ -17,6 +17,7 @@ import { loadModel, type LoadedModel } from "./model.ts";
 import { hideCoveredSkin } from "./coverage.ts";
 import { parseSkeleton, type Skeleton } from "./skeleton.ts";
 import { multiply } from "./mat4.ts";
+import { workSlice } from "./frameBudget.ts";
 
 export type PartKind = "body" | "head" | "hair" | "beard" | "cloth" | "attachment" | "prop";
 
@@ -343,6 +344,8 @@ export async function loadCharacter(
   const headCentre = head ? ([0, 1, 2].map((k) => (head.bboxMin[k] + head.bboxMax[k]) / 2 + head.transform[12 + k]) as [number, number, number]) : undefined;
   for (const p of parts) {
     if (p.part.kind !== "body" && !(p.part.kind === "hair" && headCentre)) continue;
+    // (each part's test in the frame's shared work budget: an NPC's took up to 100 ms at once)
+    await workSlice();
     const { model, hidden } = hideCoveredSkin(p.model, garments, p.part.kind === "hair" ? { from: headCentre } : {});
     p.model = model;
     if (hidden) notes.push(`${p.part.label}: ${hidden} triangles under clothing left out`);
@@ -353,6 +356,7 @@ export async function loadCharacter(
   const worn = parts.filter((p) => (p.part.kind === "cloth" || p.part.kind === "attachment") && !p.transform);
   for (const p of worn) {
     if (p.part.kind !== "cloth") continue;
+    await workSlice();
     const outer = worn.filter((o) => o.part.layer > p.part.layer).flatMap((o) => o.model.cgf.meshes.map((mesh) => ({ mesh, model: o.model })));
     const { model, hidden } = hideCoveredSkin(p.model, outer);
     p.model = model;

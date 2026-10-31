@@ -50,6 +50,7 @@ import { ShadowCasters } from "./shadowPass.ts";
 import { GpuTimer, encodeOpaque } from "./gpuTimer.ts";
 import { trackGpuMemory } from "./gpuMemory.ts";
 import { benchStart, jsHeap, pose, report, retainedBuffers, systemInfo, PATH_SECONDS, type FrameSample, type PresetResult } from "./benchmark.ts";
+import { setFrameWorkMs } from "./frameBudget.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -705,6 +706,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     raf = requestAnimationFrame(frame);
     // while the world and then the first NPCs load, a frame every LOADING_FRAME ms at most:
     // drawing the growing scene at full speed took about half the main thread from loading
+    // background work (frameBudget.ts) may take most of a frame while loading, a few ms after
+    setFrameWorkMs(worldLoading || !npcsLoaded ? LOADING_FRAME : 4);
     if ((worldLoading || !npcsLoaded) && last && now - last < LOADING_FRAME) return;
     const frameMs = last ? now - last : 0;
     const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
