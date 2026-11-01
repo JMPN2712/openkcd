@@ -466,24 +466,32 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   // else up to 1 m up (navmesh routes run up to 0.85 m under the ground in places)
   npcWorld.surface = (x, y, z) => (surroundings.ground(x, y, z + 0.5, z - 1.5) ?? surroundings.ground(x, y, z + 1, z - 1.5))?.z ?? null;
   // behaviour trees for NPCs at work (loaded in the background: ~1 s of tree parsing)
+  let stopped = false;
   let npcAi: NpcAi | null = null;
+  let viewLua: LuaHost | null = null;
   void (async () => {
     // Lua 5.1 with the game's scripts (Scripts/main.lua) for the trees' Lua code
     const lua = await LuaHost.create(vfs, luaWasm);
+    viewLua = lua;
     await lua.preload();
     await lua.preloadTables();
+    if (stopped) return null;
     const w = await createAiWorld(vfs, {
       ents, lua, realTime: () => npcAi?.now ?? 0, worldTime: () => (npcAi?.now ?? 0) * 15, act: (a) => npcAi?.act(a) ?? 1,
       daycycleChange: (npc, f) => schedules.cycleOf(npc)?.change(f, minute),
     });
+    // (createAiWorld hands the host callbacks that reach this view: close it again if it stopped meanwhile)
+    if (stopped) { lua.close(); return null; }
     if (!lua.boot()) console.warn("Lua start-up:", lua.errors.slice(0, 3));
     // free time: hobbies by soul and the areas offering them (daycycle.ts)
-    schedules.setCycleData(await cycleData(vfs, w));
+    const cycles = await cycleData(vfs, w);
+    if (stopped) { lua.close(); return null; }
+    schedules.setCycleData(cycles);
     // conversations run sequence scripts and read metaroles in the same Lua
     dialogue.lua = lua;
     return w;
   })().then((w) => {
-    if (stopped) return;
+    if (stopped || !w) return;
     npcAi = new NpcAi(w, { male: new AnimLibrary(vfs, "male"), female: new AnimLibrary(vfs, "female") });
     npcAi.nav = schedules.navMesh;
     npcWorld.ai = npcAi;
@@ -589,7 +597,6 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       streaming = false;
     }
   };
-  let stopped = false;
   // start above Henry's spawn in Rattay's market, looking the way he will: the first streamed
   // scene is the one he needs (starting 600 m away streamed a whole scene there first, about
   // 100 s from the game folder before the market was complete)
@@ -1016,6 +1023,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   stopActive = () => {
     stopped = true;
     dialogue.stop();
+    // what outlives a view must not reach it: the level data's schedules and the Lua runtime's
+    // function table would keep this whole closure, caches and scene included. And the caches'
+    // released models can't be uploaded to the next view's renderer (releaseVertexData).
+    schedules.clearCycleData();
+    viewLua?.close();
+    worldCaches.clear();
     gpuDevice.removeEventListener("uncapturederror", onGpuError);
     cancelAnimationFrame(raf);
     models.destroy();

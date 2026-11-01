@@ -146,6 +146,11 @@ waits for a research session.
   `test-dialogue-browser.ts`. Facial animation and lip sync wait for a
   research note (questions above).
 
+- #35 (2026-11-01): replaced views no longer stay in memory, and reopening
+  the world view keeps its objects (a bug live since #28: every object gone
+  after reopening the view or going between Low and Medium). Potato
+  benchmark's JS heap 3,133 → 1,801 MiB. `profile-browser.ts --reopen`.
+
 ## Findings not yet acted on
 
 - **The user's Mac benchmark (2026-10-31)** is in PERFORMANCE.md. It ran
@@ -162,9 +167,10 @@ waits for a research session.
   items (occlusion, the new Medium) should cut it. Real CPU costs left:
   `selectLods` 12%, NPC animation 7%, behaviour trees 4–8%, crowd 4%,
   route searches 2%.
-- **World caches' positions and indices** (about 580 MiB on Potato after
-  the benchmark, kept for collision and four builds): 16-bit indices would
-  halve the indices' share. Henry's animation database is 117 MiB.
+- **World caches' positions and indices** (kept for collision and four
+  builds): 16-bit indices would save about 64 MiB in a Potato scene, 85 on
+  Medium, perhaps 140 after a flight (measured; PERFORMANCE.md), so low
+  priority. Henry's animation database is 117 MiB.
 
 ## Clocks checked against the research notes (2026-10-31)
 

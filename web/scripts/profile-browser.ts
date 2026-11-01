@@ -5,7 +5,7 @@
 // call crosses into the GPU process: this measures what a player gets.
 // Driven over the DevTools protocol (Node's built-in WebSocket); no npm deps.
 // usage: node scripts/profile-browser.ts [--root=GAME_ROOT] [--preset=high] [--settle=30]
-//          [--seconds=8] [--windowed] [--headed] [--dialogue=SEQUENCE_ID [--shot=close_up] [--screenshot=PREFIX]] [--talk=NPC_NAME [--pick=1,2]] [--at=x,y[,yaw°]] [--fly=SECONDS [--spikes]] [--bench=this --spikes] [--build-slim=full|potato] [--package] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080] [--bench[=this]] [--query=gpu-mem] [--heap]
+//          [--seconds=8] [--windowed] [--headed] [--dialogue=SEQUENCE_ID [--shot=close_up] [--screenshot=PREFIX]] [--talk=NPC_NAME [--pick=1,2]] [--at=x,y[,yaw°]] [--fly=SECONDS [--spikes]] [--bench=this --spikes] [--build-slim=full|potato] [--package] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080] [--bench[=this]] [--query=gpu-mem] [--heap] [--reopen=low,potato]
 //   CHROME=… picks the browser binary, CHROME_FLAGS=… adds flags, PROFILE_DIR=… keeps the profile; --probe stops after naming the
 //   WebGPU adapter; --fly then flies north-west across the map (free-fly, 60 m/s: a streaming
 //   step every few seconds) printing the HUD every 10 s, then profiles there; with --spikes it
@@ -249,6 +249,33 @@ async function memoryReport(): Promise<void> {
   });
   for (const p of mine.sort((a, b) => b.rss - a.rss)) console.log(`  ${p.type.padEnd(10)} pid ${p.pid}: resident ${mib(p.rss)}${p.footprint ? `, footprint ${p.footprint}` : ""}`);
 }
+// --reopen=low,potato,…: pick these presets in the view's menu, one after another (each opens a
+// fresh view), printing the heap after a forced collection once each has loaded: what a replaced
+// view leaves behind
+const reopen = arg("reopen", "");
+if (reopen) {
+  const mib = (b: number) => `${(b / 2 ** 20).toFixed(0)} MiB`;
+  const settled = async (label: string) => {
+    let quiet = 0, last = "";
+    await waitFor(`the view (${label})`, () => hud().then((h) => {
+      last = h;
+      quiet = /instances within/.test(h) && !/oading|Assembling|start once/.test(h) ? quiet + 1 : 0;
+      return quiet >= 20 ? true : undefined;
+    }), 240000).catch((err) => { console.log(`HUD: ${last.slice(0, 400)}`); throw err; });
+    await page("HeapProfiler.enable");
+    await page("HeapProfiler.collectGarbage");
+    await sleep(1000);
+    const u = await page("Runtime.getHeapUsage");
+    console.log(`${label}: page heap ${mib(await evaluate<number>(`performance.memory?.usedJSHeapSize ?? 0`))} (V8 objects ${mib(u.usedSize)}, array buffers ${mib(u.backingStorageSize ?? 0)})`);
+  };
+  await settled(`first view (${preset})`);
+  for (const p of reopen.split(",")) {
+    await evaluate(`(() => { const s = document.querySelector(".level-preset"); s.value = ${JSON.stringify(p)}; s.dispatchEvent(new Event("change")); })()`);
+    await sleep(3000);
+    await settled(`then ${p}`);
+  }
+}
+
 if (process.argv.includes("--memory") && !process.argv.some((a) => a.startsWith("--bench"))) { await memoryReport(); process.exit(0); }
 
 const spikes = process.argv.includes("--spikes");

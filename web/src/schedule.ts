@@ -194,6 +194,16 @@ export class Schedules {
     this.departures.clear();
   }
 
+  /**
+   * Forget the cycle data: it reaches the behaviour-tree world of the view that set it, and this
+   * object outlives views (the level data's cache).
+   */
+  clearCycleData(): void {
+    this.cycles = new DayCycles({ ents: this.ents, hobbies: new Map(), areaBehaviours: () => undefined, ready: false });
+    this.routes.clear();
+    this.departures.clear();
+  }
+
   /** An NPC's daily cycle as it stands, if it has one yet (messages from its trees). */
   cycleOf(id: number): NpcCycle | undefined {
     return this.cycles.get(id);

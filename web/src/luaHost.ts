@@ -364,6 +364,22 @@ export class LuaHost {
     return host;
   }
 
+  /**
+   * Done with this state: its callbacks stay registered in the runtime's global function table,
+   * so what they reach would live as long as the page (a whole world view, through entityName).
+   */
+  close(): void {
+    this.entityName = () => "";
+    this.entityProps = () => null;
+    this.scripts.clear();
+    this.tables.clear();
+    try {
+      this.lua.global.close();
+    } catch (err) {
+      console.warn("Lua close:", err);
+    }
+  }
+
   private readonly scripts = new Map<string, string>();
 
   /** Preload the game's Lua files (so ReloadScript can stay synchronous). */

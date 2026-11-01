@@ -334,6 +334,41 @@ after them are unchanged.
 What is left of the world caches is mostly positions (320 MiB) and indices
 (256 MiB) of the last four builds. Indices could be 16-bit for most meshes.
 
+### Replaced views no longer stay in memory (2026-11-01, M3 Pro)
+
+A heap snapshot after the Potato benchmark (`--snapshot`, `heap-buffers.ts`)
+showed two world caches alive, reached through `Schedules.cycles → AiWorld →
+realTime` and `LuaHost.entityName → … → realTime`. Both start outside the
+view (the level data's cache; the Lua runtime's global function table), and
+a closure made in a view keeps that view's whole scope. So **a replaced view
+stayed in memory with its caches and scene**: at every benchmark step, every
+preset change, every return to the world view. Each Lua state was never
+closed either. Now a view that stops clears the schedules' cycle data, closes
+its Lua state and drops the world caches.
+
+**The bug this also fixes (in the hosted player since #28):** the world
+caches outlived the view, but a cached model's vertex data is gone once
+uploaded. A new view's renderer had no geometry for it and failed
+(`objects: road: vertex data released…`), leaving a world with no objects
+after reopening the view or going between Low and Medium (the same texture
+size, so the same caches). The benchmark clears the caches, so it never saw
+this. Reopening a view now reads its models again.
+
+`profile-browser.ts --reopen=potato,low,medium,potato` picks presets in the
+view's menu and prints the heap after a forced collection once each loads;
+it fails if a view never finishes loading. Page heap: first view 1,216 MiB;
+then Potato 1,577, Low 1,414, Medium 1,569, and Potato again **1,224 MiB**.
+
+**The Potato benchmark's own memory line:** JS heap at the end 3,133 → 1,801
+MiB (peak 3,349 → 2,331), GPU unchanged at 1.4 GiB; 291.6 fps, 1% low 40.2.
+The earlier heap figures in this file, and benchmark reports before this fix,
+include a previous view (the `--memory` tables above too). A player who
+opens the world once and stays was not affected by the leak.
+
+**16-bit indices** (suggested above) would save less than they looked to: 64
+MiB in a Potato scene, 85 on Medium, perhaps 140 after a flight's cached
+models. All meshes fit. Not done.
+
 ### Far trees culled by cell (2026-10-31, M3 Pro)
 
 Every far-tree card (293k) was drawn every frame, wherever the camera
