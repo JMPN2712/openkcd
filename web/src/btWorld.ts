@@ -147,6 +147,8 @@ export interface WorldOptions {
   shopkeepers?: Set<string>;
   /** a `daycycle:change` message to an NPC (its fields: add, handle, name, priority, …), for its daily cycle */
   daycycleChange?: (npc: number, fields: Record<string, Value>) => void;
+  /** a SetQuest / SetQuestObjective node (QuestSystem.apply in quests.ts); without it, they only succeed */
+  quest?: (fn: string, quest: string, objective?: string) => boolean;
 }
 
 /** A message's `values` ("add(true), handle('x'), priority(30)") as fields, each value evaluated. */
@@ -704,6 +706,16 @@ export class AiWorld {
     const leaf = (f: () => Status): Task => ({ tick: f, abort: () => {} });
     const setVar = (prop: string, v: Value) => { const name = this.prop(n, prop); if (name) assignVar(c.scope, name, v); };
     switch (n.tag) {
+      case "SetQuest": case "SetQuestObjective":
+        return leaf(() => {
+          const obj = n.tag === "SetQuestObjective";
+          // an empty quest name is the tree's own quest (research notes: the tree's entity name)
+          const quest = String(c.eval(obj ? "quest" : "questName", "") ?? "") || String(this.lookupValue(c.scope, "this.name") ?? "");
+          const objective = String(c.eval(obj ? "objective" : "objectiveName", "") ?? "");
+          this.o.quest?.(String(c.eval("function", "") ?? ""), quest, objective || undefined);
+          // ASSUMPTION: the node succeeds whatever the quest system answered
+          return "success";
+        });
       case "InstantSendMessageToNPC": case "SendMessageToNPC": case "InstantMultiSendMessageToNPC":
         return leaf(() => {
           const type = n.props.type ?? "";

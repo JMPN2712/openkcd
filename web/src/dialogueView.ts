@@ -140,6 +140,11 @@ export class DialogueHost {
     return l ? l.text.get(l.db.nameKey(soul) ?? "") : undefined;
   }
 
+  /** The quest state, which trees and Lua change too; loads the dialogue tables if they haven't. */
+  async questSystem(): Promise<QuestSystem> {
+    return (await this.load()).quests;
+  }
+
   /** Start loading the dialogue tables (about 1.5 s, once). */
   preload(): void {
     void this.load();
