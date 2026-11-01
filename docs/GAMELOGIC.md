@@ -493,6 +493,11 @@ attempt.
 
 ### Quest state (`web/src/quests.ts`)
 
+Dialogue, behaviour-tree `SetQuest` and `SetQuestObjective` nodes and Lua's
+`QuestSystem` table all change the same state, so diet mode's overlay covers
+each of them. Trees don't read it yet (`QuestObjectiveCondition`,
+`QuestObjectiveGate`, `GetQuest`), and the quests' own trees don't run yet.
+
 From the research note on the quest system. `QuestDb` reads the quest
 tables (objectives, transitions, journal subchapters and their start topics,
 `sequence2quest_objective`, places, on-map tracked assets, reward rows).

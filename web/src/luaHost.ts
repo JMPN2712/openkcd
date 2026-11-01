@@ -7,10 +7,12 @@
 // implemented yet: any capitalised global the scripts touch is a logging stub, a
 // table that answers missing keys with nested stubs and can be called (returns
 // nil). `calls` counts what was called, to decide what to implement first.
+// QuestSystem is the exception: its quest functions reach the quest state (quests.ts).
 
 import { Lua } from "wasmoon-lua5.1";
 import type { Vfs } from "./vfs.ts";
 import type { Value } from "./btRuntime.ts";
+import type { QuestSystem } from "./quests.ts";
 import { parseXml, type XmlNode } from "./xml.ts";
 
 /**
@@ -115,6 +117,15 @@ function __kcd_reload(path)
   local ok, e = pcall(f)
   if not ok then __kcd_error(tostring(e)) end
   return ok
+end
+-- the quest system (quests.ts, through LuaHost.quests): the game's scripts call these with dots.
+-- GetActiveObjectives, GetObjectiveExpCoeff, OpenInventory, … stay stubs.
+QuestSystem = mkstub("QuestSystem")
+for _, name in ipairs({ "ActivateQuest", "DeactivateQuest", "StartQuest", "CompleteQuest", "CancelQuest", "ResetQuest",
+    "StartObjective", "CompleteObjective", "CancelObjective",
+    "IsQuestActivated", "IsQuestStarted", "IsQuestCompleted", "IsQuestCanceled", "IsQuestFailed", "IsQuestAvailable", "IsQuestUnchanged",
+    "IsObjectiveStarted", "IsObjectiveCompleted", "IsObjectiveCanceled", "IsObjectiveFailed", "IsObjectiveUnchanged", "IsObjectiveTrackedCompleted" }) do
+  rawset(QuestSystem, name, function(quest, objective) return __kcd_quest(name, quest, objective) end)
 end
 Script = mkstub("Script")
 rawset(Script, "ReloadScript", function(p) return __kcd_reload(p) end)
@@ -338,6 +349,8 @@ export class LuaHost {
   readonly errors: string[] = [];
   readonly logs: string[] = [];
   private vfs: Vfs;
+  /** what Lua's QuestSystem table reads and changes; until it is set, every call answers false */
+  quests: Pick<QuestSystem, "apply" | "call"> | null = null;
 
   private constructor(lua: Lua, vfs: Vfs) {
     this.lua = lua;
@@ -352,6 +365,11 @@ export class LuaHost {
     g.set("__kcd_call", (path: string) => { host.calls.set(path, (host.calls.get(path) ?? 0) + 1); });
     g.set("__kcd_error", (msg: string) => { if (host.errors.length < 500) host.errors.push(String(msg)); });
     g.set("__kcd_log", (kind: string, msg: string) => { if (host.logs.length < 500) host.logs.push(`${kind}: ${msg}`); });
+    g.set("__kcd_quest", (fn: string, quest: string, objective?: string | number) => {
+      const q = host.quests;
+      if (!q) return false;
+      return fn.startsWith("Is") ? !!q.call(fn, [quest, objective ?? ""]) : q.apply(fn, quest, objective);
+    });
     g.set("__kcd_read", (path: string) => host.readScript(path));
     g.set("__kcd_db", (what: string, table: string, i?: number) => host.db(what, table, i));
     g.set("__kcd_entname", (id: number) => host.entityName(Number(id)));
