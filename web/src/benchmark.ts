@@ -136,6 +136,18 @@ export function report(system: string[], results: PresetResult[]): string {
     }
   }
   out.push("");
+  // the GPU's slowest frames: a frame missing the display's deadline waits for the GPU here, with
+  // the main thread idle (the 1% low on a GPU-bound or a vsynced run), and which passes grew in them
+  for (const r of results) {
+    const sum = (f: GpuFrame) => [...f.passes.values()].reduce((x, y) => x + y, 0);
+    const g = [...r.gpu].sort((a, b) => sum(b) - sum(a));
+    if (g.length < 100) continue;
+    const worst = g.slice(0, Math.floor(g.length / 100));
+    const mean = (l: GpuFrame[], k?: string) => l.reduce((a, f) => a + (k ? f.passes.get(k) ?? 0 : sum(f)), 0) / l.length;
+    const grew = passNames.map((k) => [k, mean(worst, k) - mean(g, k)] as const).sort((a, b) => b[1] - a[1]).slice(0, 4);
+    out.push(`${r.preset} GPU frames: median ${sum(g[g.length >> 1]).toFixed(2)} ms, slowest 1% ${mean(worst).toFixed(2)} ms (${grew.map(([k, v]) => `${k} +${v.toFixed(2)}`).join(", ")})`);
+  }
+  out.push("");
   for (const r of results) {
     const m = r.memory.end;
     out.push(`${r.preset} memory at the end: JS heap ${mib(m.jsHeap)} (peak ${mib(r.memory.peakJs)}); GPU ${mib(m.gpu.buffers + m.gpu.textures + m.gpu.targets)} (peak ${mib(r.memory.peakGpu)}): buffers ${mib(m.gpu.buffers)}, textures ${mib(m.gpu.textures)} (streamed pool ${mib(m.pool)}), render targets ${mib(m.gpu.targets)}; loaded in ${r.settleSeconds.toFixed(0)} s`);

@@ -421,6 +421,61 @@ the frame's span. At a pinned 0.6 the market's opaque pass fell from 4.8 to
 the Vega 7, where the scaling should matter most. `bench-presets.ts`
 (Dawn) draws Medium without MSAA now but doesn't scale.
 
+### What the 1% lows are made of (2026-10-31, M3 Pro)
+
+`profile-browser.ts --bench=this --spikes` (new) records the page's frame
+times and a CPU profile over the benchmark run; `--headed` runs it in a
+visible window with vsync, as a player has it; `TRACE_OUT=` adds a Chrome
+trace. The report now has a line for the GPU's slowest 1% of frames.
+
+**Headless (vsync off), the numbers earlier sections use:**
+
+- **Medium** (GPU-bound; median frame 9.1 ms): the main thread runs
+  several frames ahead of the GPU, then blocks. In tasks over 25 ms it was
+  on the CPU 26% of their time, waiting in a WebGPU flush
+  (`CommandBufferProxyImpl::WaitForToken`) while the GPU process waited
+  for Metal (`IOSurfaceImageBacking::WaitForCommandsToBeScheduled`).
+- **Potato** (median 3.1 ms): its long tasks run the whole time, but
+  everything in them (LOD selection, draw encoding, NPCs) is about five
+  times slower than in other frames: the thread is slowed, not given more
+  work. It looks like scheduling in headless Chrome.
+
+**Frame pacing tried and dropped.** Waiting before a frame while N
+submitted frames are unfinished (`onSubmittedWorkDone`), Medium, headless,
+two runs each:
+
+| Frames in flight | fps | 1% low |
+|---|---|---|
+| unpaced (main) | 95.4, 98.9 | 12.8, 13.4 |
+| 1 | 34.3, 35.1 | 9.4, 10.8 |
+| 2 | 55.2, 55.8 | 14.0, 13.6 |
+| 3 | 61.5, 70.8 | 15.7, 13.7 |
+| 4 | 75.8, 73.1 | 16.0, 13.1 |
+
+Completion is reported about 28 ms after submission, so pacing costs far
+more frame rate than it gains on the lows.
+
+**In a visible window (1154×648, 120 Hz), Potato:** 1% low 31–35 fps
+across five runs (the user's run before #19–#28: 15.5 in the flight).
+Frames over 17 ms land on whole display intervals (16.7, 25, 33 ms), and
+the main thread is mostly **idle** in them. The GPU's frames: median
+10.6 ms, slowest 1% 31.6 ms, with every pass slower in them (far trees
++3.2, grass +3.1, characters +2.9, objects +2.8 ms) rather than one pass
+growing. That points at the GPU's clocks or its sharing with the window
+server, not at a pass of ours.
+
+Background work over its budget is in the long frames too, but less of
+them (mesh upload preparation 0.3 s, small reads inflated on the main
+thread 0.2 s, character and model decoding 0.2 s, over 50 frames over
+17 ms). Slicing those finer (8,192-vertex parts, bounds and UV densities
+in a slice of their own, small reads in the frame budget) made no
+measurable difference in three interleaved headed runs each (flight 1% low
+31.1–34.9 on main, 31.3–34.0 with it) and was left out.
+
+Next: the user's own benchmark with the new GPU-frames line, to see whether
+the same holds in their Chrome; on the Vega 7 the lows may be CPU-bound
+instead.
+
 ## Measured frame rates (2026-10-20, after the draw and CPU work below)
 
 From `scripts/bench-presets.ts`.
