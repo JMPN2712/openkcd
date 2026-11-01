@@ -28,9 +28,14 @@ waits for a research session.
      2.9 GiB). Still over the targets: Potato's tab is about 2.3 GiB of
      heap plus 1.4 GiB on the GPU.
   2. Streaming stalls. One work budget per frame (`frameBudget.ts`): long
-     frames in a flight 140 → 95, loading 13 → 11 s. Left: garbage
-     collection, `selectLods` per frame, main-thread inflates, GPU uploads.
-     New background work should `await workSlice()` between pieces.
+     frames in a flight 140 → 95, loading 13 → 11 s. New background work
+     should `await workSlice()` between pieces. **Measured (#31,
+     PERFORMANCE.md "What the 1% lows are made of"):** in a visible window
+     Potato's 1% low is 31–35 fps on the M3 Pro, its long frames idle on
+     the CPU with every GPU pass slower in them; headless lows are
+     artifacts of unthrottled frames. Frame pacing and finer slicing were
+     tried and dropped. Next: the user's own benchmark (it now reports the
+     GPU's slowest frames), and the Vega 7, where lows may be CPU-bound.
   3. Occlusion culling. The occluder shells (`occluder.ocm`) in a 128×64
      CPU buffer each frame (`occlusion.ts`, preset setting `occlusion`,
      `?no-occlusion`): Medium in the market 64 → 101 fps on the M3 Pro.
@@ -43,7 +48,9 @@ waits for a research session.
 
 ## Waiting for me (the user)
 
-- Nothing yet.
+- **Run the ⏱ Benchmark again in your Chrome** (same 1154×648 window): the
+  report now has a "GPU frames" line per preset, which tells whether your
+  1% lows are the GPU's slow frames, as they are headed here.
 
 ## Questions for a research session
 
@@ -92,6 +99,12 @@ waits for a research session.
   tangents, UVs and colours once uploaded; the caches reload models whose
   geometry left the GPU. Heap after the benchmark: Potato 3.0 → 2.3 GiB,
   Medium 4.0 → 2.9 GiB; frame rates unchanged (`test-release.ts`).
+
+- #31 (2026-10-31): spike profiles of the benchmark run
+  (`profile-browser.ts --bench=this --spikes`, `--headed`, `SPIKES_OUT`,
+  `TRACE_OUT`) and a line for the GPU's slowest 1% of frames in the
+  report; the 1% low findings in PERFORMANCE.md. Landed as 1d42c3e (the
+  PR was closed, not marked merged: main had moved).
 
 ## Findings not yet acted on
 
