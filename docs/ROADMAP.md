@@ -483,8 +483,11 @@ content, without deleting anything.
       (`web/src/quests.ts`, `diet.ts`, `dietConfig.ts`), a setting on by
       default, the Simon route rewired, four unlocks stocked in shops, and
       the reachability checks (`scripts/test-diet.ts`).
-- [ ] Stock the grants once shops exist; run the quest trees' SetQuest
-      nodes and Lua's `QuestSystem` through `QuestSystem.apply`.
+- [x] Behaviour-tree SetQuest nodes and Lua's `QuestSystem` change the quest
+      state through `QuestSystem.apply`, so the overlay covers them.
+- [ ] Stock the grants once shops exist.
+- [ ] Trees' quest reads (`QuestObjectiveCondition`, `QuestObjectiveGate`,
+      `GetQuest`), and running the quests' own trees.
 
 ## 6. Core gameplay
 

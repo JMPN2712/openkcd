@@ -472,7 +472,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const lua = await LuaHost.create(vfs, luaWasm);
     await lua.preload();
     await lua.preloadTables();
+    // quest writes from trees and Lua go through the quest state, so diet mode's overlay covers them
+    const quests = await dialogue.questSystem();
+    lua.quests = quests;
     const w = await createAiWorld(vfs, {
+      quest: (fn, q, o) => quests.apply(fn, q, o),
       ents, lua, realTime: () => npcAi?.now ?? 0, worldTime: () => (npcAi?.now ?? 0) * 15, act: (a) => npcAi?.act(a) ?? 1,
       daycycleChange: (npc, f) => schedules.cycleOf(npc)?.change(f, minute),
     });

@@ -8,9 +8,11 @@
 //   4. each main quest's end is reachable through its objective graph;
 //   5. no kept quest is started by a cut quest, beyond the expected matches (starts of cut quests,
 //      the hubs' and the bookkeeping quest's objectives).
-// Also: every configured quest, objective, item and shop exists.
+// Also: every configured quest, objective, item and shop exists, and behaviour-tree nodes and Lua
+// change the quest state through the overlay.
 // usage: node scripts/test-diet.ts [--root GAME_ROOT]
 
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { gameSources } from "./lib.ts";
@@ -21,6 +23,9 @@ import { parseCondition, type CondNode, type CondValue } from "../src/dialogueCo
 import { QuestDb, QuestSystem, CANCELED, COMPLETED, END, START, SEQ_START, UNCHANGED, type QuestEvent } from "../src/quests.ts";
 import { DietMode } from "../src/diet.ts";
 import { DIET, cutQuests, type DietConfig } from "../src/dietConfig.ts";
+import { AiDb, AiWorld } from "../src/btWorld.ts";
+import { parseTreeFile } from "../src/bt.ts";
+import { LuaHost } from "../src/luaHost.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
@@ -329,6 +334,42 @@ check(!cut.has("q_learnToRead") && !diet.listed("q_learnToRead"), "3. Mightier t
   check(!sys.startQuest("a_swordofsheba") && sys.objectiveState("a_swordofsheba", 4) === CANCELED || qdb.objective("a_swordofsheba", 4) === undefined, "a cut quest in the real tables refuses to start and reads as cancelled");
   const hubMarkers = [...qdb.quests.keys()].filter((q) => DIET.bookkeeping.includes(q)).flatMap((q) => qdb.objectivesOf(q).filter((o) => diet.hubLink(q, o.id)));
   check(hubMarkers.length > 0, `${hubMarkers.length} hub and bookkeeping objectives follow a cut quest (their markers are hidden)`);
+}
+
+// ---- trees and Lua change the quest state through the overlay ----
+{
+  const fresh = () => { const q = new QuestSystem(qdb); new DietMode(qdb, ddb, DIET, () => true).attach(q); return q; };
+  const quests = fresh();
+  const world = new AiWorld({
+    ents: new Map(), ai: new AiDb({ soTag: [], so2tag: [], saTag: [], sa2tag: [] }), worldTime: () => 0, realTime: () => 0,
+    trees: () => undefined, quest: (fn, q, o) => quests.apply(fn, q, o),
+  });
+  const quoted = (v: string) => `&quot;${v}&quot;`;
+  const runNode = (node: string, own = "") => {
+    const [tree] = parseTreeFile(`<BehaviorTrees><BehaviorTree name="t"><Variables /><Root><Behavior>${node}</Behavior></Root></BehaviorTree></BehaviorTrees>`, "test.xml");
+    const { task, scope } = world.runner.instantiate(tree);
+    scope.set("this", { id: 0, name: own });
+    return task.tick();
+  };
+  const setQuest = (fn: string, quest: string) => `<SetQuest questName="${quoted(quest)}" objectiveName="${quoted("")}" function="${quoted(fn)}" />`;
+  const setObjective = (fn: string, quest: string, objective: string) => `<SetQuestObjective quest="${quoted(quest)}" objective="${quoted(objective)}" function="${quoted(fn)}" />`;
+  const own = qdb.objectivesOf("q_abductedWoman")[0].name;
+  check(runNode(setQuest("StartQuest", "q_abductedWoman")) === "success" && quests.flags("q_abductedWoman").started, "tree: SetQuest starts a kept quest");
+  check(runNode(setObjective("StartObjective", "", own), "q_abductedWoman") === "success" && quests.objectiveState("q_abductedWoman", own) !== UNCHANGED, "tree: an empty quest name is the tree's own quest");
+  check(runNode(setQuest("StartQuest", "q_debtor")) === "success" && !quests.flags("q_debtor").started && !!quests.flags("q_debtor").failed, "tree: SetQuest can't start a cut quest, which still reads as cancelled");
+  runNode(setQuest("StartQuest", "q_recruiters"));
+  runNode(setObjective("StartObjective", "q_recruiters", "talkToSimon"));
+  check(quests.objectiveState("q_recruiters", "talkToSimon") === UNCHANGED, "tree: SetQuestObjective can't start the rewired Simon route");
+
+  const lua = await LuaHost.create(vfs, createRequire(import.meta.url).resolve("wasmoon-lua5.1/dist/liblua5.1.wasm"));
+  const say = (code: string) => lua.lua.doStringSync(`return tostring(${code})`);
+  check(say(`QuestSystem.StartQuest('q_recruiters')`) === "false", "Lua: before the quest system is attached, calls answer false");
+  lua.quests = fresh();
+  check(say(`QuestSystem.StartQuest('q_recruiters')`) === "true" && say(`QuestSystem.IsQuestStarted('q_recruiters')`) === "true", "Lua: QuestSystem starts a kept quest and reads it back");
+  check(say(`QuestSystem.StartQuest('q_debtor')`) === "false" && say(`QuestSystem.IsQuestCanceled('q_debtor')`) === "true" && say(`QuestSystem.IsQuestStarted('q_debtor')`) === "false", "Lua: a cut quest refuses to start and reads as cancelled");
+  say(`QuestSystem.StartObjective('q_recruiters', 'talkToSimon')`);
+  check(say(`QuestSystem.IsObjectiveUnchanged('q_recruiters', 'talkToSimon')`) === "true", "Lua: the rewired Simon route stays unchanged");
+  check(say(`QuestSystem.GetActiveObjectives()`) === "nil" && lua.errors.length === 0, "Lua: QuestSystem functions the quest state doesn't have stay stubs");
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nall checks passed");
