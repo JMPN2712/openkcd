@@ -146,7 +146,7 @@ waits for a research session.
   `test-dialogue-browser.ts`. Facial animation and lip sync wait for a
   research note (questions above).
 
-- #35 (2026-11-01): replaced views no longer stay in memory, and reopening
+- #37 (2026-11-01): replaced views no longer stay in memory, and reopening
   the world view keeps its objects (a bug live since #28: every object gone
   after reopening the view or going between Low and Medium). Potato
   benchmark's JS heap 3,133 → 1,801 MiB. `profile-browser.ts --reopen`.
