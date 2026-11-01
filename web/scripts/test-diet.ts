@@ -201,30 +201,30 @@ interface Start {
   target: string;
   /** a StartObjective's objective id */
   objective?: number;
-  /** in a ForestContainer: nodes left outside the tree's Root in the editor */
-  detached?: boolean;
 }
 const starts: Start[] = [];
 const START_FNS = new Set(["StartQuest", "ActivateQuest", "StartObjective"]);
 /** a quoted property's content ("" for an empty one), or null for a variable */
 const quotedText = (v: string) => (v.length >= 2 && v.startsWith('"') && v.endsWith('"') ? v.slice(1, -1) : null);
 const LUA_START = /QuestSystem\.(StartQuest|ActivateQuest|StartObjective)\(\s*['"]([^'"]+)['"]/g;
-let treeFiles = 0;
-// every SetQuest / SetQuestObjective element in the files, detached ones included (the parser in
-// bt.ts reads only each tree's Root); EditorData copies carry no properties
+let treeFiles = 0, containerStarts = 0;
+// every SetQuest / SetQuestObjective element under a tree's Root. ForestContainer groups (the
+// editor's loose nodes) never run, per the research notes, so they are cut out before the scan;
+// EditorData copies carry no properties
 const unescape = (x: string) => x.replace(/&(quot|apos|lt|gt|amp|#xD|#xA|#x9);/g, (_, e: string) => ({ quot: '"', apos: "'", lt: "<", gt: ">", amp: "&" } as Record<string, string>)[e] ?? " ");
 const attr = (tag: string, name: string) => unescape(new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1] ?? "");
 const objectiveOf = (q: string, ref: string) => (ref ? qdb.objectiveId(q, ref) : undefined);
 for (const path of vfs.paths()) {
   if (!path.startsWith("libs/ai/quests/")) continue;
-  const xml = new TextDecoder().decode(await vfs.read(vfs.lookup(path)!));
-  if (!xml.includes("<BehaviorTree")) continue;
+  const raw = new TextDecoder().decode(await vfs.read(vfs.lookup(path)!));
+  if (!raw.includes("<BehaviorTree")) continue;
+  const xml = raw.replace(/<ForestContainer>[\s\S]*?<\/ForestContainer>/g, (c) => {
+    containerStarts += [...c.matchAll(/<SetQuest(?:Objective)?\s[^>]*function="&quot;(?:StartQuest|ActivateQuest|StartObjective)&quot;"/g)].length;
+    return "";
+  });
   treeFiles++;
   const file = path.slice("libs/ai/quests/".length, -4);
   const source = qdb.canonical(file) ?? `tree:${file}`;
-  const forests: [number, number][] = [];
-  for (const m of xml.matchAll(/<ForestContainer>[\s\S]*?<\/ForestContainer>/g)) forests.push([m.index, m.index + m[0].length]);
-  const detached = (i: number) => forests.some(([a, b]) => i >= a && i < b);
   for (const m of xml.matchAll(/<SetQuest(Objective)?\s[^>]*>/g)) {
     const tag = m[0], obj = !!m[1];
     const fn = quotedText(attr(tag, "function"));
@@ -233,11 +233,11 @@ for (const path of vfs.paths()) {
     const target = name === "" ? (qdb.canonical(source) ?? undefined) : qdb.canonical(name);
     if (!target) continue;
     const ref = quotedText(attr(tag, obj ? "objective" : "objectiveName")) ?? "";
-    starts.push({ source, how: `tree ${fn}`, target, objective: fn === "StartObjective" ? objectiveOf(target, ref) : undefined, detached: detached(m.index) });
+    starts.push({ source, how: `tree ${fn}`, target, objective: fn === "StartObjective" ? objectiveOf(target, ref) : undefined });
   }
   for (const m of unescape(xml).matchAll(LUA_START)) {
     const t = qdb.canonical(m[2]);
-    if (t) starts.push({ source, how: `tree Lua ${m[1]}`, target: t, objective: m[1] === "StartObjective" ? objectiveOf(t, /^\s*['"]([^'"]*)['"]/.exec(unescape(xml).slice(m.index + m[0].length).replace(/^\s*,/, ""))?.[1] ?? "") : undefined, detached: detached(m.index) });
+    if (t) starts.push({ source, how: `tree Lua ${m[1]}`, target: t, objective: m[1] === "StartObjective" ? objectiveOf(t, /^\s*['"]([^'"]*)['"]/.exec(unescape(xml).slice(m.index + m[0].length).replace(/^\s*,/, ""))?.[1] ?? "") : undefined });
   }
 }
 // a sequence's source: the quest whose journal entry owns its topic, else "dialogue"
@@ -261,11 +261,7 @@ for (const r of t2s) {
   for (const m of script.matchAll(LUA_START)) { const t = qdb.canonical(m[2]); if (t) starts.push({ source: seqSource.get(seq) ?? "dialogue", how: `sequence ${seq} script ${m[1]}`, target: t }); }
 }
 console.log(`starts: ${starts.length} (from ${treeFiles} quest tree files and the dialogue tables)`);
-{
-  const link = starts.filter((s) => s.source === "q_inVinoVeritas" && s.target === "q_millerDate");
-  check(link.length > 0, `the scan finds in vino veritas's tree starting Courtship's inn-fight steps (why it stays)${link.every((s) => s.detached) ? "; note: only in a detached ForestContainer" : ""}`);
-  console.log(`     detached starts (ForestContainer, outside any Root): ${starts.filter((s) => s.detached).length}`);
-}
+console.log(`     left out: ${containerStarts} start nodes in ForestContainer groups (editor data that never runs)`);
 
 // ---- 2. every required quest can start from a kept source ----
 for (const [name, expected] of Object.entries(DIET.required)) {
@@ -315,11 +311,11 @@ check(!cut.has("q_learnToRead") && !diet.listed("q_learnToRead"), "3. Mightier t
   const accidental = (cutSet: Set<string>) => starts.filter((s) => cutSet.has(s.source) && !cutSet.has(s.target) && !bookkeeping.has(s.target));
   const fromCut = starts.filter((s) => cut.has(s.source));
   console.log(`     ${fromCut.length} starts from cut quests; expected: ${fromCut.filter((s) => cut.has(s.target)).length} inside the cut lines, ${fromCut.filter((s) => bookkeeping.has(s.target)).length} on the hubs and the bookkeeping quest`);
-  const lines = [...new Set(accidental(cut).map((s) => `${s.source} → ${s.target} (${s.how}${s.detached ? ", detached" : ""})`))];
+  const lines = [...new Set(accidental(cut).map((s) => `${s.source} → ${s.target} (${s.how})`))];
   check(lines.length === 0, `5. no kept quest is started by a cut quest beyond the expected matches${lines.length ? `:\n       ${lines.join("\n       ")}` : ""}`);
-  // the check itself: cutting in vino veritas too must flag its start of Courtship
-  const probe = accidental(new Set([...cut, "q_inVinoVeritas"]));
-  check(probe.some((s) => s.source === "q_inVinoVeritas" && s.target === "q_millerDate"), "5. (self-test) cutting in vino veritas as well would be flagged: it starts Courtship");
+  // the check itself: cutting the counterfeiters too must flag its tree's start of the abducted woman
+  const probe = accidental(new Set([...cut, "q_counterfeiters"]));
+  check(probe.some((s) => s.source === "q_counterfeiters" && s.target === "q_abductedWoman" && s.how.startsWith("tree")), "5. (self-test) cutting the counterfeiters as well would be flagged: its tree starts the abducted woman");
 }
 
 // ---- the overlay on the real tables ----

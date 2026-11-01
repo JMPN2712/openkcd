@@ -507,9 +507,10 @@ are data in `dietConfig.ts`.
   live.
 - **Checks** (`scripts/test-diet.ts`): the spec's five reachability checks
   against the quest tables, the quest trees and the dialogue tables. The
-  start scan also reads nodes left outside a tree's Root in the editor
-  (`ForestContainer`, 97 starts): *in vino veritas*'s start of *Courtship*'s
-  inn-fight steps is only there. Four main quests (`q_returnToSkalitz`,
+  start scan reads only what is under a tree's Root: `ForestContainer`
+  groups are the editor's loose nodes and never run (research notes), so
+  *in vino veritas*'s container nodes that start *Courtship*'s inn-fight
+  steps don't count; *Courtship*'s own tree starts them. Four main quests (`q_returnToSkalitz`,
   `q_pribBattle`, `q_revenge`, `q_tutorials`) are beyond the static graph
   walk even in the full game; check 4 compares with diet mode off.
 
