@@ -461,6 +461,58 @@ attempt.
 - **Database link.** Quests are rows in `Libs/Tables/quest/quest.xml`, and
   objectives in the `skald_*` tables ("Skald" is the quest/journal system).
 
+### Quest state (`web/src/quests.ts`)
+
+From the research note on the quest system. `QuestDb` reads the quest
+tables (objectives, transitions, journal subchapters and their start topics,
+`sequence2quest_objective`, places, on-map tracked assets, reward rows).
+`QuestSystem` keeps each touched quest's flags and objective states and runs
+the lifecycle: activate, start (initial objectives), start, complete and
+cancel objectives (exclusive siblings, the successors' AND-join, the final
+objective completing the quest), cancel, reset, and the generic re-check that
+completes active objectives whose condition holds. It answers the condition
+functions (`IsQuestStarted`, `IsObjectiveCompleted`, …) for dialogue and runs
+a sequence's quest changes when it plays.
+
+- **Not yet:** tracked assets, timers, paying rewards (announced as events),
+  saves on objectives, the tree nodes and Lua's `QuestSystem` table (they
+  will call `QuestSystem.apply`).
+- **Overlay.** Everything reads and changes quests through `QuestSystem`, so
+  an overlay can make a quest read as cancelled and refuse every change to
+  it without touching the stored state. Diet mode is one (below).
+
+### Diet mode (`web/src/diet.ts`, `web/src/dietConfig.ts`)
+
+The research notes' diet-mode spec: 39 errand and fetch side quests cut
+(about half of the side quests); the main story, the required side quests
+(*In the Cloister*, *Pestilence*, *Mightier than the Sword*, *Damsel in
+Distress*) and the memorable ones stay. The list, the rewires and the grants
+are data in `dietConfig.ts`.
+
+- **A cut quest** never starts or changes, whoever asks; every condition
+  reads it as cancelled, so the quest-giver hubs and the bookkeeping quest
+  move on. It has no journal entry, banner, reward or marker (the hubs'
+  markers for its giver are hidden too). Its offer topics and the sequences
+  that only start it are hidden, and its own trees don't run.
+- **Started before:** a cut quest the player started with diet mode off
+  keeps running.
+- **Rewire:** in *If You Can't Beat 'em*, the Miller Simon route (it needs
+  *Thick as Thieves – Simon*) is never started and the innkeeper's pointer to
+  Simon is hidden; the tanner, bailiff, innkeeper and Thomas routes stay.
+- **Grants** (stock lines for the shop system to add): the agility book at
+  the Uzhitz scribe, the saddle at the Neuhof stables, the horse trappings at
+  the Uzhitz stables, the Queen of Sheba's sword at the Sasau swordsmith (its
+  own price, 16,442, is a top sword's).
+- **Setting:** "Diet mode" in the world view's toolbar, on by default, read
+  live.
+- **Checks** (`scripts/test-diet.ts`): the spec's five reachability checks
+  against the quest tables, the quest trees and the dialogue tables. The
+  start scan also reads nodes left outside a tree's Root in the editor
+  (`ForestContainer`, 97 starts): *in vino veritas*'s start of *Courtship*'s
+  inn-fight steps is only there. Four main quests (`q_returnToSkalitz`,
+  `q_pribBattle`, `q_revenge`, `q_tutorials`) are beyond the static graph
+  walk even in the full game; check 4 compares with diet mode off.
+
 ## Storm (`Libs/Storm`)
 
 Rule files assign roles, schedules and attributes to characters:

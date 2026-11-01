@@ -82,6 +82,10 @@ export interface FlowHost {
    */
   runScript?(script: string, varContext: string, dc: Record<string, string>, state: DialogueState): { prices: Record<string, CondValue> | null; metaroles?: Record<string, Record<string, boolean>> };
   report?(what: string): void;
+  /** a sequence the game leaves out (diet mode hides cut quests' offers) */
+  hidden?(sequence: number, topic: number): boolean;
+  /** a sequence has started playing: run its quest changes, each if its condition holds in the conversation */
+  played?(sequence: number, holds: (condition: string) => boolean): void;
 }
 
 /** Per game: sequence use, dialogue variables and the random generator. */
@@ -252,6 +256,7 @@ export class Conversation {
     for (const e of this.db.topicSequences(topic)) {
       const sequence = this.db.sequence(e.sequence);
       if (!sequence || !this.state.available(sequence, now)) continue;
+      if (this.host.hidden?.(sequence.id, topic)) continue;
       if (entry && !e.entryCondition.trim()) continue;
       if (!this.holds(e.entryCondition, true)) continue;
       out.push({ topic, sequence, npcEntryCondition: e.npcEntryCondition, branchType, branchPriority, topicPriority: info.priority, owner: this.db.owner(topic), requested });
@@ -414,6 +419,7 @@ export class Conversation {
         }
       }
     }
+    this.host.played?.(seq.id, (src) => this.holds(src, true));
     return (this.step = { kind: "play", candidate: c, cast: this.cast, greeting });
   }
 
@@ -532,14 +538,17 @@ export function participant(db: DialogueDb, soul: { id: string; name: string }, 
 }
 
 /**
- * Condition functions for a world without quests, relationships, stats or items yet: quests are
- * not started, nobody is angry, tags and perks are absent, the hour is the game clock's.
+ * Condition functions for a world without relationships, stats or items yet: quests are read from
+ * `quests` (without it, nothing has started), nobody is angry, tags and perks are absent, the hour
+ * is the game clock's.
  * ASSUMPTION: relationships read RELATIONSHIP (0.5, the middle reputation band) until the RPG
  * layer exists; at 0.5 nobody refuses to talk (the refusal needs < 0.1).
  */
 export const RELATIONSHIP = 0.5;
-export function neutralWorld(hour: () => number): FlowHost["call"] {
-  return (name) => {
+export function neutralWorld(hour: () => number, quests?: { call(name: string, args: CondValue[]): CondValue | undefined }): FlowHost["call"] {
+  return (name, args) => {
+    const q = quests?.call(name, args);
+    if (q !== undefined) return q;
     switch (name) {
       case "HourOfDay": return Math.floor(hour());
       case "GetTrueRelationship": case "GetPerceivedRelationship": return RELATIONSHIP;

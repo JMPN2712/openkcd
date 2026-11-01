@@ -170,6 +170,13 @@ export function holds(src: string, host: ConditionHost, empty = true): boolean {
   }
 }
 
+export type CondNode = Node;
+
+/** A condition's syntax tree, for analysing it without a game (throws if it doesn't parse). */
+export function parseCondition(src: string): CondNode {
+  return compiled(src);
+}
+
 /** Parse a condition without evaluating it (tests: every condition in the tables parses). */
 export function parses(src: string): string | null {
   if (!src.replace(/--[^\n]*/g, "").trim()) return null;

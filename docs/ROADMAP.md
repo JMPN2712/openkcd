@@ -475,9 +475,16 @@ its cost on Potato with a full market.
 A config that disables boring fetch and errand side quests and optional
 content, without deleting anything.
 
-- [ ] Map the quest graph (flowgraphs, quest dependencies).
-- [ ] Classify optional content. Multi-part questlines stay whole, and
-      nothing the main quest depends on is ever cut.
+- [x] Map the quest graph (flowgraphs, quest dependencies).
+- [x] Classify optional content. Multi-part questlines stay whole, and
+      nothing the main quest depends on is ever cut. 39 quests cut
+      (research notes' diet-mode spec, 2026-10-31).
+- [x] Diet mode (2026-10-31): an overlay on the quest state
+      (`web/src/quests.ts`, `diet.ts`, `dietConfig.ts`), a setting on by
+      default, the Simon route rewired, four unlocks stocked in shops, and
+      the reachability checks (`scripts/test-diet.ts`).
+- [ ] Stock the grants once shops exist; run the quest trees' SetQuest
+      nodes and Lua's `QuestSystem` through `QuestSystem.apply`.
 
 ## 6. Core gameplay
 

@@ -14,6 +14,8 @@ import type { PakSource } from "./paks.ts";
 import { readTable } from "./tables.ts";
 import type { Vfs } from "./vfs.ts";
 import { VoiceBank } from "./voice.ts";
+import { QuestDb, QuestSystem } from "./quests.ts";
+import { DietMode } from "./diet.ts";
 
 interface Loaded {
   db: DialogueDb;
@@ -21,6 +23,9 @@ interface Loaded {
   text: Localization;
   /** soul name → soul id */
   souls: Map<string, string>;
+  /** the game's quest state, with diet mode over it */
+  quests: QuestSystem;
+  diet: DietMode;
 }
 
 /** Henry's soul (rpg/soul "dude") and the entity id his Lua soul goes by. */
@@ -94,12 +99,15 @@ export class DialogueHost {
   private load(): Promise<Loaded> {
     return (this.loaded ??= (async () => {
       const text = new Localization();
-      const [db, voices, , souls] = await Promise.all([
+      const [db, voices, , souls, questDb] = await Promise.all([
         DialogueDb.load(this.vfs), VoiceBank.open(this.paks, "english"),
         text.load(this.paks, ["text_ui_dialog", "text_ui_soul", "text_ui_ingame"]),
-        readTable(this.vfs, "rpg/soul"),
+        readTable(this.vfs, "rpg/soul"), QuestDb.load(this.vfs),
       ]);
-      this.ready = { db, voices, text, souls: new Map(souls.map((r) => [r.soul_name, r.soul_id])) };
+      const quests = new QuestSystem(questDb);
+      quests.report = (w) => console.debug("quests:", w);
+      const diet = new DietMode(questDb, db).attach(quests);
+      this.ready = { db, voices, text, souls: new Map(souls.map((r) => [r.soul_name, r.soul_id])), quests, diet };
       return this.ready;
     })());
   }
@@ -119,7 +127,9 @@ export class DialogueHost {
     const entityOf = (name: string) => (name === HENRY_SOUL ? HENRY_ENTITY : name === this.with?.name ? this.with.entity : undefined);
     return {
       now: () => this.clock().seconds,
-      call: neutralWorld(() => this.clock().hour),
+      call: neutralWorld(() => this.clock().hour, l.quests),
+      hidden: (seq, topic) => l.diet.hidesSequence(seq, topic),
+      played: (seq, holds) => l.quests.runSequence(seq, holds),
       runScript: this.lua ? luaScripts(this.lua, entityOf) : undefined,
       report: (w) => console.debug("dialogue:", w),
     };

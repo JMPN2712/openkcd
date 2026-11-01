@@ -82,7 +82,9 @@ See `docs/ROADMAP.md`. In order:
    assets, `docs/DEPLOY.md`). The repository itself is still **private**;
    the user makes it public. Ask before rewriting history.
 4. Living world. **In progress** (NPC routines partly done).
-5. Diet planning.
+5. Diet planning. **Done (2026-10-31)**: diet mode cuts 39 side quests as an
+   overlay on the quest state, a setting on by default
+   (`docs/GAMELOGIC.md`); its grants wait for shops.
 6. Core gameplay.
 7. Diet playthrough.
 
@@ -121,6 +123,7 @@ questlines whole and never cuts anything the main quest depends on.
 | Navigation | `navmesh.ts`, `crowd.ts` | Navmesh decode, A* plus funnel, collision avoidance |
 | NPCs | `levelEntities.ts`, `schedule.ts`, `npcs.ts`, `npcAi.ts` | Placement, daily schedules, crowd |
 | Game logic | `bt.ts`, `btRuntime.ts`, `btWorld.ts`, `luaHost.ts` (wasmoon Lua 5.1), `typeDefs.ts` | Behaviour-tree interpreter running work routines |
+| Quests, diet mode | `quests.ts`, `diet.ts`, `dietConfig.ts` | Quest state and lifecycle (dialogue reads and drives it); diet mode cuts 39 side quests as an overlay, on by default |
 
 - **Docs:** `docs/RECON.md`, `LEVELS.md`, `CHARACTERS.md`, `ANIMATION.md`,
   `GAMELOGIC.md`, `INSTALLER.md`, `SLIM.md`, `PERFORMANCE.md`, `ROADMAP.md`;

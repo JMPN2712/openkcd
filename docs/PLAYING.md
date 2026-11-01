@@ -121,6 +121,17 @@ it draws) and the memory in use. The Potato package holds textures up to 512 px,
 so with it the higher presets don't sharpen textures (shadows and distance
 still follow the preset).
 
+## Diet mode
+
+On by default: a shorter game that leaves out 39 errand and fetch side
+quests (bounty camps, hunting and theft errands, fist fights, collecting,
+races and archery contests). The main story and the memorable side quests
+stay, and the items those quests gave (the agility book, a saddle, horse
+trappings, the Queen of Sheba's sword) are sold in shops instead. Untick
+**Diet mode** in the world view's toolbar for the full game; the change
+applies at once, and nothing is deleted. A cut quest you had already started
+keeps running.
+
 ## Controls
 
 Click the view to capture the mouse; Esc releases it.

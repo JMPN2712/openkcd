@@ -42,6 +42,7 @@ import { depthClear, depthFormat, type PassSetup } from "./mat4.ts";
 import type { TimeOfDay } from "./tod.ts";
 import { SkyRenderer, skyAt, pickProfile, invert } from "./sky.ts";
 import { PRESETS, savedPreset, savePreset, type PresetName, type QualityPreset } from "./quality.ts";
+import { dietEnabled, setDietEnabled } from "./diet.ts";
 import { loadDetailLayers } from "./terrainDetail.ts";
 import { levelData, levelVfs } from "./levelData.ts";
 import { openSlim } from "./slimView.ts";
@@ -178,6 +179,15 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   for (const [k, v] of Object.entries(PRESETS)) presetSel.append(new Option(`Quality: ${v.label}`, k, k === presetName, k === presetName));
   presetSel.addEventListener("change", () => { savePreset(presetSel.value as PresetName); void showLevel(host, paks, level); });
   clockBar.append(presetSel);
+  // diet mode (diet.ts): on by default, the full game one click away; read live, no rebuild
+  const dietBox = el("input");
+  dietBox.type = "checkbox";
+  dietBox.checked = dietEnabled();
+  dietBox.addEventListener("change", () => setDietEnabled(dietBox.checked));
+  const dietLabel = el("label", "level-diet");
+  dietLabel.title = "Leave out 39 errand and fetch side quests (the main story and the memorable side quests stay). Off: the full game.";
+  dietLabel.append(dietBox, " Diet mode");
+  clockBar.append(dietLabel);
   // the benchmark: every preset (shift-click: this one), then the report to the clipboard
   const benchBtn = el("button", undefined, "⏱ Benchmark");
   benchBtn.type = "button";
