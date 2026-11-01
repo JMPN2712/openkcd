@@ -5,7 +5,7 @@
 // call crosses into the GPU process: this measures what a player gets.
 // Driven over the DevTools protocol (Node's built-in WebSocket); no npm deps.
 // usage: node scripts/profile-browser.ts [--root=GAME_ROOT] [--preset=high] [--settle=30]
-//          [--seconds=8] [--windowed] [--dialogue=SEQUENCE_ID [--shot=close_up] [--screenshot=PREFIX]] [--talk=NPC_NAME [--pick=1,2]] [--at=x,y[,yaw°]] [--fly=SECONDS [--spikes]] [--build-slim=full|potato] [--package] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080] [--bench[=this]] [--query=gpu-mem] [--heap]
+//          [--seconds=8] [--windowed] [--headed] [--dialogue=SEQUENCE_ID [--shot=close_up] [--screenshot=PREFIX]] [--talk=NPC_NAME [--pick=1,2]] [--at=x,y[,yaw°]] [--fly=SECONDS [--spikes]] [--bench=this --spikes] [--build-slim=full|potato] [--package] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080] [--bench[=this]] [--query=gpu-mem] [--heap]
 //   CHROME=… picks the browser binary, CHROME_FLAGS=… adds flags, PROFILE_DIR=… keeps the profile; --probe stops after naming the
 //   WebGPU adapter; --fly then flies north-west across the map (free-fly, 60 m/s: a streaming
 //   step every few seconds) printing the HUD every 10 s, then profiles there; with --spikes it
@@ -29,6 +29,7 @@ const [W, H] = arg("size", "1920x1080").split("x").map(Number);
 const PORT = Number(process.env.PORT ?? 5198);
 const DEBUG = Number(process.env.DEBUG_PORT ?? 9338);
 
+const headed = process.argv.includes("--headed");
 const children: ChildProcess[] = [];
 process.on("exit", () => children.forEach((c) => c.kill()));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -54,7 +55,8 @@ const keepProfile = !!process.env.PROFILE_DIR;
 const profile = process.env.PROFILE_DIR ?? await mkdtemp(join(tmpdir(), "openkcd-profile-"));
 children.push(
   // the hardware adapter (Vulkan on Linux, chrome.ts) with the GPU blocklist off; frames unthrottled
-  spawn(chromeBinary, ["--headless=new", ...chromeGpuFlags, "--ignore-gpu-blocklist", "--enable-unsafe-webgpu", "--disable-gpu-vsync", "--disable-frame-rate-limit",
+  // (--headed: a visible window with vsync, as a player has it; frames wait for the display)
+  spawn(chromeBinary, [...(headed ? [] : ["--headless=new", "--disable-gpu-vsync", "--disable-frame-rate-limit"]), ...chromeGpuFlags, "--ignore-gpu-blocklist", "--enable-unsafe-webgpu",
     ...(process.env.CHROME_FLAGS ?? "").split(" ").filter(Boolean), `--window-size=${W},${H}`, `--remote-debugging-port=${DEBUG}`, `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "about:blank"], { stdio: "ignore" }),
 );
 const version = await waitFor("Chrome", async () => (await fetch(`http://127.0.0.1:${DEBUG}/json/version`)).json() as Promise<{ webSocketDebuggerUrl: string }>);
@@ -249,19 +251,90 @@ async function memoryReport(): Promise<void> {
 }
 if (process.argv.includes("--memory") && !process.argv.some((a) => a.startsWith("--bench"))) { await memoryReport(); process.exit(0); }
 
+const spikes = process.argv.includes("--spikes");
+// --spikes: rAF timestamps in the page and a sampled CPU profile alongside (aligned by its start)
+async function startSpikes(): Promise<number> {
+  await page("Profiler.enable");
+  await page("Profiler.setSamplingInterval", { interval: 500 });
+  await page("Profiler.start");
+  return evaluate<number>(`(() => { const f = (globalThis.__frames = []); const loop = (t) => { f.push(t); requestAnimationFrame(loop); }; requestAnimationFrame(loop); return performance.now(); })()`);
+}
+/** The frames over 25 ms since startSpikes, and what ran in them. */
+async function reportSpikes(pageT0: number): Promise<void> {
+  const { profile: p } = await page("Profiler.stop");
+  const frames = await evaluate<number[]>(`globalThis.__frames`);
+  // SPIKES_OUT=FILE: the profile and the frame times, to look further
+  if (process.env.SPIKES_OUT) await writeFile(process.env.SPIKES_OUT, JSON.stringify({ profile: p, frames, pageT0 }));
+  type N = { id: number; callFrame: { functionName: string; url: string; lineNumber: number }; children?: number[] };
+  const nodes = new Map<number, N>((p.nodes as N[]).map((n) => [n.id, n]));
+  const parent = new Map<number, number>();
+  for (const n of nodes.values()) for (const c of n.children ?? []) parent.set(c, n.id);
+  const nm = (n: N) => `${n.callFrame.functionName || "(anonymous)"} ${n.callFrame.url.split("/").pop()}:${n.callFrame.lineNumber + 1}`;
+  // sample times in the page's clock
+  const times: number[] = [];
+  let at = 0;
+  for (const d of p.timeDeltas as number[]) { at += d; times.push(pageT0 + at / 1000); }
+  const gaps = frames.slice(1).map((t, i) => [frames[i], t] as [number, number]).filter(([a, b]) => b - a > 25);
+  const all = frames.slice(1).map((t, i) => t - frames[i]).sort((a, b) => a - b);
+  console.log(`\n${frames.length} frames in ${((frames[frames.length - 1] - frames[0]) / 1000).toFixed(0)} s: median ${all[all.length >> 1].toFixed(1)} ms, p99 ${all[Math.floor(all.length * 0.99)].toFixed(1)} ms, ${gaps.length} over 25 ms, worst ${all[all.length - 1].toFixed(0)} ms`);
+  // when they came (seconds since the start), to line them up with streaming steps and the path
+  console.log(`long frames at: ${gaps.map(([a, b]) => `${((a - frames[0]) / 1000).toFixed(1)}s ${(b - a).toFixed(0)}`).join(", ")}`);
+  for (const lim of [12, 17, 25, 50]) console.log(`  over ${lim} ms: ${all.filter((v) => v > lim).length}`);
+  // per long frame: the functions sampled in it (each counted once per sample, innermost three of our own)
+  const total = new Map<string, number>(), totalSelf = new Map<string, number>();
+  for (const [a, b] of gaps.sort((x, y) => (y[1] - y[0]) - (x[1] - x[0])).slice(0, 12)) {
+    const here = new Map<string, number>();
+    (p.samples as number[]).forEach((id, i) => {
+      if (times[i] < a || times[i] > b) return;
+      // the stage: what `frame` called, or the outermost function of a task outside the frame;
+      // and the innermost of our functions (self)
+      const chain: N[] = [];
+      for (let j: number | undefined = id; j !== undefined; j = parent.get(j)) chain.push(nodes.get(j)!);
+      const ours = chain.filter((n) => n.callFrame.url.includes("index"));
+      const fi = ours.findIndex((n) => n.callFrame.functionName === "frame");
+      const stage = fi > 0 ? `frame>${ours[fi - 1].callFrame.functionName || "(anonymous)"}` : fi === 0 ? "frame" : ours.length ? `task ${ours[ours.length - 1].callFrame.functionName || "(anonymous)"}` : chain[0] ? `native ${chain[0].callFrame.functionName}` : "?";
+      const self = ours[0] ? ` / ${ours[0].callFrame.functionName || "(anonymous)"}` : "";
+      const k = stage + self;
+      here.set(k, (here.get(k) ?? 0) + 0.5);
+      total.set(stage, (total.get(stage) ?? 0) + 0.5);
+      const sk = ours[0] ? ours[0].callFrame.functionName || "(anonymous)" : `native ${chain[0]?.callFrame.functionName ?? "?"}`;
+      totalSelf.set(sk, (totalSelf.get(sk) ?? 0) + 0.5);
+    });
+    console.log(`  ${(b - a).toFixed(0)} ms: ${[...here].sort((x, y) => y[1] - x[1]).slice(0, 5).map(([k, v]) => `${k} ${v.toFixed(0)}`).join(", ")}`);
+  }
+  console.log(`in all long frames, innermost: ${[...totalSelf].sort((x, y) => y[1] - x[1]).slice(0, 14).map(([k, v]) => `${k} ${v.toFixed(0)} ms`).join(", ")}`);
+  console.log(`in all long frames: ${[...total].sort((x, y) => y[1] - x[1]).slice(0, 14).map(([k, v]) => `${k} ${v.toFixed(0)} ms`).join(", ")}`);
+}
+
 // --bench[=this]: the in-app benchmark (every preset, or this one), printing its report
 const benchArg = process.argv.find((a) => a === "--bench" || a.startsWith("--bench="));
 if (benchArg) {
   await evaluate(`[...document.querySelectorAll("button")].find((b) => /Benchmark/.test(b.textContent)).dispatchEvent(new MouseEvent("click", { shiftKey: ${benchArg === "--bench=this"} }))`);
-  let lastHud = "";
+  let lastHud = "", spikesT0 = 0;
   const text = await waitFor("the benchmark", async () => {
     const h = (await hud()).match(/⏱ [^·]*/)?.[0] ?? "";
     // (the preset and phase as they change, not every second)
     const key = h.replace(/\d+\/\d+ s/, "");
-    if (h && key !== lastHud) { console.log(h); lastHud = key; }
+    if (h && key !== lastHud) {
+      console.log(h); lastHud = key;
+      // (--spikes with --bench=this: from the flight's start to the report)
+      if (spikes && /flight/.test(h) && !spikesT0) {
+        spikesT0 = await startSpikes();
+        // TRACE_OUT=FILE: a Chrome trace over the run too (thread time against wall time per task)
+        if (process.env.TRACE_OUT) await send("Tracing.start", { transferMode: "ReportEvents", traceConfig: { includedCategories: ["toplevel", "v8", "gpu", "disabled-by-default-devtools.timeline"] } });
+      }
+    }
     return evaluate<string>(`(() => { const p = document.querySelector(".level-bench"); return p && !p.hidden ? p.querySelector("pre").textContent : undefined; })()`);
   }, 3600_000);
   console.log(text);
+  if (spikesT0) await reportSpikes(spikesT0);
+  if (spikesT0 && process.env.TRACE_OUT) {
+    const done = new Promise<void>((r) => (traceDone = r));
+    await send("Tracing.end");
+    await done;
+    // (names, and the tasks over 2 ms: the whole trace is too large for one string)
+    await writeFile(process.env.TRACE_OUT, traceEvents.filter((e) => e.ph === "M" || (e.ph === "X" && e.dur > 2000)).map((e) => JSON.stringify(e)).join("\n"));
+  }
   if (heap) {
     // live bytes by allocating function (self), and by the app's functions on the stack (total)
     type H = { callFrame: { functionName: string; url: string; lineNumber: number }; selfSize: number; children: H[] };
@@ -361,14 +434,7 @@ if (fly) {
   for (let k = 1; k <= 10; k++) await page("Input.dispatchMouseEvent", { type: "mouseMoved", x: 400 + 59 * k, y: 500 - 10 * k, button: "left" });
   await page("Input.dispatchMouseEvent", { type: "mouseReleased", x: 990, y: 400, button: "left", clickCount: 1 });
   // --spikes: frame timestamps in the page, a CPU profile alongside (aligned by its start)
-  const spikes = process.argv.includes("--spikes");
-  let pageT0 = 0;
-  if (spikes) {
-    await page("Profiler.enable");
-    await page("Profiler.setSamplingInterval", { interval: 500 });
-    await page("Profiler.start");
-    pageT0 = await evaluate<number>(`(() => { const f = (globalThis.__frames = []); const loop = (t) => { f.push(t); requestAnimationFrame(loop); }; requestAnimationFrame(loop); return performance.now(); })()`);
-  }
+  const pageT0 = spikes ? await startSpikes() : 0;
   await key("KeyW", "keyDown");
   for (let t = 0; t < fly; t += 10) {
     await sleep(10000);
@@ -377,46 +443,7 @@ if (fly) {
     console.log(`  ${t + 10} s: ${(await hud()).replace(/ · (terrain|textures|Henry|free-fly)[^·]*/g, "").slice(0, 200)}`);
   }
   await key("KeyW", "keyUp");
-  if (spikes) {
-    const { profile: p } = await page("Profiler.stop");
-    const frames = await evaluate<number[]>(`globalThis.__frames`);
-    type N = { id: number; callFrame: { functionName: string; url: string; lineNumber: number }; children?: number[] };
-    const nodes = new Map<number, N>((p.nodes as N[]).map((n) => [n.id, n]));
-    const parent = new Map<number, number>();
-    for (const n of nodes.values()) for (const c of n.children ?? []) parent.set(c, n.id);
-    const nm = (n: N) => `${n.callFrame.functionName || "(anonymous)"} ${n.callFrame.url.split("/").pop()}:${n.callFrame.lineNumber + 1}`;
-    // sample times in the page's clock
-    const times: number[] = [];
-    let at = 0;
-    for (const d of p.timeDeltas as number[]) { at += d; times.push(pageT0 + at / 1000); }
-    const gaps = frames.slice(1).map((t, i) => [frames[i], t] as [number, number]).filter(([a, b]) => b - a > 25);
-    const all = frames.slice(1).map((t, i) => t - frames[i]).sort((a, b) => a - b);
-    console.log(`\n${frames.length} frames in ${((frames[frames.length - 1] - frames[0]) / 1000).toFixed(0)} s: median ${all[all.length >> 1].toFixed(1)} ms, p99 ${all[Math.floor(all.length * 0.99)].toFixed(1)} ms, ${gaps.length} over 25 ms, worst ${all[all.length - 1].toFixed(0)} ms`);
-    // per long frame: the functions sampled in it (each counted once per sample, innermost three of our own)
-    const total = new Map<string, number>(), totalSelf = new Map<string, number>();
-    for (const [a, b] of gaps.sort((x, y) => (y[1] - y[0]) - (x[1] - x[0])).slice(0, 12)) {
-      const here = new Map<string, number>();
-      (p.samples as number[]).forEach((id, i) => {
-        if (times[i] < a || times[i] > b) return;
-        // the stage: what `frame` called, or the outermost function of a task outside the frame;
-        // and the innermost of our functions (self)
-        const chain: N[] = [];
-        for (let j: number | undefined = id; j !== undefined; j = parent.get(j)) chain.push(nodes.get(j)!);
-        const ours = chain.filter((n) => n.callFrame.url.includes("index"));
-        const fi = ours.findIndex((n) => n.callFrame.functionName === "frame");
-        const stage = fi > 0 ? `frame>${ours[fi - 1].callFrame.functionName || "(anonymous)"}` : fi === 0 ? "frame" : ours.length ? `task ${ours[ours.length - 1].callFrame.functionName || "(anonymous)"}` : chain[0] ? `native ${chain[0].callFrame.functionName}` : "?";
-        const self = ours[0] ? ` / ${ours[0].callFrame.functionName || "(anonymous)"}` : "";
-        const k = stage + self;
-        here.set(k, (here.get(k) ?? 0) + 0.5);
-        total.set(stage, (total.get(stage) ?? 0) + 0.5);
-        const sk = ours[0] ? ours[0].callFrame.functionName || "(anonymous)" : `native ${chain[0]?.callFrame.functionName ?? "?"}`;
-        totalSelf.set(sk, (totalSelf.get(sk) ?? 0) + 0.5);
-      });
-      console.log(`  ${(b - a).toFixed(0)} ms: ${[...here].sort((x, y) => y[1] - x[1]).slice(0, 5).map(([k, v]) => `${k} ${v.toFixed(0)}`).join(", ")}`);
-    }
-    console.log(`in all long frames, innermost: ${[...totalSelf].sort((x, y) => y[1] - x[1]).slice(0, 14).map(([k, v]) => `${k} ${v.toFixed(0)} ms`).join(", ")}`);
-    console.log(`in all long frames: ${[...total].sort((x, y) => y[1] - x[1]).slice(0, 14).map(([k, v]) => `${k} ${v.toFixed(0)} ms`).join(", ")}`);
-  }
+  if (spikes) await reportSpikes(pageT0);
   await sleep(3000);
 }
 // (no screenshots: headless Chrome captures the WebGPU canvas blank; GPU errors show in the HUD

@@ -146,6 +146,7 @@ node scripts/bench-streaming.ts --back           # what a streaming step costs: 
 node scripts/test-release.ts                     # the world renderer drops meshes' CPU vertex data once uploaded; the caches reload what leaves the scene, and it streams in again
 node scripts/profile-browser.ts --at=2522,545 --dialogue=46319   # the same, Henry by the tailor's shop: plays the gossip there and prints its subtitles as Chrome shows them
 node scripts/profile-browser.ts --preset=potato --at=2524,546 --talk=rat_tailor --pick=3   # a conversation with the tailor in Chrome: subtitles, each menu, the options pressed
+node scripts/profile-browser.ts --headed --preset=potato --bench=this --spikes --size=1154x648   # the benchmark in a visible window with vsync, as a player runs it; --spikes lists the frames over 25 ms and what ran in them (SPIKES_OUT=FILE keeps the profile, TRACE_OUT=FILE a Chrome trace of the run; --spikes works headless too)
 node scripts/profile-browser.ts --trace          # the world view in headless Chrome on the real GPU (opens ~/kcd1 through the folder input): HUD fps, a CPU profile, and with --trace how busy Chrome's GPU process is
 node scripts/profile-browser.ts --preset=potato --bench=this --memory --snapshot=/tmp/p.heapsnapshot   # is the JS heap real: the page's heap, after a forced collection, V8's split, each Chrome process's footprint; a heap snapshot
 node --max-old-space-size=16000 scripts/heap-buffers.ts /tmp/p.heapsnapshot   # what retains the array buffers: bytes by retaining path
