@@ -281,7 +281,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   // textures shared by the object, grass, NPC and player renderers, sharper for what is near
   const pool = new TexturePool(device, vfs, { budget: q.textures.budgetMiB * 2 ** 20, maxDim: q.textures.maxDim });
   // (instance indices: the scene's matrices go up once per streaming step, see ModelRenderer.indexed)
-  const models = new ModelRenderer(device, format, passSetup.sampleCount, { ...passSetup, pool, instanceIndices: true });
+  // (the world's CPU vertex data is dropped once uploaded: trimWorldCaches below reloads what leaves)
+  const models = new ModelRenderer(device, format, passSetup.sampleCount, { ...passSetup, pool, instanceIndices: true, releaseVertexData: true });
   // grass and ground plants (merged-mesh sectors): a small scene of their own around the camera,
   // rebuilt every few metres, with sharper textures than other objects (thin blades in atlases)
   const grassR = new ModelRenderer(device, format, passSetup.sampleCount, { ...passSetup, pool });
@@ -551,8 +552,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         lodCounts = items.map(() => 0);
         scene = next;
         streamedAt = at;
-        // forget what the last two positions' scenes (two builds each) didn't use
-        trimWorldCaches(caches!, 4);
+        // forget what the last two positions' scenes (two builds each) didn't use, and the models
+        // whose released geometry the renderer just let go
+        trimWorldCaches(caches!, 4, (m) => models.holds(m));
         sceneInfo = `${next.models.length} models, ${next.instances.toLocaleString()} instances within ${STREAM_RADIUS} m${next.modelsSkipped ? ` (loading ${next.modelsSkipped} more…)` : ""}`;
         if (!next.modelsSkipped) { worldLoading = false; break; }
       }

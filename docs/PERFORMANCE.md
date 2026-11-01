@@ -293,9 +293,46 @@ CPU memory barely fell (the arrays stay reachable) while the kept geometry
 tripled (637 → 1,970 MiB in `bench-streaming.ts --back`), which on these
 machines is the same RAM.
 
-**Next for memory:** the world caches keep the models of the last four
-scene builds whole; the renderer only needs a mesh's CPU copy to upload it
-again. Henry's database (117 MiB) holds every clip of his.
+**Next for memory:** Henry's database (117 MiB) holds every clip of his.
+
+### World meshes' CPU copies dropped once uploaded (2026-10-31, M3 Pro)
+
+The world caches kept every model of the last four scene builds whole, CPU
+vertex data included, so a model could be uploaded again when it came back
+into range: 1.6 GiB of buffers on Potato after the benchmark (tangents 433,
+normals 337, positions 337, indices 272, UVs 222, colours 22). Now the
+world renderer drops a mesh's normals, tangents, UVs and colours once its
+geometry is on the GPU (`releaseVertexData` in `renderer.ts`). Positions
+and indices stay: collision builds its shapes from them when Henry comes
+near. A model whose geometry the renderer then lets go can't be uploaded
+again, so `trimWorldCaches` forgets it at once (`ModelRenderer.holds`), and
+it loads anew if it comes back. Models never uploaded keep the four-build
+rule. `test-release.ts` checks it.
+
+Unlike the attempt above, nothing stays on the GPU longer. It worked this
+time because the arrays are actually let go. Positions and indices that are
+views into a larger buffer (a compact-package entry) are copied out.
+
+**Memory after the in-app benchmark** (interleaved with main;
+`profile-browser.ts --bench=this --memory`):
+
+| Preset | | page heap after a forced collection | array buffers | world caches (typed arrays) | HUD "JS" after loading |
+|---|---|---|---|---|---|
+| Potato | before | 3,017 MiB | 2,518 MiB | 772 MiB | |
+| Potato | after | 2,310 MiB | 1,802 MiB | 396 MiB | |
+| Medium | before | 4,019 MiB | 3,449 MiB | 1,101 MiB | 2,910 MiB |
+| Medium | after | 2,893 MiB | 2,328 MiB | 594 MiB | 1,819 MiB |
+
+Frame rates are unchanged: Potato 259.6 → 263.7 fps (1% low 27.0 → 28.3),
+Medium 86.3 → 85.5 (10.1 → 9.6). The cost is reloading what comes back.
+In `bench-streaming.ts --preset potato --back`, two runs each, the cached
+models' meshes fall from 624–757 MiB to 282–389 MiB. On the walk back,
+scene builds take 0.26–0.48 s instead of 0.04 s; that work runs in the
+background, in the frame's work budget. Rebuilds, uploads and the frames
+after them are unchanged.
+
+What is left of the world caches is mostly positions (320 MiB) and indices
+(256 MiB) of the last four builds. Indices could be 16-bit for most meshes.
 
 ### Far trees culled by cell (2026-10-31, M3 Pro)
 

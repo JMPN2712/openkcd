@@ -22,11 +22,11 @@ waits for a research session.
      all kept (−818 MiB of buffers on Potato). Target from the user:
      Potato under 2 GiB for the tab, Medium under 3 GiB. Geometry stores halved (44-byte vertices, chunks grown from
      4 MiB: Potato GPU 2.6 → 1.3 GiB). Left: the world store's
-     fragmentation (holds up to twice what it uses); the CPU copies of
-     meshes in the world caches (765 MiB on Potato), kept for three
-     rebuilds so models can be uploaded again (dropping them needs the GPU
-     geometry kept as long, or reloading); the JS heap (5.1 GiB on Potato
-     in Chrome 143 here).
+     fragmentation (holds up to twice what it uses); the world caches'
+     positions and indices (CPU vertex data is now dropped once uploaded:
+     Potato's heap after the benchmark 3.0 → 2.3 GiB, Medium's 4.0 →
+     2.9 GiB). Still over the targets: Potato's tab is about 2.3 GiB of
+     heap plus 1.4 GiB on the GPU.
   2. Streaming stalls. One work budget per frame (`frameBudget.ts`): long
      frames in a flight 140 → 95, loading 13 → 11 s. Left: garbage
      collection, `selectLods` per frame, main-thread inflates, GPU uploads.
@@ -105,8 +105,9 @@ waits for a research session.
   items (occlusion, the new Medium) should cut it. Real CPU costs left:
   `selectLods` 12%, NPC animation 7%, behaviour trees 4–8%, crowd 4%,
   route searches 2%.
-- **World models' CPU copies** (1.5 GiB on Potato after a flight): see
-  PERFORMANCE.md "Is the JS heap real?" for what was tried.
+- **World caches' positions and indices** (about 580 MiB on Potato after
+  the benchmark, kept for collision and four builds): 16-bit indices would
+  halve the indices' share. Henry's animation database is 117 MiB.
 
 ## Clocks checked against the research notes (2026-10-31)
 

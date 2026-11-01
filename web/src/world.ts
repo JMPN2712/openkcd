@@ -112,18 +112,24 @@ export function newWorldCaches(): WorldCaches {
 /**
  * Forget models no scene used in the last `keep` builds, and textures no remaining model uses.
  * Without this a long walk keeps every model and texture it ever loaded (CPU memory grows with
- * the distance travelled; GPU copies are freed by ModelRenderer.setModels anyway).
+ * the distance travelled; GPU copies are freed by ModelRenderer.setModels anyway). Models whose
+ * vertex data was released (ModelRenderer releaseVertexData) are forgotten as soon as `resident`
+ * says the renderer no longer holds them: they can't be uploaded again, and load anew.
  */
-export function trimWorldCaches(caches: WorldCaches, keep = 3): { models: number } {
+export function trimWorldCaches(caches: WorldCaches, keep = 3, resident?: (m: LoadedModel) => boolean): { models: number } {
   const oldest = caches.generation - keep + 1;
   let models = 0;
   for (const key of [...caches.models.keys()]) {
-    if ((caches.usedAt.get(key) ?? -Infinity) >= oldest) continue;
+    const m = caches.loaded.get(key);
+    const stale = !!m && !!resident && !resident(m);
+    if (!stale && (caches.usedAt.get(key) ?? -Infinity) >= oldest) continue;
     caches.models.delete(key);
     caches.usedAt.delete(key);
     caches.loaded.delete(key);
     models++;
   }
+  const kept = new Set(caches.loaded.values());
+  for (const [key, part] of [...caches.parts]) if (!kept.has(part.from)) caches.parts.delete(key);
   const live = new Set<MipChain>();
   for (const m of caches.loaded.values()) if (m) for (const list of [m.diffuse, m.specular, m.normal]) for (const c of list ?? []) if (c) live.add(c);
   for (const [key, p] of [...caches.textures]) {

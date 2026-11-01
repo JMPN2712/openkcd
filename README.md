@@ -141,7 +141,8 @@ node scripts/triangles.ts --preset medium        # where a frame's triangles com
 CHROME_FLAGS=--use-webgpu-power-preference=force-low-power node scripts/profile-browser.ts --preset=potato --bench --query=gpu-mem   # the in-app benchmark (every preset) in headless Chrome on the integrated GPU; gpu-mem adds memory by holder (--heap: a sampled JS heap profile)
 node scripts/build-slim.ts OUT_DIR [--potato] [--store]   # the compact package (docs/SLIM.md), built from ~/kcd1 into OUT_DIR outside the repo; --store: with the file store (run with render-player --root OUT_DIR/store --slim OUT_DIR)
 node scripts/test-slim.ts PACKAGE_DIR            # the package's codec, and a sample of its models and textures against the paks
-node scripts/bench-streaming.ts --back           # what a streaming step costs: scene build, geometry upload (in slices), the renderer rebuild and the frame after, kept geometry memory
+node scripts/bench-streaming.ts --back           # what a streaming step costs: scene build, geometry upload (in slices), the renderer rebuild and the frame after, kept geometry memory, the cached models' CPU mesh data (--keep-vertex-data: without releasing it)
+node scripts/test-release.ts                     # the world renderer drops meshes' CPU vertex data once uploaded; the caches reload what leaves the scene, and it streams in again
 node scripts/profile-browser.ts --at=2522,545 --dialogue=46319   # the same, Henry by the tailor's shop: plays the gossip there and prints its subtitles as Chrome shows them
 node scripts/profile-browser.ts --preset=potato --at=2524,546 --talk=rat_tailor --pick=3   # a conversation with the tailor in Chrome: subtitles, each menu, the options pressed
 node scripts/profile-browser.ts --trace          # the world view in headless Chrome on the real GPU (opens ~/kcd1 through the folder input): HUD fps, a CPU profile, and with --trace how busy Chrome's GPU process is

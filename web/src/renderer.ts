@@ -336,6 +336,25 @@ function meshExtent(mesh: CgfMesh, tm: Float32Array): { min: Vec3; max: Vec3; ra
 /** meshExtent under the mesh's own transform (items without one of their own), once per mesh */
 const meshExtents = new WeakMap<CgfMesh, { min: Vec3; max: Vec3; radius: number }>();
 
+const NO_FLOATS = new Float32Array(0), NO_BYTES = new Uint8Array(0);
+/**
+ * Drop a mesh's CPU vertex data other than positions and indices (which collision reads), once it
+ * is on the GPU and its bounds and UV densities are known. The dropped streams become empty
+ * arrays, so draws still see which ones it had (tangents: normal maps; colours: %VERTCOLORS).
+ * Positions and indices that are views into a larger buffer (a compact-package entry) are
+ * copied out, or they would keep all of it.
+ */
+function releaseVertexData(mesh: CgfMesh): void {
+  if (mesh.released) return;
+  if (mesh.normals) mesh.normals = NO_FLOATS;
+  if (mesh.tangents) mesh.tangents = NO_FLOATS;
+  if (mesh.uvs) mesh.uvs = NO_FLOATS;
+  if (mesh.colors) mesh.colors = NO_BYTES;
+  if (mesh.positions.buffer.byteLength > mesh.positions.byteLength) mesh.positions = mesh.positions.slice();
+  if (mesh.indices.buffer.byteLength > mesh.indices.byteLength) mesh.indices = mesh.indices.slice();
+  mesh.released = true;
+}
+
 const uvDensities = new WeakMap<CgfMesh, Map<number, number>>();
 function cachedUvDensity(mesh: CgfMesh, first: number, count: number): number {
   const m = uvDensities.get(mesh) ?? uvDensities.set(mesh, new Map()).get(mesh)!;
@@ -553,8 +572,16 @@ export class ModelRenderer {
   private eye: Vec3 = [0, 0, 0];
   private requestFrame = 0;
 
-  constructor(device: GPUDevice, format: GPUTextureFormat, sampleCount = 4, opts: { reversedZ?: boolean; pool?: TexturePool; instanceIndices?: boolean } = {}) {
+  /** prepare() drops the CPU vertex data of what it uploads (releaseVertexData) */
+  private releaseUploaded: boolean;
+
+  /**
+   * releaseVertexData: prepare() drops the CPU copies of the vertex data it uploads (the world's
+   * models: their cache must then reload a model whose geometry this renderer no longer holds).
+   */
+  constructor(device: GPUDevice, format: GPUTextureFormat, sampleCount = 4, opts: { reversedZ?: boolean; pool?: TexturePool; instanceIndices?: boolean; releaseVertexData?: boolean } = {}) {
     this.pool = opts.pool ?? null;
+    this.releaseUploaded = !!opts.releaseVertexData;
     if (this.pool) this.unlisten = this.pool.onChange((changed) => this.texturesChanged(changed));
     this.device = device;
     this.format = format;
@@ -764,6 +791,11 @@ export class ModelRenderer {
     };
   }
 
+  /** Whether this renderer still holds the geometry of every mesh of a model whose vertex data was released. */
+  holds(model: LoadedModel): boolean {
+    return model.cgf.meshes.every((m) => !m.released || !!this.meshGeo.get(m)?.size);
+  }
+
   /**
    * Upload the geometry of items a coming setModels will draw, a few milliseconds at a time
    * (yielding to the frame loop in between), so that setModels finds it ready: a streaming step
@@ -797,6 +829,7 @@ export class ModelRenderer {
           });
           if (d) { this.keep(d); draws.push(d); }
         }
+        if (this.releaseUploaded) releaseVertexData(mesh);
       }
       // (gen: the current set's, so a setModels that leaves the model out gives them back)
       if (keep) this.modelDraws.set(model, { draws, gen: this.generation });
@@ -825,6 +858,7 @@ export class ModelRenderer {
 
   /** Room for a mesh's vertices and indices; the indices are written. */
   private allocMesh(mesh: CgfMesh): { v: Range; i: Range } {
+    if (mesh.released) throw new Error(`${mesh.nodeName}: vertex data released, the model must be loaded again`);
     const v = this.vertexStore.alloc((mesh.positions.length / 3) * VERTEX_BYTES);
     const i = this.indexStore.alloc(Math.ceil(mesh.indices.byteLength / 4) * 4);
     if (mesh.indices.byteLength) this.device.queue.writeBuffer(i.buf, i.at, mesh.indices);

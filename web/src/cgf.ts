@@ -81,6 +81,11 @@ export interface CgfMesh {
   bboxMax: [number, number, number];
   /** the mesh is physicalised itself: this many of its triangles (all, or some subsets') collide */
   physicsTriangles?: number;
+  /**
+   * Its normals, tangents, UVs and colours were dropped once on the GPU (releaseVertexData): only
+   * positions and indices are left (collision), and it can't be uploaded again.
+   */
+  released?: boolean;
 }
 
 export interface Cgf {

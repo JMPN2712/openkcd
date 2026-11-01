@@ -2,14 +2,14 @@
 // the world view's rebuild distance (0.3 × the preset's streaming radius) along a line; for each
 // step, the scene build (model loads and decoding), the world renderer's rebuild (setModels,
 // shadows, collision) and the first frame drawn after it (render bundles are recorded then).
-// usage: node scripts/bench-streaming.ts [--preset high] [--steps 4] [--heading DEG] [--root GAME_ROOT] [--slim PACKAGE_DIR]
+// usage: node scripts/bench-streaming.ts [--preset high] [--steps 4] [--heading DEG] [--back] [--keep-vertex-data] [--root GAME_ROOT] [--slim PACKAGE_DIR]
+//   --keep-vertex-data: keep the world meshes' CPU vertex data after upload (the view drops it)
 //   --slim: models from a compact package (scripts/build-slim.ts), the rest from the paks
 //   PROFILE=file: a CPU profile of each rebuild and the frame after it (not the scene builds) to file-N.cpuprofile
 
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
-import { create } from "webgpu";
 import { heightAt } from "../src/terrain.ts";
 import { TerrainRenderer } from "../src/terrainRenderer.ts";
 import { TexturePool } from "../src/texturePool.ts";
@@ -18,10 +18,10 @@ import { buildWorldScene, lodItems, newWorldCaches, sceneMatrices, selectLods, t
 import { CollisionWorld } from "../src/collision.ts";
 import { depthClear, depthFormat, type PassSetup } from "../src/mat4.ts";
 import { PRESETS, type PresetName } from "../src/quality.ts";
-import { setAssetPackage, setGpuBlockCompression } from "../src/model.ts";
+import { setAssetPackage } from "../src/model.ts";
 import { ShadowMap } from "../src/shadow.ts";
 import { ShadowCasters } from "../src/shadowPass.ts";
-import { nodeReadWorkers, nodeSlimFiles, openRataje } from "./lib.ts";
+import { gpuDevice, nodeReadWorkers, nodeSlimFiles, openRataje } from "./lib.ts";
 import { SlimPackage } from "../src/slim.ts";
 
 const args = process.argv.slice(2);
@@ -31,21 +31,19 @@ const q = PRESETS[opt("--preset", "high") as PresetName];
 const steps = Number(opt("--steps", "4"));
 // --back: walk back to the start after the steps (the kept geometry should not keep growing)
 const back = args.includes("--back") ? (args.splice(args.indexOf("--back"), 1), true) : false;
+const keepVertexData = args.includes("--keep-vertex-data") ? (args.splice(args.indexOf("--keep-vertex-data"), 1), true) : false;
 const heading = (Number(opt("--heading", "200")) * Math.PI) / 180;
 
 const lvl = await openRataje(root);
 lvl.vfs.workers = nodeReadWorkers(root);
-const gpu = create([]);
-const adapter = (await gpu.requestAdapter({ powerPreference: "high-performance" }))!;
-const device = await adapter.requestDevice({ requiredFeatures: (["texture-compression-bc", "indirect-first-instance"] as GPUFeatureName[]).filter((f) => adapter.features.has(f)) });
-setGpuBlockCompression(device.features.has("texture-compression-bc"));
-device.addEventListener("uncapturederror", (e) => console.log("GPU ERROR:", (e as GPUUncapturedErrorEvent).error.message));
+// (lib.ts keeps the Dawn instance alive: a collected one crashed this run a few steps in)
+const device = await gpuDevice();
 
 const format: GPUTextureFormat = "rgba8unorm";
 const pass: PassSetup = { sampleCount: q.msaa, reversedZ: true };
 const W = Math.round(1920 * q.renderScale), H = Math.round(1080 * q.renderScale);
 const pool = new TexturePool(device, lvl.vfs, { budget: q.textures.budgetMiB * 2 ** 20, maxDim: q.textures.maxDim });
-const models = new ModelRenderer(device, format, q.msaa, { ...pass, pool, instanceIndices: true });
+const models = new ModelRenderer(device, format, q.msaa, { ...pass, pool, instanceIndices: true, releaseVertexData: !keepVertexData });
 const shadowMap = q.shadows.cascades ? new ShadowMap(device, q.shadows.size, q.shadows.cascades, q.shadows.splits) : null;
 const casters = new ShadowCasters();
 const target = device.createTexture({ size: [W, H], format, usage: GPUTextureUsage.RENDER_ATTACHMENT });
@@ -89,7 +87,7 @@ for (const [k, s] of route.entries()) {
   lap("casters+collision");
   const lodOut = items.map((it) => (models.indexed ? new Uint32Array(it.capacity) : new Float32Array(it.capacity * 16)));
   const lodCounts = items.map(() => 0);
-  trimWorldCaches(caches, 4);
+  trimWorldCaches(caches, 4, (m) => models.holds(m));
   lap("trim");
   const rebuild = performance.now() - t;
   if (k === 0) console.log(`world geometry: ${(models.stats.vertices * 44 / 2 ** 20).toFixed(0)} MiB of vertices, ${models.stats.meshes} meshes, ${models.stats.draws} draws`);
@@ -129,6 +127,11 @@ for (const [k, s] of route.entries()) {
     const st = caches.slim.stats;
     parts.push(`slim: ${st.chunkReads} chunks ${(st.chunkBytes / 2 ** 20).toFixed(0)} MiB, ${st.singleReads} single (${st.singleModels} models) ${(st.singleBytes / 2 ** 20).toFixed(0)} MiB, ${st.packReads} pack ${(st.packBytes / 2 ** 20).toFixed(0)} MiB (so far); prefetch ${st.prefetchMs.toFixed(0)} ms, inflate ${st.inflateMs.toFixed(0)}, decode ${st.decodeMs.toFixed(0)}`);
   }
+  // the cached models' CPU mesh data (each buffer once)
+  const buffers = new Set<ArrayBufferLike>();
+  for (const m of caches.loaded.values()) for (const x of m?.cgf.meshes ?? []) for (const a of [x.positions, x.normals, x.tangents, x.uvs, x.colors, x.indices]) if (a) buffers.add(a.buffer);
+  const cpu = [...buffers].reduce((t, b) => t + b.byteLength, 0);
+  parts.push(`${caches.loaded.size} cached models, their meshes ${(cpu / 2 ** 20).toFixed(0)} MiB`);
   parts.push(`rss ${(process.memoryUsage().rss / 2 ** 30).toFixed(1)} GiB`);
   const g = models.geometryBytes();
   console.log(`     rebuild: ${parts.join(", ")} ms; geometry ${(g.used / 2 ** 20).toFixed(0)} of ${(g.held / 2 ** 20).toFixed(0)} MiB held`);
