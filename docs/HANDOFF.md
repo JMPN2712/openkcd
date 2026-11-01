@@ -136,6 +136,15 @@ waits for a research session.
   `TRACE_OUT`) and a line for the GPU's slowest 1% of frames in the
   report; the 1% low findings in PERFORMANCE.md. Landed as 1d42c3e (the
   PR was closed, not marked merged: main had moved).
+- #34 (2026-11-01): dialogue fixes from play in Rataje. The dialogue
+  camera runs in every conversation and frames each speaker, Henry too,
+  over the listener's shoulder (`ShotPlanner`: camera cuts and camera
+  modes from the data, our rule otherwise); Henry turns to the NPC, the
+  NPC stands and faces him; Backspace/Esc picks "(End dialog)" or
+  "(Back)", the mouse and a click pick replies, a failing step ends the
+  conversation. Tests: `test-dialogue-camera.ts`, new
+  `test-dialogue-browser.ts`. Facial animation and lip sync wait for a
+  research note (questions above).
 
 ## Findings not yet acted on
 
