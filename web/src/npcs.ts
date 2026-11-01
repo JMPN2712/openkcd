@@ -210,6 +210,8 @@ export class NpcWorld {
   readonly running = new Map<number, string>();
   /** actual movement with collision avoidance, per NPC id (stepCrowd) */
   private movers = new Map<number, Mover>();
+  /** NPCs held in place, facing a point (the one Henry talks to faces him) */
+  readonly held = new Map<number, Vec3>();
   /** NPCs' planned spots moved off one another (key: planned spot), see stepCrowd */
   private freeSpots = new Map<string, Vec3>();
 
@@ -338,7 +340,10 @@ export class NpcWorld {
       const speed = WALK_SPEED[n.entity.female ? "female" : "male"];
       const dx = goal[0] - a.pos[0], dy = goal[1] - a.pos[1], dist = Math.hypot(dx, dy);
       a.maxSpeed = speed * 1.3;
-      if (ref.pose === "walk") {
+      if (this.held.has(n.entity.id)) {
+        a.pref = [0, 0];
+        a.avoids = false;
+      } else if (ref.pose === "walk") {
         // follow the moving plan, catching up when behind (0.3 m lag at walking speed)
         const v = dist > 1e-3 ? Math.min(a.maxSpeed, speed + 0.5 * (dist - 0.3)) : 0;
         a.pref = dist > 1e-3 ? [(dx / dist) * Math.max(0, v), (dy / dist) * Math.max(0, v)] : [0, 0];
@@ -370,11 +375,12 @@ export class NpcWorld {
       const a = m.agent;
       const moving = Math.hypot(a.vel[0], a.vel[1]) > 0.15;
       // turn towards the walking direction (up to 2 turns a second), else the planned facing
-      const want = moving ? Math.atan2(a.vel[1], a.vel[0]) - Math.PI / 2 : yawOf(m.ref.rot);
+      const face = this.held.get(n.entity.id);
+      const want = face ? Math.atan2(face[1] - a.pos[1], face[0] - a.pos[0]) - Math.PI / 2 : moving ? Math.atan2(a.vel[1], a.vel[0]) - Math.PI / 2 : yawOf(m.ref.rot);
       const d = ((want - m.yaw + 3 * Math.PI) % (2 * Math.PI)) - Math.PI;
       m.yaw += Math.sign(d) * Math.min(Math.abs(d), 4 * Math.PI * dt);
       const settled = !moving && Math.hypot(a.pref[0], a.pref[1]) === 0;
-      const pose: Pose = moving ? "walk" : settled && m.ref.pose !== "walk" ? m.ref.pose : "stand";
+      const pose: Pose = moving ? "walk" : settled && !face && m.ref.pose !== "walk" ? m.ref.pose : "stand";
       m.shown = { ...m.ref, pos: [...a.pos], rot: [Math.cos(m.yaw / 2), 0, 0, Math.sin(m.yaw / 2)], pose };
     });
   }

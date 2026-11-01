@@ -438,7 +438,15 @@ From `Scripts/Entities/actor/BasicActor.lua` (`BasicActorParams`),
   (`_lleg`/`_rleg`). Starts: the TurnAngle ranges decide (a straight start
   falls in the right-foot space). Stops: OpenKCD matches the current pose.
 - **Not done yet:**
-  - facial animation;
+  - facial animation. The data: one database per voice folder and voice,
+    `animations/humans/facials/<folder>_<voice>.dba` (2,661), holding a
+    clip per recorded line named like its voice file
+    (`<folder>/<voice>_<line>.caf`, 30 fps, as long as the line). Each
+    clip animates the 60 `*_blendWeightVertex` bones (rotations; 4 also
+    move). Head skins are skinned to `Head`/`Neck`, not to those bones,
+    and carry morph targets (CompiledMorphTargets, about 0.9 MB in
+    `bernard.skin`), so the bones drive morph weights. How a bone's value
+    becomes a weight, and the morph format, wait for a research note;
   - cloth and pendulum attachments;
   - animation events (footstep sounds come later, with audio).
 

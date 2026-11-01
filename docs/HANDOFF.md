@@ -59,6 +59,37 @@ waits for a research session.
   milliseconds, the parser's base unit (marked ASSUMPTION in
   `duration.ts`). Is that right? And when a Wait's duration comes from a
   variable holding a number, which unit applies?
+- **Dialogue camera** (dialogue.md; `dialogueCamera.ts`, `ShotPlanner`):
+  1. The camera-cut command (`v_dialogue_commands` type 2) and a
+     response's `camera_mode`: which shot is each camera type 1–4? We read
+     1 `master`, 2 `medium`, 3 `close_shot`, 4 `close_up`. Is the cut's
+     `who` the role framed or the role the rig sits on?
+  2. How does the game cut on the ~84,600 lines that name no shot (which
+     shot per line, on whom, when it changes)? We frame each speaker over
+     the listener's shoulder with our own rule (medium, close shot on a
+     change of speaker, close-up when one goes on).
+  3. Type-5 cuts name a camera placed in the level (`char_param`, e.g.
+     `cam_dlc14_judge_henry1`): which entity holds it, and how is it
+     found? And what does `topic.custom_camera` do?
+  4. The lens (field of view) of dialogue shots, and when the mood clips
+     (`ad_cam_base_stand_calm_add`, …) are added.
+- **Facial animation and lip sync:** each recorded line has a facial clip
+  of the same name (`animations/humans/facials/<folder>_<voice>.dba`)
+  animating 60 `*_blendWeightVertex` bones; head skins carry morph targets
+  (`CompiledMorphTargets`, chunk 0x2002) and aren't skinned to those bones.
+  Needed: the morph-target chunk's layout, how a bone's rotation (or
+  position) becomes a morph weight, which bone drives which morph, and the
+  playback rules (start with the voice line? blend in and out? what the
+  face does between lines and for lines without a clip; eye blinks and
+  the `ADLG_*` mood animations). See ANIMATION.md, "Not done yet".
+- **Leaving a conversation:** besides "(End dialog)", flags 1 and 8 and
+  "(Back)", can the player leave by a key mid-line or at a follow-up menu
+  (Esc, walking away)? We allow Backspace/Esc only for those options.
+- **Soul tags in conditions:** `HasSoulTag(...)` reads 0, so the townsfolk
+  answers gated by `soulNumber_<n>_of_3` (e.g. topic 26691 after "What
+  kind of governor is Sir Hanush?") never play and the talk falls through
+  to the farewell. Where does a soul's tag set come from (a table, or
+  assigned at spawn)?
 - Open ones from before are listed in ROADMAP section 4 ("Research note
   needed").
 

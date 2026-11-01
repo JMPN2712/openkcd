@@ -146,16 +146,18 @@ Click the view to capture the mouse; Esc releases it.
 | V | first / third person |
 | Mouse wheel | third-person camera distance (1–8 m) |
 | E | talk to the person you face ("Talk to …" when they have something to say); open or close the door or chest you face (a prompt below the middle of the view says when one is in reach; locked ones stay shut); an open chest lists what it holds; on a bed, sleep until 7:00 |
-| 1–9, ↑ ↓, Enter | in a conversation: pick a reply (a timed reply takes the highlighted one when its bar runs out); Space skips the line being said |
+| 1–9, ↑ ↓ or the mouse, Enter or click | in a conversation: pick a reply (a timed reply takes the highlighted one when its bar runs out); Space skips the line being said |
+| Backspace or Esc | in a conversation, at its first menu: end it ("(End dialog)"; the NPC says goodbye); at a later menu: "(Back)" if it has one. Mid-line and at menus without either, pick a reply, as in the game |
 | F | free-fly camera (debugging): drag to look, W A S D to move, Space/E up, C/Q down, Shift faster |
 | T | in free-fly: put Henry under the camera |
 
 **Debugging extras.** *▶ Dialogue* in the bar under the view plays a
 dialogue sequence by its id with the NPCs near Henry as its cast (voices
 and subtitles; 46319 is a gossip the tailor and his neighbour can play, by
-the tailor's shop at 10:00). *Camera: …* next to it puts the view on one
-of the dialogue camera's shots while a dialogue plays, framing the NPC who
-spoke last (which shot the game uses per line isn't known yet). Adding `?at=x,y` (and optionally `,yaw°`) to
+the tailor's shop at 10:00); an NPC's name there (`rat_tailor`) starts a
+conversation with them, stepping Henry up to them. *Camera: …* next to it
+forces one of the dialogue camera's shots (or the normal camera) instead of
+the shot each line picks. Adding `?at=x,y` (and optionally `,yaw°`) to
 the address starts Henry there, e.g. `?at=2522,545` by the tailor's shop.
 
 ## Known issues
@@ -164,8 +166,9 @@ the address starts Henry there, e.g. `?at=2522,545` by the tailor's shop.
   their daily routines but don't react to Henry on their own. You can talk
   to them (greetings, replies, farewells, in their recorded voices), but
   what trade, repairs and training open isn't there yet, haggling shows a
-  placeholder, quest topics stay hidden (no quests are started), and the
-  dialogue camera keeps one shot.
+  placeholder, quest topics stay hidden (no quests are started), faces
+  don't move (no facial animation or lip sync yet), and the camera's cuts
+  follow our own rule where the game data doesn't name a shot.
 - **Doors:** Henry opens and closes them (E) without his hand animation;
   locked doors can't be opened yet (no keys or lockpicking); NPCs walk
   through closed doors; no door sounds.

@@ -10,8 +10,8 @@
 // ad_cam_base_y<height cm>_z<distance cm>_x<angle °>, on a 5 × 3 × 3 grid of parameters (x −180…180°
 // counter-clockwise from the character's facing, z 80/140/250 cm, y −45/0/45 cm higher). A partner
 // between the grid's points blends its eight corners (trilinear, piecewise linear in each label);
-// outside it is clamped to the edge. Which shot a line uses, the mood clips added on top
-// (ad_cam_base_stand_calm_add, …) and the lens are left to a research note.
+// outside it is clamped to the edge. ShotPlanner below picks a shot per spoken line. The mood
+// clips added on top (ad_cam_base_stand_calm_add, …) and the lens are left to a research note.
 
 import { Dba } from "./dba.ts";
 import { Animator, type BlendLayer } from "./pose.ts";
@@ -159,4 +159,90 @@ export class DialogueCameraRig {
     for (const k of SHOTS) out[k] = { eye: toWorld(local[k].eye), target: toWorld(local[k].target) };
     return out;
   }
+}
+
+/**
+ * Camera types of the camera-cut command (v_dialogue_commands type 2, int_param) and of a response's
+ * camera_mode. ASSUMPTION (a question for a research session): 1–4 are the rig's shots in the
+ * order master, medium, close_shot, close_up; 5 is a camera placed in the level, named by
+ * char_param (2,998 of the 3,001 type-5 cuts name one; quest scenes). The cut's `who` is the role
+ * it frames.
+ */
+export const CAMERA_TYPES: Record<number, Shot> = { 1: "master", 2: "medium", 3: "close_shot", 4: "close_up" };
+
+/** Whom the dialogue camera shows and how: the rig sits on the listener, looking at the speaker. */
+export interface Framing {
+  /** participant index of the one framed (the speaker) and of the one the rig is on */
+  speaker: number;
+  listener: number;
+  shot: Shot;
+  /** where the shot came from: "cut" (a camera command), "line" (its camera_mode) or "auto" */
+  from: "cut" | "line" | "auto";
+}
+
+/**
+ * Picks a shot for each spoken line of a conversation between two participants. The data's own
+ * choices win: a camera-cut command before the line, else the line's camera_mode (non-zero on 32
+ * of 84,632 lines). Every other line follows our rule (the game's default cutting isn't in the
+ * data): each line frames its speaker over the listener's shoulder; the first line is a medium
+ * shot, a change of speaker cuts to a close shot, and a speaker who goes on pushes in to a
+ * close-up. The menu frames the NPC (medium) while the player chooses.
+ */
+export class ShotPlanner {
+  framing: Framing | null = null;
+  private pending: { shot: Shot; who: number | null } | null = null;
+  private run = 0;
+
+  /** A camera-cut command; `who` is the participant its role maps to (null: the next speaker). */
+  cut(cameraType: number | undefined, who: number | null): void {
+    const shot = cameraType !== undefined ? CAMERA_TYPES[cameraType] : undefined;
+    if (shot) this.pending = { shot, who };
+  }
+
+  /** A line starts: `speaker` says it to `listener` (participant indices). */
+  say(speaker: number, listener: number, cameraMode = 0): Framing {
+    const prev = this.framing;
+    const same = prev?.speaker === speaker && prev.from !== "cut";
+    this.run = same ? this.run + 1 : 0;
+    let f: Framing;
+    if (this.pending) {
+      const who = this.pending.who ?? speaker;
+      f = { speaker: who, listener: who === speaker ? listener : speaker, shot: this.pending.shot, from: "cut" };
+      this.pending = null;
+    } else if (CAMERA_TYPES[cameraMode]) {
+      f = { speaker, listener, shot: CAMERA_TYPES[cameraMode], from: "line" };
+    } else {
+      const shot: Shot = !prev ? "medium" : this.run === 0 ? "close_shot" : "close_up";
+      f = { speaker, listener, shot, from: "auto" };
+    }
+    return (this.framing = f);
+  }
+
+  /** The player's menu is up: the NPC, over the player's shoulder. */
+  menu(player: number, npc: number): Framing {
+    this.run = 0;
+    return (this.framing = { speaker: npc, listener: player, shot: "medium", from: "auto" });
+  }
+
+  reset(): void {
+    this.framing = null;
+    this.pending = null;
+    this.run = 0;
+  }
+}
+
+/** A character in a conversation: feet, facing (radians, 0 = +X). */
+export interface Stand {
+  feet: Vec3;
+  yaw: number;
+}
+
+/**
+ * The camera for a framing: the rig on the listener, aimed at the speaker. Returns the eye and the
+ * point it looks at (world space).
+ */
+export function frame(rig: DialogueCameraRig, f: Framing, at: (participant: number) => Stand | undefined): ShotPose | null {
+  const listener = at(f.listener), speaker = at(f.speaker);
+  if (!listener || !speaker) return null;
+  return rig.place(listener.feet, listener.yaw, speaker.feet)[f.shot];
 }

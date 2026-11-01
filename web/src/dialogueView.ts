@@ -2,11 +2,12 @@
 // research note dialogue.md): the greeting, the topic menu in the game's order (number keys, arrows
 // and Enter, or a click; timed choices count down and take the highlighted option), follow-ups,
 // "end topic" and the farewell bark. Each sequence plays in its speakers' recorded voices (Web
-// Audio) with subtitles over the view. Haggling's price panel is a placeholder. A sequence can
-// still be played by id from the debug control.
+// Audio) with subtitles over the view, and the dialogue camera's shot for each line
+// (dialogueCamera.ts: ShotPlanner). Haggling's price panel is a placeholder. A sequence can still
+// be played by id from the debug control.
 
 import { LINE_RESPONSE, ROLE_HENRY, DialogueDb, type Sequence } from "./dialogue.ts";
-import { Conversation, DialogueState, luaScripts, neutralWorld, participant, type FlowHost, type MenuOption, type Step } from "./dialogueFlow.ts";
+import { Conversation, DialogueState, luaScripts, neutralWorld, participant, TYPE_BACK, type FlowHost, type MenuOption, type Step } from "./dialogueFlow.ts";
 import { castFor, DialoguePlayer, prepareSequence, type Actor, type SayEvent } from "./dialoguePlayer.ts";
 import { Localization } from "./localization.ts";
 import type { LuaHost } from "./luaHost.ts";
@@ -16,6 +17,7 @@ import type { Vfs } from "./vfs.ts";
 import { VoiceBank } from "./voice.ts";
 import { QuestDb, QuestSystem } from "./quests.ts";
 import { DietMode } from "./diet.ts";
+import { ShotPlanner, type Framing } from "./dialogueCamera.ts";
 
 interface Loaded {
   db: DialogueDb;
@@ -71,6 +73,11 @@ export class DialogueHost {
   private timer: { left: number; total: number; bar: HTMLElement } | null = null;
   private haggling = false;
   private somethingToSay = new Map<number, { at: number; yes: boolean }>();
+  /** role → participant index for the sequence playing */
+  private roleOf = new Map<number, number>();
+  private shots = new ShotPlanner();
+  /** mouse movement towards the next highlight step (the menu follows the mouse, as the game's does) */
+  private mouseY = 0;
 
   constructor(vfs: Vfs, paks: PakSource[]) {
     this.vfs = vfs;
@@ -93,8 +100,23 @@ export class DialogueHost {
     return this.conv ? this.with : null;
   }
 
-  /** The NPC (soul) who spoke last in the playing sequence: whom the dialogue camera frames. */
+  /** The NPC (soul) who spoke last in the playing sequence: whom the debug camera frames. */
   partner: string | null = null;
+
+  /** In a conversation: the dialogue camera's shot (who speaks, who listens, which shot). */
+  get framing(): Framing | null {
+    return this.conv ? this.shots.framing : null;
+  }
+
+  /** Whether participant `i` of the conversation is the player (else it's the NPC talked to). */
+  isPlayer(i: number): boolean {
+    return !!this.conv?.participants[i]?.player;
+  }
+
+  /** The player's menu is up. */
+  get menuOpen(): boolean {
+    return this.options.length > 0;
+  }
 
   private load(): Promise<Loaded> {
     return (this.loaded ??= (async () => {
@@ -165,9 +187,24 @@ export class DialogueHost {
     void this.audio.resume();
     const l = await this.load();
     this.with = npc;
+    this.shots.reset();
     this.conv = new Conversation(l.db, this.state, this.people(l, npc), this.flowHost(l));
     this.somethingToSay.delete(npc.entity);
-    await this.run(this.conv.start());
+    await this.go(() => this.conv!.start());
+  }
+
+  /**
+   * Take the conversation's next step and carry it out. A failure (a script, a missing file) ends
+   * the conversation instead of leaving the player stuck in it.
+   */
+  private async go(next: () => Step): Promise<void> {
+    const conv = this.conv;
+    try {
+      await this.run(next());
+    } catch (err) {
+      console.warn("dialogue:", err);
+      if (this.conv === conv) this.endConversation(`ended (${(err as Error).message})`);
+    }
   }
 
   /** The actor of participant `i` (Henry speaks in the player's voice). */
@@ -180,12 +217,13 @@ export class DialogueHost {
   private castOf(l: Loaded, seq: Sequence, cast: Map<number, number>): Map<number, Actor> {
     const out = new Map<number, Actor>();
     const conv = this.conv!;
+    this.roleOf = new Map(cast);
     for (const line of seq.lines) {
       if (line.type !== LINE_RESPONSE || line.role === undefined || out.has(line.role)) continue;
       let i = cast.get(line.role);
       if (i === undefined) i = conv.participants.findIndex((p) => p.roles.has(line.role!));
       if (i < 0) i = l.db.role(line.role)?.metarole === 1 || line.role === ROLE_HENRY ? conv.participants.findIndex((p) => p.player) : conv.participants.findIndex((p) => !p.player);
-      if (i >= 0) out.set(line.role, this.actor(l, i));
+      if (i >= 0) { out.set(line.role, this.actor(l, i)); this.roleOf.set(line.role, i); }
     }
     return out;
   }
@@ -199,11 +237,14 @@ export class DialogueHost {
     switch (s.kind) {
       case "play":
         await this.playTimeline(l, s.candidate.sequence, this.castOf(l, s.candidate.sequence, s.cast));
-        this.afterLine = () => { if (this.conv === conv) void this.run(conv.played()); };
+        this.afterLine = () => { if (this.conv === conv) void this.go(() => conv.played()); };
         return;
-      case "menu":
+      case "menu": {
+        const henry = conv.participants.findIndex((p) => p.player);
+        this.shots.menu(henry, conv.participants.findIndex((_, i) => i !== henry));
         this.showMenu(l, s.options, s.timeLimit);
         return;
+      }
       case "haggle":
         // the price input panel isn't built yet: say so, and go on when dismissed
         this.haggling = true;
@@ -212,6 +253,7 @@ export class DialogueHost {
         return;
       case "bark": {
         const one: Sequence = { ...s.sequence, lines: [s.line] };
+        this.roleOf = new Map([[s.line.role!, s.participant]]);
         await this.playTimeline(l, one, new Map([[s.line.role!, this.actor(l, s.participant)]]));
         this.afterLine = () => { if (this.conv === conv) this.endConversation("said goodbye"); };
         return;
@@ -226,6 +268,7 @@ export class DialogueHost {
     this.conv = null;
     this.with = null;
     this.partner = null;
+    this.shots.reset();
     this.hideMenu();
   }
 
@@ -271,21 +314,57 @@ export class DialogueHost {
   private pick(i: number): void {
     const conv = this.conv;
     if (!conv || !this.options[i]) return;
-    void this.run(conv.choose(this.options[i].index));
+    const index = this.options[i].index;
+    void this.go(() => conv.choose(index));
+  }
+
+  /**
+   * Leave the conversation the way the game allows (dialogue.md): at the top-level menu, its
+   * "end topic" option (the farewell follows); at a follow-up menu, its Back choice if it has one.
+   * Mid-line and at menus without either, nothing: the conversation goes on to one of those.
+   * Returns whether it did anything.
+   */
+  leave(): boolean {
+    let i = this.options.findIndex((o) => o.label === "ui_end_topic" && !o.candidate);
+    if (i < 0) i = this.options.findIndex((o) => o.candidate?.sequence.type === TYPE_BACK);
+    if (i < 0) return false;
+    this.pick(i);
+    return true;
+  }
+
+  /** Mouse movement (pointer locked): the highlight follows it up and down. */
+  look(dy: number): void {
+    if (!this.options.length) { this.mouseY = 0; return; }
+    this.mouseY += dy;
+    const step = 40;
+    while (Math.abs(this.mouseY) >= step) {
+      const d = Math.sign(this.mouseY);
+      this.mark(this.highlight + d);
+      this.mouseY -= d * step;
+    }
+  }
+
+  /** A click on the view (pointer locked): picks the highlighted option. */
+  click(): boolean {
+    if (!this.options.length) return false;
+    this.pick(this.highlight);
+    return true;
   }
 
   /**
    * Keys during a conversation: 1–9 pick, arrows move the highlight, Enter picks it (or closes the
-   * price panel), Space skips the line being said. Returns whether the key was used.
+   * price panel), Space skips the line being said, Esc or Backspace leaves (see leave()). Returns
+   * whether the key was used.
    */
   key(e: KeyboardEvent): boolean {
     if (!this.conv && !this.player) return false;
     if (this.haggling && (e.code === "Enter" || e.code === "Space")) {
       const conv = this.conv;
       this.hideMenu();
-      if (conv) void this.run(conv.played());
+      if (conv) void this.go(() => conv.played());
       return true;
     }
+    if ((e.code === "Escape" || e.code === "Backspace") && this.conv) { this.leave(); return true; }
     if (this.options.length) {
       const n = /^Digit([1-9])$/.exec(e.code)?.[1] ?? /^Numpad([1-9])$/.exec(e.code)?.[1];
       if (n && Number(n) <= this.options.length) { this.pick(Number(n) - 1); return true; }
@@ -339,6 +418,7 @@ export class DialogueHost {
     this.afterLine = null;
     this.conv = null;
     this.with = null;
+    this.shots.reset();
     this.hideMenu();
   }
 
@@ -356,8 +436,14 @@ export class DialogueHost {
     const p = this.player;
     if (!p) return;
     for (const e of p.advance(dt)) {
+      if (e.kind === "command" && e.command.type === 2) this.shots.cut(e.command.int, e.command.who ? this.roleOf.get(e.command.who) ?? null : null);
       if (e.kind !== "say") continue;
       if (e.actor?.soul) this.partner = e.actor.soul;
+      const conv = this.conv;
+      if (conv) {
+        const speaker = this.roleOf.get(e.role) ?? conv.participants.findIndex((q) => (e.actor?.soul ? !q.player : q.player));
+        if (speaker >= 0) this.shots.say(speaker, conv.participants.findIndex((_, i) => i !== speaker), e.line.camera ?? 0);
+      }
       this.playing?.stop();
       this.playing = null;
       const b = this.buffers.get(e);

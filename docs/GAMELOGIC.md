@@ -417,9 +417,21 @@ attempt.
     trade is gone; topic 6807 shows priorities 0, 1, 2 with a 10 s limit.
     In headless Chrome (`profile-browser.ts --talk=rat_tailor --pick=3`)
     the same conversation plays with his recorded voice.
-- **Waiting on research notes:** which camera shot a line uses (and when it
-  cuts); the price panel's details; what shops, bribes and trainers do
-  after their sequences.
+  - **Leaving** (the note's exits): "(End dialog)" at the top-level menu
+    goes to the farewell; flags 1 and 8 end the conversation after their
+    sequence; Backspace or Esc chooses "(End dialog)", or "(Back)" at a
+    follow-up menu that has one. A follow-up menu without either must be
+    answered, and lines can't be cut short except by skipping them
+    (Space). A step that fails (a script error) ends the conversation, so
+    the player is never left in it. `scripts/test-dialogue-browser.ts`
+    checks leaving, trade ending it, and that Henry walks afterwards.
+  - **Staging:** Henry turns to the NPC (two turns a second) and the NPC
+    stops, stands and faces him (`NpcWorld.held`). The mouse moves the
+    menu's highlight and a click picks it, instead of turning Henry.
+- **Waiting on research notes:** the camera's own cutting (see below); the
+  price panel's details; what shops, bribes and trainers do after their
+  sequences; facial animation and lip sync (HANDOFF, "Questions for a
+  research session").
 - **The dialogue camera rig (`web/src/dialogueCamera.ts`).** This part is
   in the data.
   - `dialog_cameras.chr` is a skeleton of camera bones: `master`,
@@ -442,10 +454,28 @@ attempt.
   - **Left out:** the mood and posture clips added on top
     (`ad_cam_base_stand_calm_add`, `…_bench_…`, `…_table_…`) and the
     lens. The view keeps its own field of view.
-  - **In the view:** a debug picker (*Camera: …*) puts the camera on one
-    shot while a dialogue plays. The rig sits on Henry and frames the NPC
-    who spoke last; Henry switches to third person meanwhile so his head
-    shows. `scripts/test-dialogue-camera.ts` checks the rig.
+  - **Shots per line (`ShotPlanner`).** Each spoken line frames its
+    speaker, Henry included: the rig sits on the listener and looks at
+    the speaker (over the listener's shoulder). The data's own choices
+    win: a camera-cut command (`v_dialogue_commands` type 2) before the
+    line, else the line's `camera_mode` (non-zero on 32 of 84,632
+    lines). Camera types 1–4 are read as `master`, `medium`,
+    `close_shot`, `close_up` (ASSUMPTION), and the cut's `who` as the role
+    it frames (ASSUMPTION); type 5 names a camera placed in the level
+    (2,998 of 3,001 type-5 cuts, quest scenes) and isn't placed yet.
+    Every other line follows our rule, since the game's default cutting
+    isn't in the data: the first line is a medium shot, a change of
+    speaker cuts to a close shot, a speaker who goes on pushes in to a
+    close-up; the menu shows the NPC over Henry's shoulder.
+    `kcd_dialog_cameras.adb` only picks the base blendspace (plus an
+    additive clip when sitting) for its fragments; it names no shot.
+  - **In the view:** in a conversation the camera follows the planned
+    shots; Henry switches to third person meanwhile so his head shows.
+    The HUD names the shot and who it frames. A debug picker
+    (*Camera: …*) forces one shot or the normal camera; for a sequence
+    played by id, the rig sits on Henry and frames the NPC who spoke
+    last. `scripts/test-dialogue-camera.ts` checks the rig and the
+    planner.
     `render-player.ts --at-npc rat_tailor --npc-dist 1.4 --dialogue-shot
     close_up` renders a shot with Henry facing the tailor.
 

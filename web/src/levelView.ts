@@ -36,7 +36,7 @@ import { Doors, type Door } from "./doors.ts";
 import { Chests, type Chest } from "./chests.ts";
 import { Localization } from "./localization.ts";
 import { DialogueHost } from "./dialogueView.ts";
-import { DialogueCameraRig, SHOTS, type Shot } from "./dialogueCamera.ts";
+import { DialogueCameraRig, frame as frameShot, SHOTS, type Shot, type Stand } from "./dialogueCamera.ts";
 import { Beds, sleepMinutes, WAKE_MINUTE, type Bed } from "./beds.ts";
 import { depthClear, depthFormat, type PassSetup } from "./mat4.ts";
 import type { TimeOfDay } from "./tod.ts";
@@ -207,19 +207,25 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   dlgId.title = "Dialogue sequence id, or an NPC's name to talk to (debug)";
   const dlgBtn = el("button", undefined, "▶ Dialogue");
   dlgBtn.type = "button";
-  // debug: the dialogue camera's shot while a dialogue plays (which shot a line uses waits for a
-  // research note): the rig on Henry, framing the NPC who spoke last
+  // the dialogue camera: in a conversation each line's shot (dialogueCamera.ts, ShotPlanner) frames
+  // its speaker; debug: force one shot, or turn it off. A sequence played by id puts the rig on
+  // Henry, framing the NPC who spoke last, with the chosen shot.
   const shotSel = el("select", "level-dialogue-shot");
   shotSel.title = "Dialogue camera shot (debug)";
-  for (const s of ["off", ...SHOTS]) shotSel.append(new Option(s === "off" ? "Camera: normal" : `Camera: ${s}`, s));
+  for (const s of ["auto", "off", ...SHOTS]) shotSel.append(new Option(s === "auto" ? "Camera: dialogue" : s === "off" ? "Camera: normal" : `Camera: ${s}`, s));
   clockBar.append(dlgId, dlgBtn, shotSel);
   let cameraRig: Promise<DialogueCameraRig | null> | null = null;
   let rig: DialogueCameraRig | null = null;
-  /** Henry's view before the dialogue camera took over (it shows his head, so third person meanwhile) */
-  let viewBeforeShot: "first" | "third" | null = null;
-  shotSel.addEventListener("change", () => {
+  const loadRig = () => {
     cameraRig ??= DialogueCameraRig.load(vfs).catch((err) => { console.warn("dialogue camera:", err); return null; });
     void cameraRig.then((r) => { rig = r; });
+  };
+  /** Henry's view before the dialogue camera took over (it shows his head, so third person meanwhile) */
+  let viewBeforeShot: "first" | "third" | null = null;
+  /** what the dialogue camera shows, for the HUD (and the headless tests) */
+  let cameraInfo = "";
+  shotSel.addEventListener("change", () => {
+    loadRig();
     canvas.focus();
   });
   // an open chest's contents
@@ -437,8 +443,17 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const who = dlgId.value.trim();
     if (!/^\d+$/.test(who)) {
       const n = npcs.find((x) => x.entity.name === who);
-      if (!n) dialogueInfo = `Dialogue: ${who} isn't near`;
-      else void dialogue.talk({ soul: n.soul, name: n.entity.name, entity: n.entity.id }).then(() => { dialogueInfo = `Talking to ${who}`; }).catch((err) => { dialogueInfo = `Dialogue: ${(err as Error).message}`; });
+      if (!n) { dialogueInfo = `Dialogue: ${who} isn't near`; canvas.focus(); return; }
+      // Henry steps up to the NPC, as for a talk with E: 1.3 m away, on his side
+      const np = (npcWorld.drawn(n.entity.id) ?? n.placement).pos;
+      if (player && mode === "player") {
+        const c = player.controller, dx = c.pos[0] - np[0], dy = c.pos[1] - np[1], d = Math.hypot(dx, dy);
+        if (d > 2.5) {
+          c.pos = [np[0] + (dx / d) * 1.3, np[1] + (dy / d) * 1.3, np[2] + 0.1];
+          c.vel = [0, 0, 0];
+        }
+      }
+      loadRig(), void dialogue.talk({ soul: n.soul, name: n.entity.name, entity: n.entity.id }).then(() => { dialogueInfo = `Talking to ${who}`; }).catch((err) => { dialogueInfo = `Dialogue: ${(err as Error).message}`; });
       canvas.focus();
       return;
     }
@@ -665,6 +680,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       // E: the chest Henry faces, else the NPC, else the door
       if (e.code === "KeyE" && player && mode === "player" && !chestHint && talkHint && talkHint.ready !== false && !dialogue.talkingTo) {
         const n = talkHint.npc;
+        loadRig();
         void dialogue.talk({ soul: n.soul, name: n.entity.name, entity: n.entity.id }).catch((err) => { dialogueInfo = `Dialogue: ${(err as Error).message}`; });
       } else if (e.code === "KeyE" && player && mode === "player" && chestHint) {
         if (chestHint.act === "close") closeChest();
@@ -693,6 +709,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     canvas.focus();
     if (mode === "player") {
       if (document.pointerLockElement !== canvas) void canvas.requestPointerLock?.();
+      // in a conversation a click picks the highlighted choice
+      else if (dialogue.talkingTo) dialogue.click();
       return;
     }
     canvas.setPointerCapture(e.pointerId);
@@ -706,7 +724,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   }, { passive: false });
   canvas.addEventListener("pointermove", (e) => {
     if (mode === "player" && player && document.pointerLockElement === canvas) {
-      player.look(-e.movementX * 0.0025, -e.movementY * 0.0025);
+      // in a conversation the mouse moves the menu's highlight, not Henry's view
+      if (dialogue.talkingTo) dialogue.look(e.movementY);
+      else player.look(-e.movementX * 0.0025, -e.movementY * 0.0025);
       return;
     }
     if (!drag) return;
@@ -756,19 +776,45 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         player.controller.pos[1] = s.from[1] + (s.to[1] - s.from[1]) * e;
         if (k >= 1) stepAside = null;
       }
-      Object.assign(cam, player.camera(dt));
-      // the dialogue camera (debug shot choice): the rig on Henry, aimed by the NPC who spoke last
-      // in a conversation the medium shot frames the NPC unless the picker chooses another
       const talking = dialogue.talkingTo;
-      const shot = (shotSel.value === "off" && talking ? "medium" : shotSel.value) as Shot | "off";
-      const talkerSoul = talking?.soul ?? dialogue.partner;
-      const talker = shot !== "off" && rig && talkerSoul ? npcs.find((n) => n.soul === talkerSoul) : undefined;
-      if (talker && !viewBeforeShot) { viewBeforeShot = player.viewMode; player.setView("third"); }
-      if (!talker && viewBeforeShot) { player.setView(viewBeforeShot); viewBeforeShot = null; }
-      if (talker && rig && shot !== "off") {
-        const s = rig.place(player.controller.pos, player.controller.yaw, (npcWorld.drawn(talker.entity.id) ?? talker.placement).pos)[shot];
-        const d = [s.target[0] - s.eye[0], s.target[1] - s.eye[1], s.target[2] - s.eye[2]];
-        cam.pos = [...s.eye];
+      const talker = talking ? npcs.find((n) => n.entity.id === talking.entity) : undefined;
+      const talkerAt = talker ? (npcWorld.drawn(talker.entity.id) ?? talker.placement) : undefined;
+      // in a conversation Henry turns to the NPC (2 turns a second, as NPCs turn), and the NPC holds
+      // still facing him
+      if (talkerAt) {
+        const want = Math.atan2(talkerAt.pos[1] - player.controller.pos[1], talkerAt.pos[0] - player.controller.pos[0]);
+        const d = ((want - player.controller.yaw + 3 * Math.PI) % (2 * Math.PI)) - Math.PI;
+        player.controller.yaw += Math.sign(d) * Math.min(Math.abs(d), 4 * Math.PI * dt);
+      }
+      for (const id of npcWorld.held.keys()) if (id !== talker?.entity.id) npcWorld.held.delete(id);
+      if (talker) npcWorld.held.set(talker.entity.id, [...player.controller.pos]);
+      Object.assign(cam, player.camera(dt));
+      // the dialogue camera: in a conversation the planned shot on whoever speaks (the rig on the
+      // listener); a forced debug shot keeps that framing with another shot. A sequence played by
+      // id: the rig on Henry, aimed at the NPC who spoke last.
+      const pick = shotSel.value as Shot | "auto" | "off";
+      let pose: { eye: [number, number, number]; target: [number, number, number] } | null = null;
+      cameraInfo = "";
+      if (rig && pick !== "off" && talking && talkerAt) {
+        const f = dialogue.framing;
+        if (f) {
+          const pc = player.controller;
+          const stand = (i: number): Stand => dialogue.isPlayer(i)
+            ? { feet: pc.pos, yaw: pc.yaw }
+            : { feet: talkerAt.pos, yaw: 2 * Math.atan2(talkerAt.rot[3], talkerAt.rot[0]) + Math.PI / 2 };
+          const shot = pick === "auto" ? f.shot : pick;
+          pose = frameShot(rig, { ...f, shot }, stand);
+          cameraInfo = `camera ${shot} on ${dialogue.isPlayer(f.speaker) ? "Henry" : talking.name}${f.from === "auto" ? "" : ` (${f.from})`}`;
+        }
+      } else if (rig && pick !== "off" && pick !== "auto" && dialogue.partner) {
+        const n = npcs.find((x) => x.soul === dialogue.partner);
+        if (n) pose = rig.place(player.controller.pos, player.controller.yaw, (npcWorld.drawn(n.entity.id) ?? n.placement).pos)[pick];
+      }
+      if (pose && !viewBeforeShot) { viewBeforeShot = player.viewMode; player.setView("third"); }
+      if (!pose && viewBeforeShot) { player.setView(viewBeforeShot); viewBeforeShot = null; }
+      if (pose) {
+        const d = [pose.target[0] - pose.eye[0], pose.target[1] - pose.eye[1], pose.target[2] - pose.eye[2]];
+        cam.pos = [...pose.eye];
         cam.yaw = Math.atan2(d[1], d[0]);
         cam.pitch = Math.atan2(d[2], Math.hypot(d[0], d[1]));
       }
@@ -960,7 +1006,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     }
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
     const benchInfo = bench ? `⏱ benchmark ${q.label}: ${bench.phase === "settle" ? "loading…" : `${bench.segment} ${Math.round((now - bench.start) / 1000)}/${Math.round(PATH_SECONDS)} s`} · ` : "";
-    hud.textContent = `${benchInfo}${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms${timer.available ? `, gpu ${timer.total.toFixed(1)} ms (${timer.summary()}${splitPasses ? "" : "; G splits"})` : ""} (${q.label}, ${canvas.width}×${canvas.height}${q.upscale ? `, scene ×${scale.toFixed(2)}` : ""}) · memory: JS ${(jsHeap() / 2 ** 20).toFixed(0)} MiB, GPU ${((gpuMem.buffers + gpuMem.textures + gpuMem.targets) / 2 ** 20).toFixed(0)} MiB · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}${dialogueInfo ? ` · ${dialogueInfo}` : ""}`;
+    hud.textContent = `${benchInfo}${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms${timer.available ? `, gpu ${timer.total.toFixed(1)} ms (${timer.summary()}${splitPasses ? "" : "; G splits"})` : ""} (${q.label}, ${canvas.width}×${canvas.height}${q.upscale ? `, scene ×${scale.toFixed(2)}` : ""}) · memory: JS ${(jsHeap() / 2 ** 20).toFixed(0)} MiB, GPU ${((gpuMem.buffers + gpuMem.textures + gpuMem.targets) / 2 ** 20).toFixed(0)} MiB · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}${dialogueInfo ? ` · ${dialogueInfo}` : ""}${cameraInfo ? ` · ${cameraInfo}` : ""}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();

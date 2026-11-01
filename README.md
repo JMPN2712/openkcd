@@ -130,7 +130,8 @@ node scripts/test-collision.ts                   # collision sources by object t
 node scripts/test-chests.ts                      # chest lids open with their .anm (10–20°), and a chest near the tailor's lists its contents by name
 node scripts/test-doors.ts                       # doors near the tailor's house swing on their hinges; E opens and closes his door; the leaf blocks only when shut
 node scripts/test-dialogue.ts                    # dialogue tables → sequences; the tailor and a townsman cast in a recorded gossip, every line with its subtitle and recording, played to the end
-node scripts/test-dialogue-camera.ts             # dialogue camera rig: the blendspace grid, every shot looks towards the partner at any angle, distance and height, smooth between
+node scripts/test-dialogue-camera.ts             # dialogue camera rig: the blendspace grid, every shot looks towards the partner at any angle, distance and height, smooth between; each line's shot frames its speaker (Henry too), camera cuts and modes win
+node scripts/test-dialogue-browser.ts --screenshot=/tmp/d/s   # headless Chrome: talks to the tailor and the bailiff; the camera frames whoever speaks, Backspace ends at the menu, trade ends it, then Henry walks again (screenshots: never commit)
 node scripts/render-player.ts /tmp/p --npcs --at-npc rat_tailor --npc-dist 1.4 --clock 10:00 --at 2522,545 --walk 0.5: --dialogue-shot close_up   # Henry facing the tailor, seen through a dialogue camera shot
 node scripts/test-beds.ts                        # every bed in Rataje: the sleeper lies along it, over it, at its height (--no-align: the old poses); Henry wakes beside it on the floor
 node scripts/test-interiors.ts                   # interior placement: sampled beds line up with the bedding brushed on them; every model in their scenes matches its LODs
