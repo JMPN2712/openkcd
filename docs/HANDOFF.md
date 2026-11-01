@@ -88,6 +88,10 @@ waits for a research session.
 - #26 (2026-10-31): the new Medium: no MSAA, the scene at a dynamic
   0.5–1× scale upscaled with sharpening (`upscale.ts`): Medium 79 → 92 fps,
   1% low 7 → 11 on the M3 Pro (scale stayed near 1 there).
+- #28 (2026-10-31): the world renderer drops meshes' CPU normals,
+  tangents, UVs and colours once uploaded; the caches reload models whose
+  geometry left the GPU. Heap after the benchmark: Potato 3.0 → 2.3 GiB,
+  Medium 4.0 → 2.9 GiB; frame rates unchanged (`test-release.ts`).
 
 ## Findings not yet acted on
 
