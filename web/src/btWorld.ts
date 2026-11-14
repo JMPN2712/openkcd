@@ -1740,14 +1740,21 @@ export class AiWorld {
         };
       }
       case "ExternalLock": {
-        // runs its child once the named lock is free (KeepRunning waits, Halt fails)
+        // waits until the named lock is open, then runs its child (bt-rules.md: the node passes
+        // only while the lock is open; the instant variant is the one that fails). RunLogic says
+        // what happens to a running child when the lock closes again; ASSUMPTION, as for gates:
+        // Halt stops the child and waits again, KeepRunning lets it finish
         let body: Task | null = null;
         return {
           tick: () => {
+            const closed = this.locked(this.lockKey(n, c, "SemaphoreName"));
             if (!body) {
-              if (this.locked(this.lockKey(n, c, "SemaphoreName"))) return this.prop(n, "RunLogic") === "Halt" ? "failure" : "running";
+              if (closed) return "running";
               body = kids[0] ? this.runner.make(kids[0], c.scope) : null;
               if (!body) return "success";
+            } else if (closed && this.prop(n, "RunLogic") === "Halt") {
+              body.abort(); body = null;
+              return "running";
             }
             const s = body.tick();
             if (s !== "running") body = null;

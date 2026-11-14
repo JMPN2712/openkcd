@@ -117,7 +117,7 @@ world.runner.waiting = [];
 brains.tickOne(brains.entities.get("q_skalitz")!);
 check(world.runner.leaves().some((l) => l.endsWith("DialogGate")), "the cutscene's end waits for the player's conversation to begin (DialogGate)");
 world.runner.waiting = null;
-check(brains.ended.length <= 6, `quest trees that ended: ${brains.ended.map((id) => ents.get(id)?.name).join(", ") || "none"}`);
+check(brains.ended.length === 0, `no quest tree ends by itself: ${brains.ended.map((id) => ents.get(id)?.name).join(", ") || "none"}`);
 // the NPCs' quest patches: a patch whose source is the quest's entity names one of its behaviours
 const mp = patches.find((p) => p.npc === mother?.id && p.name === "motherPatch")!;
 check(mp.source === brains.entities.get("q_skalitz") && world.offersObjectBehaviour(mp.source, "motherPatch"), "the patch's source is the quest's entity, which offers motherPatch");

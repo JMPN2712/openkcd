@@ -637,6 +637,12 @@ game's data.
     without one;
   - world effects without a system yet (`AddBuff`, `SetVisibility`,
     `SetOwner`, `EquipItem`, …) are reported to the host and succeed.
+- **`ExternalLock`** waits until its lock is open, whatever its `RunLogic`
+  (the research note: it passes only while the lock is open; the instant
+  variant is the one that fails). It used to fail at once under `Halt`,
+  which ended six quest trees at start-up. `RunLogic` now says what happens
+  to a running child when the lock closes again (ASSUMPTION, as for gates:
+  `Halt` stops it and waits again).
 - **`Switch`** with no branch to take succeeds when its conditions are
   written not to fail (ASSUMPTION; a failure would end the quest trees'
   message loops).
@@ -677,8 +683,7 @@ game's data.
   (`buyCharcoal` ×10, `getDebtMoney`, `getCrossguard`, `collectBeer`).
 - **Not yet:** the trees are not started in the world view (only the quest
   reads are wired there) and its dialogue doesn't take the trees' requests;
-  five trees end early (`q_plagueInMerhojed`, `q_night_rescue`,
-  `q_huntPtacek`, `q_questItems`, `q_devilplay`); objective timers; a real
+  objective timers; a real
   inventory; combat and perception nodes; the calendar functions the
   scripts call (`forwardTime`).
 

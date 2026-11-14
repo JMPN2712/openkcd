@@ -114,10 +114,6 @@ for a stand-in inventory. `node scripts/test-quest-opening.ts`.
   written. If the 1% lows still matter on this PC, run the ⏱ Benchmark in
   your own Chrome here (X11, Vulkan): the report's "GPU frames" line tells
   whether the lows are the GPU's slow frames.
-- **Five quest trees end early** in the headless run (`q_plagueInMerhojed`,
-  `q_night_rescue`, `q_huntPtacek`, `q_questItems`, `q_devilplay`;
-  `q_millerDate` no longer does). Not a decision for you yet; being looked
-  into.
 
 ## Diet mode (milestone 5)
 
@@ -349,6 +345,10 @@ follows them):
   (`dialogRequests.ts`, `RequestDialog` / `DoDialog`), tracked assets in
   the quest state, `SmartAreaBehaviorTag`. A new game plays headless up to
   the opening quest's errands (`test-quest-opening.ts`).
+- #44 (2026-11-14): `ExternalLock` waits for its lock whatever its
+  `RunLogic` (it failed under `Halt`), so the quest trees that ended early
+  (`q_plagueInMerhojed`, `q_night_rescue`, `q_huntPtacek`, `q_questItems`,
+  `q_devilplay`, `q_millerDate`) keep running: none ends by itself now.
 
 ## Findings not yet acted on
 
