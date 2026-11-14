@@ -3,7 +3,19 @@
 The milestones come in order. Every feature ships with a **Potato** preset,
 because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
 
-## Where things stand (2026-10-24)
+## Where things stand (2026-11-13)
+
+- **Quest runtime (2026-11-13, in progress):** the quests' own behaviour
+  trees run (`web/src/questTrees.ts`), trees read the quest state, and the
+  level's profiles (named layer sets) are read from the level data. A new
+  game reaches the opening quest's first conversation headless, with diet
+  mode on. Next: the NPCs' quest patches, the dialogue they ask for, then
+  the world view (`docs/HANDOFF.md`).
+- **NPC messaging (2026-11-13):** mailboxes, area brains, garrison posts
+  and shop requests (`web/src/mail.ts`).
+
+Earlier (2026-10-24):
+
 
 - **Milestone 2 is done.** The compact package (`docs/SLIM.md`) is built in
   the browser straight from the GOG installer, in place or part by part, and
@@ -388,9 +400,10 @@ its cost on Potato with a full market.
         Teleport, TurnBody, GetHelper(s), RangeFilter/RangeSorter,
         behaviour states and max instances, reservations, smart-object
         brains' OnInit (benches).
-  - [ ] Messaging between NPCs and areas (`ProcessMessage`): garrison
-        guards get no post and hold their spot; shops' merchants and
-        customers don't meet. Area brains (`CitySA_onUpdate`).
+  - [x] Messaging between NPCs and areas (2026-11-13, `web/src/mail.ts`):
+        garrison guards get their post from the garrison's brain; a shop
+        links its merchant and customers. The conversation between two
+        NPCs (`RequestDialog`) still needs a research note.
   - [x] Loops and locks from the research note `bt-rules.md`
         (2026-10-25): `Loop` fails on the first failing child (the guess
         had it run on); external locks start closed, semaphores free;
@@ -496,6 +509,12 @@ content, without deleting anything.
 - [ ] Saves.
 - [ ] Horses.
 - [ ] Dialogue and quests.
+  - [x] Quest state and lifecycle; dialogue, trees and Lua drive it.
+  - [x] The quests' own trees, headless, up to the opening quest's first
+        conversation (2026-11-13, `scripts/test-quest-opening.ts`).
+  - [ ] NPC quest patches, dialogue asked for by trees, the opening quest
+        played through; quest trees in the world view; timers, tracked
+        items, rewards; shops.
 - [ ] The RPG layer.
 
 ## 7. Diet playthrough

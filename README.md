@@ -120,6 +120,8 @@ SEED=1 node scripts/test-btworld.ts ~/kcd1 rat_tailor cityWalk sa_rat_city   # h
 node scripts/test-daycycle.ts                    # daily cycle: schedule store rules, patches, the tailor's day, hobby draws and areas in Rataje
 node scripts/sim-daycycle.ts --clock 18:27 --minutes 15   # the market across an activity change: trees start/wind down/end, per-frame cost (--max 60, --list)
 node scripts/test-diet.ts                        # diet mode: the overlay (a cut quest reads as cancelled, off restores it), the five reachability checks, grants
+node scripts/test-quest-opening.ts               # a new game up to the opening quest, with every quest tree and diet mode on: the master quest, the cutscene automaton, the NPCs' quest patches
+node scripts/test-messaging.ts                   # NPC messaging: a garrison hands out its post, a shop's merchant and customer
 node scripts/test-dialogue-flow.ts               # conversations: the tailor walkthrough (greeting, menu order, trade ends it, farewell), timed topic 6807, every condition parses
 node scripts/test-lua.ts                         # Lua 5.1 (WebAssembly): semantics, tree data round trip, boot Scripts/main.lua
 node scripts/bench-npcs.ts                       # CPU benchmark: NPC loading and per-frame cost in Rataje's market (--decode: CPU texture decoding)

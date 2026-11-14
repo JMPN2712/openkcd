@@ -450,10 +450,18 @@ Decoded by `web/src/navmesh.ts` and `tools/navmesh.py`.
     with matching uber-LODs);
   - cutscene set dressing (`cin_*`), event obstacles and barriers.
 
-  The game switches them through quest-driven "layer profiles"
-  (`streamLayerProfile` in Libs/Haste; `layer_profile` columns in the New
-  Homes tables), but the profile definitions are not in the shipped XML or
-  Lua.
+  The game switches them through quest-driven **profiles**
+  (`EnableProfile` in the quest trees, `streamLayerProfile` in Libs/Haste,
+  `layer_profile` columns in the New Homes tables). The definitions are in
+  the level pak's `whdata_1` (plain XML): `GameProfileManager` lists 927
+  profiles, each a name, an id and its layers
+  (`<GameLayer>ska_hans{guid}</GameLayer>`; 2,183 references), plus eleven
+  groups of profiles. `q_skalitz_normal`, the prologue's village, is 73
+  layers. A layer's entities are in `layers/<layer>.xml` (1,831 files,
+  29,307 entities beyond the mission file's 55,122), each with a `Layer`
+  attribute. `web/src/profiles.ts` reads both. The same file holds the
+  weather profiles' conditions and the ledge markers; `whdata_0` holds the
+  souls' data and `newgame.whs` the shipped new-game save (not read yet).
 - **The viewer's default** (`web/src/levelLayers.ts`): hide `cin_*`,
   `event*`, `test*`, `_dream*` and barrier layers, plus state N > 0 when the
   same prefix has a state 0. That is 652 layers.

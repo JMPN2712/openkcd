@@ -94,16 +94,15 @@ questlines whole and never cuts anything the main quest depends on.
 
 ## Hardware targets
 
-- **Development machine (since 2026-10-30):** MacBook Pro, Apple M3 Pro,
-  24 GB unified memory, macOS, Google Chrome. WebGPU runs on Metal; no
-  flags needed. Benchmarks from it are M3 Pro numbers: label them so.
-- **Earlier development machine** (the numbers in the docs before
-  2026-10-30): Linux (KDE Plasma on Wayland), Ryzen 9 9900X, 64 GB RAM,
-  RTX 5070 Ti plus the CPU's integrated Radeon, Google Chrome.
+- **Development machine (again since 2026-11-13; also the numbers in the
+  docs before 2026-10-30):** Linux (KDE Plasma on Wayland), Ryzen 9 9900X,
+  64 GB RAM, RTX 5070 Ti plus the CPU's integrated Radeon, Google Chrome.
   Chrome on Linux needs Vulkan turned on for WebGPU
   (`chrome://flags/#enable-vulkan`, or `--enable-features=Vulkan`) **and**
   `--ozone-platform=x11`: Chrome 156 on Wayland logs "not compatible with
   Vulkan" and glitches until reload.
+- **2026-10-30 to 2026-11-13:** a MacBook Pro (Apple M3 Pro, 24 GB,
+  WebGPU on Metal, no flags). Benchmarks from it are labelled M3 Pro.
 - **Low end:** AMD Vega 7 laptop with 16 GB RAM. Every feature needs a
   **Potato** preset.
 
@@ -123,7 +122,7 @@ questlines whole and never cuts anything the main quest depends on.
 | Navigation | `navmesh.ts`, `crowd.ts` | Navmesh decode, A* plus funnel, collision avoidance |
 | NPCs | `levelEntities.ts`, `schedule.ts`, `npcs.ts`, `npcAi.ts` | Placement, daily schedules, crowd |
 | Game logic | `bt.ts`, `btRuntime.ts`, `btWorld.ts`, `luaHost.ts` (wasmoon Lua 5.1), `typeDefs.ts` | Behaviour-tree interpreter running work routines |
-| Quests, diet mode | `quests.ts`, `diet.ts`, `dietConfig.ts` | Quest state and lifecycle (dialogue reads and drives it); diet mode cuts 39 side quests as an overlay, on by default |
+| Quests, diet mode | `quests.ts`, `questTrees.ts`, `profiles.ts`, `diet.ts`, `dietConfig.ts` | Quest state and lifecycle (dialogue, trees and Lua read and drive it); the quests' own trees run headless up to the opening quest's first conversation; level profiles (layer sets) from the level data; diet mode cuts 39 side quests as an overlay, on by default |
 
 - **Docs:** `docs/RECON.md`, `LEVELS.md`, `CHARACTERS.md`, `ANIMATION.md`,
   `GAMELOGIC.md`, `INSTALLER.md`, `SLIM.md`, `PERFORMANCE.md`, `ROADMAP.md`;

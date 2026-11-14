@@ -343,6 +343,7 @@ check(!cut.has("q_learnToRead") && !diet.listed("q_learnToRead"), "3. Mightier t
   const world = new AiWorld({
     ents: new Map(), ai: new AiDb({ soTag: [], so2tag: [], saTag: [], sa2tag: [] }), worldTime: () => 0, realTime: () => 0,
     trees: () => undefined, quest: (fn, q, o) => quests.apply(fn, q, o),
+    questCall: (fn, q, o) => !!quests.call(fn, o === undefined ? [q] : [q, o]),
   });
   const quoted = (v: string) => `&quot;${v}&quot;`;
   const runNode = (node: string, own = "") => {
@@ -360,6 +361,40 @@ check(!cut.has("q_learnToRead") && !diet.listed("q_learnToRead"), "3. Mightier t
   runNode(setQuest("StartQuest", "q_recruiters"));
   runNode(setObjective("StartObjective", "q_recruiters", "talkToSimon"));
   check(quests.objectiveState("q_recruiters", "talkToSimon") === UNCHANGED, "tree: SetQuestObjective can't start the rewired Simon route");
+
+  // the trees' quest reads (QuestCondition, QuestObjectiveCondition, GetQuest, QuestObjectiveGate)
+  // a started quest with an objective that stays started (no condition completes it)
+  const subject = "q_recruiters";
+  const act = qdb.objectivesOf(subject).find((o) => quests.call("IsObjectiveStarted", [subject, o.name]) === 1 && !o.condition.trim())!.name;
+  const mark = (v: string) => `<Expression expressions="${quoted(`$seen = '${v}'`)}" />`;
+  const seen = (node: string, ownQuest = "") => {
+    const [tree] = parseTreeFile(`<BehaviorTrees><BehaviorTree name="t"><Variables><Variable name="seen" type="_string" values="" form="single" /><Variable name="flag" type="_bool" values="" form="single" /></Variables><Root><Behavior>${node}</Behavior></Root></BehaviorTree></BehaviorTrees>`, "test.xml");
+    const { task, scope } = world.runner.instantiate(tree);
+    scope.set("this", { id: 0, name: ownQuest });
+    return { status: task.tick(), seen: scope.get("seen"), flag: scope.get("flag"), task, scope };
+  };
+  const ifQuest = (quest: string, fn: string) => `<QuestCondition quest="${quoted(quest)}" function="${quoted(fn)}" failSubtMissing="${quoted("false")}"><Then>${mark("then")}</Then><Else>${mark("else")}</Else></QuestCondition>`;
+  const ifObjective = (quest: string, objective: string, fn: string) => `<QuestObjectiveCondition quest="${quoted(quest)}" objective="${quoted(objective)}" function="${quoted(fn)}" failSubtMissing="${quoted("false")}"><Then>${mark("then")}</Then><Else>${mark("else")}</Else></QuestObjectiveCondition>`;
+  check(seen(ifQuest(subject, "IsQuestStarted")).seen === "then" && seen(ifQuest("", "IsQuestStarted"), "q_recruiters").seen === "then", "tree: QuestCondition reads a started quest (named, or the tree's own)");
+  check(seen(ifQuest("q_debtor", "IsQuestCanceled")).seen === "then" && seen(ifQuest("q_debtor", "IsQuestStarted")).seen === "else", "tree: QuestCondition reads a cut quest as cancelled");
+  check(seen(ifObjective(subject, act, "IsObjectiveStarted")).seen === "then" && seen(ifObjective("q_debtor", qdb.objectivesOf("q_debtor")[0].name, "IsObjectiveCanceled")).seen === "then", "tree: QuestObjectiveCondition reads an objective, and a cut quest's as cancelled");
+  check(seen(`<QuestCondition quest="${quoted(subject)}" function="${quoted("IsQuestCompleted")}" failSubtMissing="${quoted("true")}"><Then>${mark("then")}</Then></QuestCondition>`).status === "failure", "tree: a missing branch fails when failSubtMissing is set");
+  const getQuest = (quest: string, objective: string, id: number, fn: string) => `<GetQuest questName="${quoted(quest)}" obejctiveName="${quoted(objective)}" paramInt="${quoted(String(id))}" function="${quoted(fn)}" variableOut="${quoted("flag")}" />`;
+  const actId = qdb.objectiveId(subject, act)!;
+  check(seen(getQuest(subject, act, 0, "IsObjectiveStarted")).flag === true && seen(getQuest(subject, "", actId, "IsObjectiveStarted")).flag === true && seen(getQuest("q_debtor", "", 0, "IsQuestStarted")).flag === false,
+    "tree: GetQuest stores a predicate (the objective by name, or by id in paramInt)");
+  const gate = (state: string, logic: string, negate = "false") => `<QuestObjectiveGate questName="${quoted(subject)}" objectiveName="${quoted(act)}" objectiveState="${quoted(state)}" NegateTo="${quoted(negate)}" RunLogic="${quoted(logic)}"><Sequence>${mark("in")}<Wait duration="${quoted("-1")}" timeType="${quoted("GameTime")}" doFail="${quoted("false")}" variation="${quoted("")}" /></Sequence></QuestObjectiveGate>`;
+  const closed = seen(gate("Completed", "KeepRunning"));
+  check(closed.status === "running" && closed.seen !== "in", "tree: a QuestObjectiveGate waits while its objective isn't in the state");
+  const halt = seen(gate("Started", "Halt")), keep = seen(gate("Started", "KeepRunning")), negated = seen(gate("Completed", "Halt", "true"));
+  check(halt.seen === "in" && keep.seen === "in" && negated.seen === "in", "tree: it runs its child while the objective is in the state (NegateTo: while it isn't)");
+  quests.completeObjective(subject, act);
+  for (const g of [halt, keep, negated, closed]) { g.scope.set("seen", ""); g.task.tick(); }
+  check(closed.scope.get("seen") === "in", "tree: the gate opens when the objective reaches the state");
+  // a Halt gate that closed stopped its child: when it opens again the child starts anew
+  quests.resetQuest(subject); quests.activate(subject); quests.startObjective(subject, act);
+  for (const g of [halt, keep]) { g.scope.set("seen", ""); g.task.tick(); }
+  check(halt.scope.get("seen") === "in" && keep.scope.get("seen") === "", "tree: Halt stops the child when the gate closes (it starts anew on reopening); KeepRunning lets it run on");
 
   const lua = await LuaHost.create(vfs, createRequire(import.meta.url).resolve("wasmoon-lua5.1/dist/liblua5.1.wasm"));
   const say = (code: string) => lua.lua.doStringSync(`return tostring(${code})`);

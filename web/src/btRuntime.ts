@@ -412,6 +412,13 @@ export class Runner {
   nesting = 0;
   /** debugging: called with the node chain whenever a node fails */
   onFail: ((chain: string[]) => void) | null = null;
+  /** debugging: set to [] before a tick to collect every chain of nodes left running (see `leaves`) */
+  waiting: string[] | null = null;
+  /** The chains in `waiting` that no longer chain extends: where each parallel branch waits. */
+  leaves(): string[] {
+    const all = this.waiting ?? [];
+    return all.filter((a) => !all.some((b) => b.length > a.length && b.startsWith(`${a} > `)));
+  }
   /** the deepest running chain of the last ticks since reset (outermost first) */
   deepest: string[] = [];
   private stack: string[] = [];
@@ -427,7 +434,10 @@ export class Runner {
         this.stack.push(label);
         try {
           const s = t.tick();
-          if (s === "running" && this.stack.length > this.deepest.length) this.deepest = [...this.stack];
+          if (s === "running") {
+            if (this.stack.length > this.deepest.length) this.deepest = [...this.stack];
+            if (this.waiting) this.waiting.push(this.stack.join(" > "));
+          }
           if (s === "failure" && this.onFail) this.onFail(this.stack);
           return s;
         } finally { this.stack.pop(); }
@@ -613,12 +623,16 @@ export class Runner {
       case "Expression": return leaf(() => { c.eval("expressions"); return "success"; });
       case "VarOperation": return leaf(() => this.varOperation(n, scope, c));
       case "IncludeTree": {
-        const file = String(c.eval("File", "")).replaceAll("\\", "/").toLowerCase();
-        const name = String(c.eval("Name", "")).toLowerCase();
+        // File and Name are text, or a variable read when the include starts (the cutscene
+        // automaton includes "$questTreeFilename" # "$cutsceneOnEndTree")
+        const part = (prop: string) => { const v = String(c.eval(prop, "")); return v.startsWith("$") ? String(evalExpression(v, scope, this.host) ?? "") : v; };
+        let file = "", name = "";
         let inner: Task | null = null;
         return {
           tick: () => {
             if (!inner) {
+              file = part("File").replaceAll("\\", "/").toLowerCase();
+              name = part("Name").toLowerCase();
               const t = this.host.tree(file, name);
               if (!t) { this.report(`IncludeTree: ${file}#${name} not found`); return "failure"; }
               inner = this.instantiate(t, scope).task;
@@ -669,7 +683,10 @@ export class Runner {
             if (!chosen) {
               const hit = kids.find((k) => k.tag !== "DefaultBranch" && truthy(this.ctx(scope, k).eval("condition", false)));
               const k = hit ?? child("DefaultBranch");
-              if (!k) return "failure";
+              // ASSUMPTION: with no branch to take, the switch answers as its conditions would:
+              // success when they are written not to fail (failOnCondition false, as in the quest
+              // trees' message loops, which a failure would end: q_master_main.xml#onUpdate)
+              if (!k) return kids.some((x) => x.tag === "IfCondition") && kids.every((x) => x.tag !== "IfCondition" || !truthy(this.ctx(scope, x).eval("failOnCondition", false))) ? "success" : "failure";
               chosen = k.children[0] ? new Slot(() => this.make(k.children[0], scope)) : null;
               if (!chosen) return "success";
             }

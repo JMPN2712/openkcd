@@ -1,6 +1,6 @@
 // Editor layers of a level (leveldata.xml <Layers><Layer Name="re_executioner_state0{guid}" Id="1269"/>…).
 // Brushes carry their layer id (levelObjects.ts brushLayer, 0 = no layer). The game switches
-// layers on and off through quest-driven "layer profiles" (not found in the shipped data), so
+// layers on and off through quest-driven profiles (profiles.ts: the level's whdata_1 lists them), so
 // alternative versions of places coexist in the file: re_executioner_state0 / _state1,
 // hall_state0 / hall_state2 / hall_state12, cutscene set dressing (cin_*), event obstacles.
 // Drawing them all at once doubles buildings up and leaves objects floating; this picks a

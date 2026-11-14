@@ -72,6 +72,8 @@ export interface EntityInfo {
   saTemplate?: string;
   /** smart-object helper class (soclasses_SmartObjectHelpers), e.g. "tailorTable", "Bed" */
   soHelpers?: string;
+  /** the editor layer whose file holds it ("ska_hans{guid}", lower case); unset for the mission file's (profiles.ts) */
+  layer?: string;
   /** the raw <Properties …>…</Properties> element (see entityProperties) */
   propsXml?: string;
 }

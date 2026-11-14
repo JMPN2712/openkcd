@@ -5,52 +5,59 @@ every merged pull request. The plan is in [ROADMAP.md](ROADMAP.md); this
 file is the short list of what is next, what waits for the user, and what
 waits for a research session.
 
-## Moving machines (2026-11-13)
+## Now (2026-11-13, back on the Linux PC)
 
-Development is moving off the MacBook Pro. **Everything is on GitHub:**
-main is at `5d6333c`, there are no open PRs, and no branch, stash or
-worktree holds unpushed commits (checked in this checkout, its three
-worktrees and `openkcd-research`).
+Development is on the Linux PC again (RTX 5070 Ti, Ryzen 9 9900X; CLAUDE.md
+"Hardware targets"). The move from the Mac is done: the checkout is on
+`main`, `npm ci` is done, the headless suites pass, and headless Chrome
+runs WebGPU on the RTX 5070 Ti through Vulkan (`profile-browser.ts
+--preset=potato --bench=this`: 478 fps average, 1% low 77, at 960×540).
+The NPC-messaging work that had been left uncommitted on this machine
+since 2026-10-25 is merged (#40).
 
-**Set up the new machine:**
+**The user's priorities (2026-11-13), in order:**
 
-1. Clone `openkcd`, run `git config core.hooksPath .githooks`, set the
-   repo-local `user.email` to the GitHub no-reply address the history uses,
-   then `cd web && npm ci`.
-2. Write `CLAUDE.local.md` again (it is not committed). It names this
-   checkout, the game root (an installed copy, read-only), the GOG
-   installers, the research repo and the decompiler-output folder.
-   Repeat that folder's absolute path as a deny in
-   `.claude/settings.local.json`, as on the Mac.
-3. Clone `openkcd-research` beside it. The decompiler output never leaves
-   the research side; regenerate it there if needed.
-4. Check the harnesses find Chrome (`web/scripts/chrome.ts`; `CHROME=`
-   overrides). On Linux, see CLAUDE.md for the Vulkan and X11 flags.
-5. Smoke test: `npx tsc --noEmit`, `node scripts/test-release.ts`,
-   `node scripts/test-dialogue-camera.ts`, then a
-   `profile-browser.ts --preset=potato --bench=this` run. Label the new
-   machine's numbers in PERFORMANCE.md.
+1. **The quest runtime**: quest nodes in the trees, Lua's quest API and
+   shops, all through `QuestSystem`. Target: the opening of the main quest
+   plays through with diet mode on.
+2. **Combat** from `notes/combat-melee.md`, `combat-damage.md`,
+   `combat-ai.md`. Target: a fight with a bandit that feels like the
+   original.
+3. **Streaming stalls** (the 1% lows), if still open.
+4. **Open dialogue bugs** (camera framing, Henry's shots, leaving
+   conversations, facial animation).
 
-**Not in git, on purpose:** the dialogue framing screenshots for #34 are
-renders of game content. Remake them with
-`profile-browser.ts --dialogue=ID --shot=… --screenshot=PREFIX` or
-`test-dialogue-camera.ts` if wanted; never commit them.
+**Where priority 1 stands** (GAMELOGIC.md, "The quests' own trees"): every
+quest tree diet mode keeps runs headless, and a new game reaches the
+opening quest's first conversation: `q_master_main` → `q_skalitz`
+activated → the cutscene automaton → the quest started, Henry's mother and
+father given their quest patches. `node scripts/test-quest-opening.ts`.
 
-**Next steps, in order:**
+**Next steps for it, in order:**
 
-1. The user's benchmark rerun (below, "Waiting for me"). If the GPU
-   frames line shows the slowest 1% at 2–3× the median with every pass
-   slower, the lows are the GPU's clocks; otherwise profile the CPU side
-   with `--headed --spikes`.
-2. Memory (priority 1): Potato's heap after the benchmark is about
-   1.8 GiB since #37, plus about 1.4 GiB on the GPU, so the tab is still
-   over the 2 GiB target. Next: the world store's fragmentation, then
-   16-bit indices and Henry's animation database (117 MiB).
-3. Walk CPU (priority 5): see "Findings not yet acted on".
-4. The rest of milestone 4. Facial animation and lip sync, and the
-   dialogue camera's open points, wait for the research questions below.
-5. The Vega 7 row in COMPATIBILITY.md: nothing since #24 is measured
-   there.
+1. **The NPCs' quest patches.** A `daycycle:change` whose `sourceId` is a
+   quest's entity names a behaviour of that quest (`motherPatch` →
+   `quests/q_skalitz.xml#motherPatch`). Resolve such an activity on the
+   quest's smart-object behaviours and run it for the NPC (`npcAi.ts`),
+   with the quest entity as `__object`.
+2. **Dialogue the trees ask for.** `final/questUtils.xml#playerDialog` and
+   `tryPlayerDialog` send the requests; `DialogGate` reads whether the
+   player is in a conversation (`WorldOptions.playerInDialog`). Connect
+   them to `dialogueFlow.ts`, then drive the talk with Henry's mother and
+   father in the test (their sequences change `q_skalitz`'s objectives).
+3. **Start the quest trees in the world view** (`QuestBrains` in
+   `levelView.ts`, with the layer entities from `profiles.ts` and a "New
+   game" control). Today only the quest reads are wired there. Watch the
+   memory: the layer files add 29,307 entities.
+4. **Profiles to the scene:** show and hide a profile's layers when
+   `EnableProfile` switches it (`WorldOptions.profile`), in place of
+   `defaultHiddenLayers`' guess.
+5. **Quest state the opening needs:** objective timers (`duration.ts` has
+   the parser), tracked items with a minimal player inventory, rewards.
+6. **Shops** (`notes/economy.md`): buying the charcoal is an objective of
+   the opening quest; then diet mode's shop grants.
+7. Lua's remaining `QuestSystem` functions (`GetActiveObjectives`, …) and
+   the calendar functions the scripts call (`forwardTime` fails today).
 
 ## Now (2026-10-30)
 
@@ -95,9 +102,17 @@ renders of game content. Remake them with
 
 ## Waiting for me (the user)
 
-- **Run the ⏱ Benchmark again in your Chrome** (same 1154×648 window): the
-  report now has a "GPU frames" line per preset, which tells whether your
-  1% lows are the GPU's slow frames, as they are headed here.
+- **The commit trailer.** CLAUDE.md asks for
+  `Co-Authored-By: Claude Opus 5.5`; the sessions since 2026-11-13 run on a
+  different Claude model. The commits keep CLAUDE.md's line until you say
+  otherwise.
+- **The Mac benchmark rerun** asked for on 2026-10-31 no longer applies as
+  written. If the 1% lows still matter on this PC, run the ⏱ Benchmark in
+  your own Chrome here (X11, Vulkan): the report's "GPU frames" line tells
+  whether the lows are the GPU's slow frames.
+- **Six quest trees end early** in the headless run (`q_plagueInMerhojed`,
+  `q_night_rescue`, `q_huntPtacek`, `q_questItems`, `q_millerDate`,
+  `q_devilplay`). Not a decision for you yet; listed so you know.
 
 ## Diet mode (milestone 5)
 
@@ -121,7 +136,8 @@ section of the research repo's `notes/diet-analysis.md`.
     `q_returnToSkalitz`, `q_pribBattle`, `q_revenge` and `q_tutorials`.
     They are reported, not failed.
 
-**Next steps, in order:**
+**Next steps, in order** (1 and 2 are done, #41; see "Now" above for what
+follows them):
 1. **Run the quests' own trees.** Each quest with a `smart_object` is an
    NPC-like smart object whose trees live in `Libs/AI/quests/<file>.xml`,
    with an always-active subbrain and the `QuestMailbox` messages
@@ -152,6 +168,34 @@ section of the research repo's `notes/diet-analysis.md`.
    calls them.
 
 ## Questions for a research session
+
+- **Behaviour-tree nodes the quest trees use, implemented from the data
+  with ASSUMPTIONs** (`btWorld.ts`, `btRuntime.ts`; bt-rules.md covers
+  loops, locks and Wait only):
+  1. `Switch` when no branch's condition holds and there is no
+     `DefaultBranch`: success or failure? (We succeed when the conditions
+     have `failOnCondition` false; `q_master_main`'s message loop would end
+     otherwise.) And does a `ProcessMessage` return its handler's failure?
+  2. Gates (`QuestObjectiveGate`, `ProfileLoadedGate`, `DistanceGate`,
+     `DialogGate`, `DeadUnconsciousGate`, …): what `RunLogic` Halt and
+     KeepRunning do when the gate closes under a running child, and what
+     the gate returns when its child ends.
+  3. `AreaPresence`: `ReportInitialState`, `Once`, `Atomic`, and whether
+     someone already inside when the watch starts counts as entering.
+  4. `DistanceGate` / `DistanceCondition`: `Low`, `High`, `OpenInMiddle`.
+  5. Level profiles: when `ProfileLoadedGate` opens after `EnableProfile`
+     (we open it at once), what `ProfileCanBeLoaded` checks, and what
+     `HasNavigation` and the profile groups do.
+  6. Messages to the player: the player's brain (`player.xml`) handles
+     `instruction:request`, `player:preventCombatRequest`,
+     `player:holsterWeapon`. We acknowledge them at once. Which of them
+     change something the game needs?
+  7. Nodes not implemented, reached by the quest trees at start-up:
+     `NPCStateGate`, `ReadinessWait`, `FinishInitialization`,
+     `SetGlobalVar`, `DisablePerception`, the graph filters `ExistPath`
+     and `Gen2SoulIsAliveFilter`.
+  8. `PlaySequence` (`cleanupScene`, `freezeGame`, `checkpoints`) and
+     `PlayVideo`: what they return when skipped or missing.
 
 - **Durations without a unit** (bt-rules.md, Wait): 11 Waits write
   `"500"` or `"200"` beside the usual `"500ms"`. We read them as
@@ -258,6 +302,15 @@ section of the research repo's `notes/diet-analysis.md`.
   nodes and Lua's `QuestSystem` change the quest state through the
   overlay. The world view waits for the quest tables before starting the
   trees.
+
+- #40 (2026-11-13): NPC messaging (`mail.ts`): mailboxes and routing,
+  area brains, garrison posts, a shop's merchant and customer. Written on
+  2026-10-25 on the Linux PC, merged after the move back.
+- #41 (2026-11-13): the quests' own trees (`questTrees.ts`), the trees'
+  quest reads and gates, level profiles from the level data
+  (`profiles.ts`), stand-ins for the cutscene automaton's nodes. A new
+  game reaches the opening quest's first conversation headless
+  (`test-quest-opening.ts`).
 
 ## Findings not yet acted on
 

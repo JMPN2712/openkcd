@@ -163,6 +163,9 @@ rawset(XGenAIModule, "SetBrainVariable", function(id, name, value)
   brains[id] = b
   b[name] = value
 end)
+-- entities by name (the level's entity index); the game runs, never the editor
+rawset(System, "GetEntityByName", function(name) local id = __kcd_entid(tostring(name)) if id == nil then return nil end return __kcd_entity(id, name) end)
+rawset(System, "IsEditor", function() return false end)
 for _, n in ipairs({ "Log", "LogAlways", "LogWarning", "Warning", "Error" }) do
   rawset(System, n, function(msg) __kcd_log(n, tostring(msg)) end)
 end
@@ -305,6 +308,9 @@ function __kcd_entity(id, name)
   return e
 end
 
+-- the player's entity, as the scripts name it (WUID -1 here)
+player = __kcd_entity(-1, "player")
+
 -- a dialogue sequence's script: g_varContext, dc (role name → entity) and Variables over the
 -- dialogue's locals and globals, as the engine sets them around the script; returns the variables,
 -- the price panel's eight shop_* globals (when all are set) and the participants' metarole changes
@@ -373,6 +379,7 @@ export class LuaHost {
     g.set("__kcd_read", (path: string) => host.readScript(path));
     g.set("__kcd_db", (what: string, table: string, i?: number) => host.db(what, table, i));
     g.set("__kcd_entname", (id: number) => host.entityName(Number(id)));
+    g.set("__kcd_entid", (name: string) => host.entityId(String(name)) ?? null);
     g.set("__kcd_entprops", (id: number) => { const p = host.entityProps(Number(id)); return p ? JSON.stringify(p) : null; });
     g.set("__kcd_loadxml", (def: string, data: string) => {
       const d = host.readScript(def), x = host.readScript(data);
@@ -388,6 +395,7 @@ export class LuaHost {
    */
   close(): void {
     this.entityName = () => "";
+    this.entityId = () => undefined;
     this.entityProps = () => null;
     this.scripts.clear();
     this.tables.clear();
@@ -412,6 +420,8 @@ export class LuaHost {
   private tables = new Map<string, DbTable>();
   /** entity names by id (the level's entity index), for XGenAIModule.GetEntityByWUID */
   entityName: (id: number) => string = () => "";
+  /** entity id by name, for System.GetEntityByName */
+  entityId: (name: string) => number | undefined = () => undefined;
   /** entity editor properties by id (entity.Properties) */
   entityProps: (id: number) => Record<string, unknown> | null = () => null;
 

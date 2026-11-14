@@ -23,6 +23,7 @@ import { setTypeDefs } from "./btRuntime.ts";
 import { TypeDefs } from "./typeDefs.ts";
 import type { LuaHost } from "./luaHost.ts";
 import { MailDb, PostOffice, typeMatches, type Mailbox, type Message } from "./mail.ts";
+import { areaHolds } from "./schedule.ts";
 
 /**
  * Smart-object classes whose helpers only make sense with the object turned 180° about Z.
@@ -77,6 +78,8 @@ export class AiDb {
   readonly soBrain = new Map<string, { file: string; tree: string }>();
   /** brain ids (for their mailboxes): smart-object types' and smart-area templates' */
   readonly soBrainId = new Map<string, string>();
+  /** smart-object type ids by name: a quest's entity (class QuestObject) has its quest's name */
+  readonly soByName = new Map<string, string>();
   readonly saBrainId = new Map<string, string>();
   /** per smart-area template: its brain's update tree (subbrain_smart_area), the area's own loop */
   readonly saBrain = new Map<string, { file: string; tree: string }>();
@@ -109,6 +112,7 @@ export class AiDb {
       const tree = r.brain_id ? trees.get(sub.get(r.brain_id) ?? "") : undefined;
       if (tree) this.soBrain.set(r.so_smart_object_id, tree);
       if (r.brain_id) this.soBrainId.set(r.so_smart_object_id, r.brain_id);
+      if (r.so_smart_object_name) this.soByName.set(r.so_smart_object_name.toLowerCase(), r.so_smart_object_id);
     }
     // smart-area template → brain → the subbrain with a smart-area update tree
     const saTrees = new Map((t.subSa ?? []).filter((r) => r.on_update_tree).map((r) => [r.subbrain_id, { file: r.file_name.toLowerCase().replaceAll("\\", "/"), tree: r.on_update_tree.toLowerCase() }]));
@@ -186,6 +190,25 @@ export interface WorldOptions {
   daycycleChange?: (npc: number, fields: Record<string, Value>) => void;
   /** a SetQuest / SetQuestObjective node (QuestSystem.apply in quests.ts); without it, they only succeed */
   quest?: (fn: string, quest: string, objective?: string) => boolean;
+  /**
+   * A quest predicate (IsQuestStarted, IsObjectiveCompleted, …: QuestSystem.call in quests.ts) for
+   * QuestCondition, QuestObjectiveCondition, GetQuest and QuestObjectiveGate; without it they read
+   * every quest as untouched.
+   */
+  questCall?: (fn: string, quest: string, objective?: string | number) => boolean;
+  /** EnableProfile switched a level profile (a named set of editor layers) on or off */
+  profile?: (name: string, on: boolean) => void;
+  /** a cutscene starts (PlaySequence, PlayVideo): play it and return its length in real seconds; without it, it is skipped */
+  cutscene?: (kind: "sequence" | "video", name: string) => number | void;
+  /** a world effect the trees ask for that the AI world doesn't hold itself (AddBuff, SetVisibility, SetOwner, …), with its evaluated properties */
+  effect?: (node: string, props: Record<string, Value>, npc: number) => void;
+  /** whether the player is in a conversation (DialogGate's Condition: InAny, InDialog, InInteractiveDialog) */
+  playerInDialog?: (condition: string) => boolean;
+  /**
+   * A message to the player (entity -1). The player's own brain (player.xml) doesn't run here, so
+   * by default such a message counts as taken and handled at once; return a value to answer it.
+   */
+  playerMessage?: (msg: Message) => Value | void;
 }
 
 /**
@@ -195,7 +218,8 @@ export interface WorldOptions {
 function linkData(data: string, scope: Scope, host: Host): Value {
   const d = data.trim();
   if (/^\w+\s*\(/.test(d)) return messageFields(d, scope, host);
-  return d.replace(/^'(.*)'$/, "$1");
+  // a single value, quoted or not, sometimes in brackets: QuestActor[('father')], QuestPlace['pub']
+  return d.replace(/^\(\s*(.*?)\s*\)$/, "$1").replace(/^'(.*)'$/, "$1");
 }
 
 /** A node's timeout in seconds: "-1" (none), "15", "60s #GT" (a note after #); -1 when unset. */
@@ -305,6 +329,8 @@ export class AiWorld {
 
   constructor(o: WorldOptions) {
     this.o = o;
+    // a quest's entity carries no smart-object type: it is the smart object of its own name
+    for (const e of o.ents.values()) if (e.cls === "QuestObject" && !e.soType) { const t = o.ai.soByName.get(e.name.toLowerCase()); if (t) e.soType = t; }
     for (const e of o.ents.values()) for (const l of e.links ?? []) {
       const list = this.parents.get(l.target) ?? [];
       list.push({ target: e.id, name: l.name });
@@ -331,6 +357,11 @@ export class AiWorld {
     this.runner = new Runner(host);
     if (o.lua) {
       o.lua.entityName = (id) => o.ents.get(id)?.name ?? "";
+      let byName: Map<string, number> | null = null;
+      o.lua.entityId = (name) => {
+        if (!byName) { byName = new Map(); for (const e of o.ents.values()) if (e.name && !byName.has(e.name)) byName.set(e.name, e.id); }
+        return byName.get(name);
+      };
       o.lua.entityProps = (id) => { const e = o.ents.get(id); return e ? entityProperties(e) : null; };
     }
   }
@@ -446,6 +477,77 @@ export class AiWorld {
   }
 
   /**
+   * Start a smart object's brain: its type's update tree, run by the object itself. A quest's
+   * entity runs its quest's tree this way (quest-system.md, "The quest's tree"): the subbrain is
+   * always active.
+   */
+  startObjectBrain(object: number): Task | null {
+    const e = this.o.ents.get(object);
+    const ref = e?.soType ? this.o.ai.soBrain.get(e.soType) : undefined;
+    const tree = ref && this.o.trees(ref.file, ref.tree);
+    if (!tree) return null;
+    this.initialised.add(object);
+    this.trace(`object ${e!.name}: brain → ${ref!.file}#${ref!.tree}`);
+    const { task } = this.runner.instantiate(tree, this.globals(object, { __object: { id: object } }));
+    return this.bind(object, task);
+  }
+
+  /** Level profiles switched on (EnableProfile). */
+  readonly profiles = new Set<string>();
+
+  /**
+   * A gate (QuestObjectiveGate, ProfileLoadedGate, DistanceGate, …): waits until `holds`, then
+   * runs its child. ASSUMPTION, as for IfGate (bt-rules.md gives RunLogic as what happens to a
+   * running child when its gate closes): Halt stops the child and waits again, KeepRunning lets
+   * it finish. A gate without a child succeeds once open.
+   */
+  private gate(n: BtNode, c: Context, holds: () => boolean): Task {
+    const kid = n.children.find((k) => k.tag !== "OutputBreakpoints");
+    const negate = truthyProp(this.prop(n, "NegateTo")) || truthyProp(this.prop(n, "Negation"));
+    let body: Task | null = null;
+    return {
+      tick: () => {
+        const open = holds() !== negate;
+        if (!body) {
+          if (!open) return "running";
+          if (!kid) return "success";
+          body = this.runner.make(kid, c.scope);
+        } else if (!open && this.prop(n, "RunLogic") === "Halt") {
+          body.abort(); body = null;
+          return "running";
+        }
+        const s = body.tick();
+        if (s !== "running") body = null;
+        return s;
+      },
+      abort: () => { body?.abort(); body = null; },
+    };
+  }
+
+  /** A condition node's Then or Else branch as a task; a missing branch succeeds, or fails when failSubtMissing is set. */
+  private branch(n: BtNode, c: Context, holds: () => boolean): Task {
+    let body: Task | null = null;
+    return {
+      tick: () => {
+        if (!body) {
+          const k = n.children.find((x) => x.tag === (holds() ? "Then" : "Else"))?.children.find((x) => x.tag !== "OutputBreakpoints");
+          if (!k) return truthyProp(this.prop(n, "failSubtMissing")) || truthyProp(this.prop(n, "FailSubtMissing")) ? "failure" : "success";
+          body = this.runner.make(k, c.scope);
+        }
+        const s = body.tick();
+        if (s !== "running") body = null;
+        return s;
+      },
+      abort: () => { body?.abort(); body = null; },
+    };
+  }
+
+  /** A quest node's quest: named, or the tree's own (an empty name, or $this.name). */
+  private questOf(n: BtNode, c: Context, prop: string): string {
+    return String(c.eval(prop, "") ?? "") || String(this.lookupValue(c.scope, "this.name") ?? "");
+  }
+
+  /**
    * An area brain's event tree, run at once (its nodes are instant: links and checks):
    * `request` when an NPC starts one of the area's behaviours (a shop links its merchant),
    * `enter` / `exit` when an NPC crosses its shape (a shop links the customer who walked in).
@@ -518,7 +620,8 @@ export class AiWorld {
 
   private edges(id: number, pruned: Set<string>): { to: number; tags: string[] }[] {
     const out: { to: number; tags: string[] }[] = [];
-    for (const l of this.o.ents.get(id)?.links ?? []) out.push({ to: l.target, tags: l.name.split(",").map((t) => t.replace(/\[.*$/, "").trim()).filter(Boolean) });
+    // tags are separated by commas outside the brackets (QuestLocation[ctx('a'),npc('b')],Lean)
+    for (const l of this.o.ents.get(id)?.links ?? []) out.push({ to: l.target, tags: l.name.split(/,(?![^[]*\])/).map((t) => t.replace(/\[.*$/, "").trim()).filter(Boolean) });
     // ASSUMPTION: reverse links are "parent" edges (the area containing an object, …)
     if (!pruned.has("parent")) for (const l of this.parents.get(id) ?? []) out.push({ to: l.target, tags: ["parent"] });
     return out.filter((e) => !e.tags.some((t) => pruned.has(t)));
@@ -633,6 +736,12 @@ export class AiWorld {
 
   /** Post a message; false when no mailbox of the receiver took it. */
   send(to: number, msg: Message): boolean {
+    if (to === -1) {
+      if (this.o.trace) this.trace(`npc ${msg.sender}: message ${msg.type} to the player ${JSON.stringify(msg.fields).slice(0, 200)}`);
+      const answer = this.o.playerMessage?.(msg);
+      msg.processed?.(answer === undefined ? undefined : answer);
+      return true;
+    }
     const ok = this.post.deliver(to, msg, this.mailboxesOf(to));
     if (this.o.trace) this.trace(`npc ${msg.sender}: message ${msg.type} to ${this.name(to)}${ok ? "" : " (dropped)"} ${JSON.stringify(msg.fields).slice(0, 300)}`);
     return ok;
@@ -736,10 +845,13 @@ export class AiWorld {
     const accept = (m: Message) => {
       if (declared && !declared.startsWith("_") && declared !== "common:wuid" && !typeMatches(m.type, declared)) return false;
       if (!hasCondition) return true;
-      const prev = c.scope.get(varName) ?? null;
+      // the condition reads the candidate as the variable, or as $__content
+      const prev = c.scope.get(varName) ?? null, content = c.scope.vars.get("__content");
       assignVar(c.scope, varName, struct(m));
+      c.scope.vars.set("__content", struct(m));
       const ok = truthyProp(c.eval("condition", true));
       assignVar(c.scope, varName, prev);
+      if (content === undefined) c.scope.vars.delete("__content"); else c.scope.vars.set("__content", content);
       return ok;
     };
     let msg: Message | null = null;
@@ -758,6 +870,7 @@ export class AiWorld {
           }
           until = null;
           msg = got;
+          this.trace(`npc ${this.current.npc}: ${n.tag} takes ${got.type} from ${String(c.eval("inbox", ""))}`);
           assignVar(c.scope, varName, struct(got));
           const si = this.prop(n, "senderInfo");
           if (si) assignVar(c.scope, si, { id: got.sender, name: this.o.ents.get(got.sender)?.name ?? "" });
@@ -820,6 +933,30 @@ export class AiWorld {
         const q = this.prop(f, "WUID");
         const w = wuid(q.startsWith("$") ? c.eval("WUID", null) : this.lookupValue(c.scope, q));
         ok = w !== null && w === subject;
+        break;
+      }
+      case "LinkDataFilter": {
+        // a link of this tag whose data satisfies the condition, read as $<tag>: a value
+        // (QuestActor[('father')]: $QuestActor == 'father') or a struct
+        // (QuestLocation[ctx('x'),npc('y')]: $QuestLocation.ctx == …)
+        const tag = evalIn("tag").toLowerCase(), cond = this.prop(f, "condition");
+        ok = false;
+        for (const l of this.o.ents.get(parent)?.links ?? []) {
+          if (l.target !== child || ok) continue;
+          for (const part of l.name.split(/,(?![^[]*\])/)) {
+            const m = /^\s*([\w:]+)\s*(?:\[(.*)\])?\s*$/.exec(part);
+            if (!m || m[1].toLowerCase() !== tag) continue;
+            const tmp = new Scope(c.scope);
+            tmp.vars.set(m[1], linkData(m[2] ?? "", tmp, this.runner.host));
+            if (!cond.trim() || truthyProp(evalExpression(cond, tmp, this.runner.host) ?? false)) { ok = true; break; }
+          }
+        }
+        break;
+      }
+      case "UnionOp": {
+        // any of its filters (each is tried, so each binds what it finds)
+        const kids = f.children.filter((k) => k.tag !== "OutputBreakpoints");
+        ok = kids.map((k) => this.filter(k, c, parent, child, tags)).some(Boolean);
         break;
       }
       case "OrByRandomOp": {
@@ -885,7 +1022,9 @@ export class AiWorld {
   private ref(n: BtNode, c: Context, prop: string): Value | undefined {
     const q = this.prop(n, prop).trim();
     if (!q) return undefined;
-    return q.startsWith("$") ? c.eval(prop, null) : this.lookupValue(c.scope, q);
+    if (q.startsWith("$")) return c.eval(prop, null);
+    // an indexed path (t_places[skalitz], t_actors['sarka']) is read as the expression it is
+    return q.includes("[") ? evalExpression("$" + q, c.scope, this.runner.host) : this.lookupValue(c.scope, q);
   }
 
   private name(id: number): string {
@@ -982,6 +1121,12 @@ export class AiWorld {
 
   // ---- host nodes ----
 
+  /** Whether an entity (the player: -1) stands inside an area's shape. */
+  private inArea(who: number | null, area: number | null): boolean {
+    const a = area === null ? undefined : this.o.ents.get(area), p = who === null ? null : this.pos(who);
+    return !!a && !!p && !!a.points && areaHolds(a, p);
+  }
+
   private pos(id: number): [number, number, number] | null {
     return this.positions.get(id) ?? this.o.ents.get(id)?.pos ?? null;
   }
@@ -1049,10 +1194,158 @@ export class AiWorld {
           // an empty quest name is the tree's own quest (research notes: the tree's entity name)
           const quest = String(c.eval(obj ? "quest" : "questName", "") ?? "") || String(this.lookupValue(c.scope, "this.name") ?? "");
           const objective = String(c.eval(obj ? "objective" : "objectiveName", "") ?? "");
-          this.o.quest?.(String(c.eval("function", "") ?? ""), quest, objective || undefined);
+          const fn = String(c.eval("function", "") ?? "");
+          const ok = this.o.quest?.(fn, quest, objective || undefined);
+          this.trace(`npc ${this.current.npc}: ${fn} ${quest}${objective ? `/${objective}` : ""}${ok === false ? " (refused)" : ""}`);
           // ASSUMPTION: the node succeeds whatever the quest system answered
           return "success";
         });
+      // quest reads (quest-system.md, "Behaviour-tree nodes"), answered by the quest state so that
+      // quests diet mode cuts read as cancelled
+      case "QuestCondition":
+        return this.branch(n, c, () => !!this.o.questCall?.(String(c.eval("function", "") ?? ""), this.questOf(n, c, "quest")));
+      case "QuestObjectiveCondition":
+        return this.branch(n, c, () => !!this.o.questCall?.(String(c.eval("function", "") ?? ""), this.questOf(n, c, "quest"), String(c.eval("objective", "") ?? "")));
+      case "GetQuest":
+        return leaf(() => {
+          // the objective by name ("obejctiveName" in the data) or, without one, by id (paramInt)
+          const name = String(c.eval("obejctiveName", "") ?? "") || String(c.eval("objectiveName", "") ?? "");
+          const objective = name || Number(c.eval("paramInt", 0) ?? 0);
+          setVar("variableOut", !!this.o.questCall?.(String(c.eval("function", "") ?? ""), this.questOf(n, c, "questName"), objective));
+          return "success";
+        });
+      case "QuestObjectiveGate": {
+        const fn = ({ Started: "IsObjectiveStarted", Completed: "IsObjectiveCompleted", Canceled: "IsObjectiveCanceled", AfterReset: "IsObjectiveUnchanged", StartedTrackingDone: "IsObjectiveTrackedCompleted" } as Record<string, string>)[this.prop(n, "objectiveState")];
+        if (!fn) return undefined;
+        return this.gate(n, c, () => !!this.o.questCall?.(fn, this.questOf(n, c, "questName"), String(c.eval("objectiveName", "") ?? "")));
+      }
+      // level profiles: named sets of editor layers a quest switches on and off. ASSUMPTIONs (no
+      // note yet): a profile is loaded as soon as it is enabled, and every profile can be loaded
+      case "EnableProfile":
+        return leaf(() => {
+          for (const [prop, on] of [["profileDisable", false], ["profileEnable", true]] as const) {
+            const name = String(c.eval(prop, "") ?? "").toLowerCase();
+            if (!name || this.profiles.has(name) === on) continue;
+            if (on) this.profiles.add(name); else this.profiles.delete(name);
+            this.trace(`npc ${this.current.npc}: profile ${name} ${on ? "on" : "off"}`);
+            this.o.profile?.(name, on);
+          }
+          return "success";
+        });
+      case "ProfileLoadedGate":
+        return this.gate(n, c, () => this.profiles.has(String(c.eval("LayerName", "") ?? "").toLowerCase()));
+      case "ProfileCanBeLoaded":
+        return this.branch(n, c, () => true);
+      // every DLC and all content is installed (the package holds the whole game)
+      case "DLCInstallGate": case "StreamingInstallGate":
+        return this.gate(n, c, () => true);
+      // ASSUMPTION: the game mode is Normal (no Hardcore mode yet)
+      case "GameModeCondition":
+        return this.branch(n, c, () => this.prop(n, "GameMode") === "Normal");
+      // sounds come with ambient audio
+      case "ExecuteSoundTrigger":
+        return leaf(() => "success");
+      // decorators around a child whose own effect isn't modelled yet (a screen fade, random
+      // events held back, a buff or a perceivable label for as long as the child runs)
+      case "FaderBarrier": case "SuspendRandomEvents": case "DisableStartSituations": case "DecoratorBuff": case "AddPerceivableState":
+        return kids[0] ? this.runner.make(kids[0], c.scope) : leaf(() => "success");
+      // a cutscene: a level sequence or a video. The host plays it and says how long it takes;
+      // without one it is skipped (ASSUMPTION: a skipped cutscene succeeds at once, as when the
+      // player skips it; what follows a cutscene is the quest's own cutscene_<alias> tree)
+      case "PlaySequence": case "PlayVideo": {
+        let until: number | null = null;
+        return {
+          tick: () => {
+            if (until === null) {
+              const name = String(c.eval(n.tag === "PlayVideo" ? "video_file" : "sequence", "") ?? "");
+              this.trace(`npc ${this.current.npc}: ${n.tag} ${name}`);
+              until = this.o.realTime() + (this.o.cutscene?.(n.tag === "PlayVideo" ? "video" : "sequence", name) ?? 0);
+            }
+            if (this.o.realTime() < until) return "running";
+            until = null;
+            return "success";
+          },
+          abort: () => { until = null; },
+        };
+      }
+      // world effects the simulation doesn't have yet (buffs, visibility, ownership, factions,
+      // weapons in hand, fast travel, time skips): reported to the host, and they succeed
+      case "AddBuff": case "RemoveBuffs": case "SetVisibility": case "SetOwner": case "SetTemporarySuperfaction": case "ClearTemporarySuperfaction":
+      case "EquipItem": case "DrawWeapon": case "InstantDrawWeapon": case "StopFastTravel": case "InterruptSkipTime": case "Intermission":
+      case "RemoveGameContext": case "AddGameContext": case "GameOver":
+        return leaf(() => {
+          this.o.effect?.(n.tag, Object.fromEntries(Object.keys(n.props).map((k) => [k, c.eval(k, null) ?? null])), this.current.npc);
+          return "success";
+        });
+      // the player is a man (Henry); A Woman's Lot plays Theresa (not modelled)
+      case "HasGenderCheck":
+        return this.branch(n, c, () => this.prop(n, "Gender") === "Male");
+      // ASSUMPTION: nobody is in combat or dead yet (combat comes with core gameplay)
+      case "HasActiveThreats":
+        return this.branch(n, c, () => false);
+      case "HasActiveThreatsGate": case "DeadUnconsciousGate":
+        return this.gate(n, c, () => false);
+      case "StateMachineGate":
+        if (this.prop(n, "State") !== "Dead") return undefined;
+        return this.gate(n, c, () => false);
+      // the player in a conversation (any, or one with choices): the host knows
+      case "DialogGate":
+        return this.gate(n, c, () => wuid(this.ref(n, c, "Who")) === -1 && !!this.o.playerInDialog?.(this.prop(n, "Condition")));
+      case "IsInsideArea":
+        return this.branch(n, c, () => this.inArea(wuid(this.ref(n, c, "Origin")), wuid(this.ref(n, c, "Area"))));
+      case "DistanceGate": {
+        // open while Origin is nearer the reference point than Low; once open it stays so until
+        // High is passed (ASSUMPTION: the two bounds are a hysteresis band; most gates give both
+        // the same value). No Origin: the entity running the tree
+        let near = false;
+        return this.gate(n, c, () => {
+          const a = this.prop(n, "Origin").trim() ? wuid(this.ref(n, c, "Origin")) : this.current.npc, b = wuid(this.ref(n, c, "ReferencePt"));
+          const p = a === null ? null : this.pos(a), q = b === null ? null : this.pos(b);
+          if (!p || !q) return false;
+          const d = Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+          near = d < Number(c.eval("Low", 0)) || (near && d <= Number(c.eval("High", 0)));
+          return near;
+        });
+      }
+      case "AreaPresence": {
+        // watches the NPCs (the player, mostly) against an area: its child runs when one comes in
+        // (TrackIn) or goes out (TrackOut); Once ends with the child's result, else it watches on.
+        // ASSUMPTION: where they stand when the watch starts isn't an event unless
+        // ReportInitialState says so
+        const kid = kids.find((k) => k.tag !== "OutputBreakpoints");
+        let was: Map<number, boolean> | null = null;
+        let body: Task | null = null;
+        return {
+          tick: () => {
+            if (!body) {
+              const raw = this.ref(n, c, "NPCs"), area = wuid(this.ref(n, c, "Area"));
+              const who = (Array.isArray(raw) ? raw : [raw]).map((v) => wuid(v ?? null)).filter((x): x is number => x !== null);
+              const first = !was;
+              was ??= new Map();
+              let fired = false;
+              for (const id of who) {
+                const now = this.inArea(id, area), before = was.get(id);
+                was.set(id, now);
+                if (first ? truthyProp(this.prop(n, "ReportInitialState")) && now : before !== now) {
+                  if ((now && truthyProp(this.prop(n, "TrackIn"))) || (!now && !first && truthyProp(this.prop(n, "TrackOut")))) {
+                    fired = true;
+                    const out = this.prop(n, "OutNPC");
+                    if (out) assignVar(c.scope, out, id);
+                  }
+                }
+              }
+              if (!fired) return "running";
+              if (!kid) return truthyProp(this.prop(n, "Once")) ? "success" : "running";
+              body = this.runner.make(kid, c.scope);
+            }
+            const s = body.tick();
+            if (s === "running") return s;
+            body = null;
+            return truthyProp(this.prop(n, "Once")) ? s : "running";
+          },
+          abort: () => { body?.abort(); body = null; was = null; },
+        };
+      }
       case "InstantSendMessageToNPC": case "SendMessageToNPC": case "InstantMultiSendMessageToNPC": case "MultiSendMessageToNPC":
         return this.sendNode(n, c);
       case "ProcessMessage": case "InstantProcessMessage": case "ReadMessage": case "InstantReadMessage":

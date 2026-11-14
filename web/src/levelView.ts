@@ -482,6 +482,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     lua.quests = quests;
     const w = await createAiWorld(vfs, {
       quest: (fn, q, o) => quests.apply(fn, q, o),
+      questCall: (fn, q, o) => !!quests.call(fn, o === undefined ? [q] : [q, o]),
       ents, lua, realTime: () => npcAi?.now ?? 0, worldTime: () => (npcAi?.now ?? 0) * 15, act: (a) => npcAi?.act(a) ?? 1,
       daycycleChange: (npc, f) => schedules.cycleOf(npc)?.change(f, minute),
     });

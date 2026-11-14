@@ -558,8 +558,9 @@ attempt.
 
 Dialogue, behaviour-tree `SetQuest` and `SetQuestObjective` nodes and Lua's
 `QuestSystem` table all change the same state, so diet mode's overlay covers
-each of them. Trees don't read it yet (`QuestObjectiveCondition`,
-`QuestObjectiveGate`, `GetQuest`), and the quests' own trees don't run yet.
+each of them. Trees read it through the same state (`QuestCondition`,
+`QuestObjectiveCondition`, `GetQuest`, `QuestObjectiveGate`), and the quests'
+own trees run (below).
 
 From the research note on the quest system. `QuestDb` reads the quest
 tables (objectives, transitions, journal subchapters and their start topics,
@@ -573,11 +574,85 @@ functions (`IsQuestStarted`, `IsObjectiveCompleted`, …) for dialogue and runs
 a sequence's quest changes when it plays.
 
 - **Not yet:** tracked assets, timers, paying rewards (announced as events),
-  saves on objectives, the tree nodes and Lua's `QuestSystem` table (they
-  will call `QuestSystem.apply`).
+  saves on objectives.
 - **Overlay.** Everything reads and changes quests through `QuestSystem`, so
   an overlay can make a quest read as cancelled and refuse every change to
   it without touching the stored state. Diet mode is one (below).
+
+### The quests' own trees (`web/src/questTrees.ts`)
+
+From the research note on the quest system ("The quest's tree") and the
+game's data.
+
+- **A quest is a smart object.** Each quest with a smart object has an
+  entity of its name in the level (class `QuestObject`; 145 in Rataje's
+  mission file) whose brain's always-active subbrain runs
+  `Libs/AI/quests/<file>.xml#onUpdate`. The entity's links name the quest's
+  cast and places: `QuestActor[('father')]`, `QuestPlace['pub']`,
+  `CutsceneSpot[npc('hans'),alias('…')]`. The shared tree
+  `final/questUtils.xml#loadAllReferences` reads them into `$t_actors` and
+  `$t_places`.
+- **`QuestBrains`** starts one tree per quest entity and turns the quest
+  state's announcements into messages to the entity's `QuestMailbox`:
+  `questModule:onQuest` (`State`), `questModule:onObjective` (`State`,
+  `ObjectiveId`, `ObjectiveName`), and `questModule:onNewGame` (`runStory`)
+  once for a new game. States travel as enum values (`QuestState.Active`,
+  `ObjectiveState.Started`), as the trees compare them.
+- **Diet mode.** A cut quest's tree does not run (`DietMode.treeRuns`), so
+  what only its tree spawns stays unspawned: 32 of the 39 cut quests have an
+  entity in the level.
+- **How a new game reaches the opening quest**, all from the data:
+  1. `q_master_main` (activated from the start) takes `onNewGame` and starts
+     its own objective named `q_skalitz`;
+  2. its message loop hears that objective start and activates the quest of
+     the same name;
+  3. `q_skalitz`'s tree hears `QuestState.Active`, loads its references and
+     sends itself a `cutscene` message (`stribrna_skalice`);
+  4. the cutscene automaton (`final/questUtils.xml#cutsceneAutomaton`, also
+     a tree) runs it. The data defines this one as mode `dummy`
+     (`Scripts/Script/cutscene.lua`): nothing plays;
+  5. the quest's `cutscene_stribrna_skalice` tree starts the quest and
+     hands Henry's mother, father, Kunesh and friends their parts as
+     daily-cycle patches (`motherPatch`, `fatherPatch`, …);
+  6. the automaton then waits for the player's conversation with his mother
+     to begin (`DialogGate`). The NPCs' quest patches and the dialogue they
+     ask for are the next step.
+- **Nodes added for it** (`btWorld.ts`), each from the notes or marked
+  ASSUMPTION in the code:
+  - quest reads: `QuestCondition`, `QuestObjectiveCondition` (Then / Else),
+    `GetQuest` (the objective by name, or by id in `paramInt`),
+    `QuestObjectiveGate`;
+  - gates share one rule, the one `IfGate` had: wait until the gate's
+    condition holds, run the child; `RunLogic` Halt stops the child when the
+    gate closes, KeepRunning lets it finish. `DistanceGate`, `DialogGate`,
+    `ProfileLoadedGate`, `DLCInstallGate` use it too;
+  - level profiles: `EnableProfile`, `ProfileLoadedGate`,
+    `ProfileCanBeLoaded` (see `docs/LEVELS.md`);
+  - `AreaPresence` (the player entering or leaving an area), `IsInsideArea`;
+  - graph searches: `LinkDataFilter` (a condition on a link's data),
+    `UnionOp`, origins written as indexed paths (`t_places[skalitz]`);
+  - messages: a reader's condition sees the candidate as `$__content`;
+    messages to the player count as handled at once (the player's own
+    brain, `player.xml`, does not run);
+  - cutscenes: `PlaySequence` and `PlayVideo` ask the host and are skipped
+    without one;
+  - world effects without a system yet (`AddBuff`, `SetVisibility`,
+    `SetOwner`, `EquipItem`, …) are reported to the host and succeed.
+- **`Switch`** with no branch to take succeeds when its conditions are
+  written not to fail (ASSUMPTION; a failure would end the quest trees'
+  message loops).
+- **Lua:** `System.GetEntityByName`, `System.IsEditor` (false), the global
+  `player`.
+- **Cost:** all 114 trees diet mode keeps tick in 0.8 ms on the development
+  machine (headless, ten ticks a second).
+- **Test:** `scripts/test-quest-opening.ts` runs steps 1–6 with every quest
+  tree and diet mode on; `scripts/test-diet.ts` has unit checks for the
+  quest nodes.
+- **Not yet:** the trees are not started in the world view (only the quest
+  reads are wired there); six trees end early (`q_plagueInMerhojed`,
+  `q_night_rescue`, `q_huntPtacek`, `q_questItems`, `q_millerDate`,
+  `q_devilplay`: not looked into); combat, perception and inventory nodes;
+  the calendar functions the scripts call (`forwardTime`).
 
 ### Diet mode (`web/src/diet.ts`, `web/src/dietConfig.ts`)
 
