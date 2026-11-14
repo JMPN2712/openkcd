@@ -345,6 +345,10 @@ follows them):
   --pick=3`: the conversation plays and ends, JS memory as on main).
 - 2026-11-14: CLAUDE.md's commit trailer names the model running the
   session, not a fixed model.
+- #43 (2026-11-14): NPC quest patches, conversations asked for by trees
+  (`dialogRequests.ts`, `RequestDialog` / `DoDialog`), tracked assets in
+  the quest state, `SmartAreaBehaviorTag`. A new game plays headless up to
+  the opening quest's errands (`test-quest-opening.ts`).
 
 ## Findings not yet acted on
 
