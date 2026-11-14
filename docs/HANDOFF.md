@@ -99,6 +99,58 @@ renders of game content. Remake them with
   report now has a "GPU frames" line per preset, which tells whether your
   1% lows are the GPU's slow frames, as they are headed here.
 
+## Diet mode (milestone 5)
+
+**State (after #30, #33 and #36).** The spec is the "Final decisions"
+section of the research repo's `notes/diet-analysis.md`.
+- **What diet mode is.** An overlay on the quest state (`web/src/quests.ts`,
+  `diet.ts`, `dietConfig.ts`) that cuts 39 side quests, with the Simon
+  route of `q_recruiters` rewired away.
+- **The setting.** "Diet mode" in the world view's toolbar, on by default
+  and read live.
+- **What the overlay covers.** Dialogue, behaviour-tree `SetQuest` and
+  `SetQuestObjective` nodes, and Lua's `QuestSystem`. They all change one
+  `QuestSystem`, so a cut quest refuses to start and reads as cancelled
+  everywhere.
+- **The tests.** `node scripts/test-diet.ts` runs the spec's five
+  reachability checks, the overlay's unit tests, and the tree and Lua
+  checks.
+  - The start scan reads only what is under a tree's `Root`: the research
+    notes confirm that `ForestContainer` groups never run.
+  - Check 4's static walk can't follow four quests even with diet off:
+    `q_returnToSkalitz`, `q_pribBattle`, `q_revenge` and `q_tutorials`.
+    They are reported, not failed.
+
+**Next steps, in order:**
+1. **Run the quests' own trees.** Each quest with a `smart_object` is an
+   NPC-like smart object whose trees live in `Libs/AI/quests/<file>.xml`,
+   with an always-active subbrain and the `QuestMailbox` messages
+   `onQuest`/`onObjective` (research `notes/quest-system.md`, "The quest's
+   tree").
+   - Create one AI-world entity per quest and send it the quest events
+     `QuestSystem` emits.
+   - Skip quests the overlay cuts (`DietMode.treeRuns`), so what only
+     their trees spawn stays unspawned.
+2. **Trees' quest reads, in `btWorld.ts`:** `QuestObjectiveCondition`
+   (if/else on a predicate), `GetQuest` (a predicate into a variable) and
+   `QuestObjectiveGate`. The gate is a passive barrier that passes while the
+   objective is in a given state, re-evaluates on each change of that
+   quest, and has `NegateTo`. Answer them through `QuestSystem.call` so
+   cut quests read as cancelled. Today they fall through to the
+   interpreter's default.
+3. **Shop grants, once a shop system exists.** Stock
+   `DietMode.shopGrants(shop)`: the agility book at 139 `aus_scribe`, the
+   saddle at 130 `neu_stables`, the trappings at 128 `aus_stables`, and
+   the Queen of Sheba's sword at 80 `sas_shop_swordsmith_new`. Item ids
+   are in `dietConfig.ts`.
+4. **A browser playthrough with diet mode on.** Start in Rataje, talk to
+   the givers of cut quests (their offers should be hidden) and to kept
+   ones, and toggle the setting off and on. Nobody has tried the toggle by
+   hand yet; only the headless tests have run. This leads into
+   milestone 7.
+5. **Quest save and load.** `QuestSystem.save` and `load` exist but nothing
+   calls them.
+
 ## Questions for a research session
 
 - **Durations without a unit** (bt-rules.md, Wait): 11 Waits write
@@ -197,6 +249,15 @@ renders of game content. Remake them with
   the world view keeps its objects (a bug live since #28: every object gone
   after reopening the view or going between Low and Medium). Potato
   benchmark's JS heap 3,133 → 1,801 MiB. `profile-browser.ts --reopen`.
+
+- #30 (2026-10-31): diet mode: the quest state (`quests.ts`), the diet
+  overlay and its setting, `test-diet.ts`.
+- #33 (2026-10-31): diet checks scan only tree Roots and skip
+  `ForestContainer` nodes, which never run.
+- #36 (2026-11-11): behaviour-tree `SetQuest` and `SetQuestObjective`
+  nodes and Lua's `QuestSystem` change the quest state through the
+  overlay. The world view waits for the quest tables before starting the
+  trees.
 
 ## Findings not yet acted on
 
