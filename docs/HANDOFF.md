@@ -15,6 +15,10 @@ runs WebGPU on the RTX 5070 Ti through Vulkan (`profile-browser.ts
 The NPC-messaging work that had been left uncommitted on this machine
 since 2026-10-25 is merged (#40).
 
+The session of 2026-11-14 ran on the MacBook Pro again (its checkout is
+current with `main`; both machines work). Numbers from it are M3 Pro
+numbers.
+
 **The user's priorities (2026-11-13), in order:**
 
 1. **The quest runtime**: quest nodes in the trees, Lua's quest API and
@@ -102,10 +106,6 @@ father given their quest patches. `node scripts/test-quest-opening.ts`.
 
 ## Waiting for me (the user)
 
-- **The commit trailer.** CLAUDE.md asks for
-  `Co-Authored-By: Claude Opus 5.5`; the sessions since 2026-11-13 run on a
-  different Claude model. The commits keep CLAUDE.md's line until you say
-  otherwise.
 - **The Mac benchmark rerun** asked for on 2026-10-31 no longer applies as
   written. If the 1% lows still matter on this PC, run the ⏱ Benchmark in
   your own Chrome here (X11, Vulkan): the report's "GPU frames" line tells
@@ -311,6 +311,11 @@ follows them):
   (`profiles.ts`), stand-ins for the cutscene automaton's nodes. A new
   game reaches the opening quest's first conversation headless
   (`test-quest-opening.ts`).
+  Merged on 2026-11-14 after the browser check on the Mac
+  (`profile-browser.ts --preset=potato --at=2524,546 --talk=rat_tailor
+  --pick=3`: the conversation plays and ends, JS memory as on main).
+- 2026-11-14: CLAUDE.md's commit trailer names the model running the
+  session, not a fixed model.
 
 ## Findings not yet acted on
 

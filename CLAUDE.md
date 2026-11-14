@@ -34,7 +34,10 @@ copy, the research repo) are in `CLAUDE.local.md`, which is not committed.
 - **sudo.** If a step needs sudo, stop and give the user the exact command.
 - **Pace.** Work in small steps, run what you build, and check in between
   phases.
-- **Commits** end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- **Commits** end with a `Co-Authored-By:` line naming the Claude model
+  actually running the session (the name the session reports, e.g.
+  `Co-Authored-By: Claude <model name> <noreply@anthropic.com>`), never a
+  model name copied from this file or from older commits.
 - **Pull requests, not pushes to `main`.** Work on a feature branch, run
   `tools/audit.sh origin/main`, open a PR with `gh`, and merge it yourself
   once the `checks` workflow passes, unless the user says otherwise. Merge
