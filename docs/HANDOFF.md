@@ -5,6 +5,53 @@ every merged pull request. The plan is in [ROADMAP.md](ROADMAP.md); this
 file is the short list of what is next, what waits for the user, and what
 waits for a research session.
 
+## Moving machines (2026-11-13)
+
+Development is moving off the MacBook Pro. **Everything is on GitHub:**
+main is at `5d6333c`, there are no open PRs, and no branch, stash or
+worktree holds unpushed commits (checked in this checkout, its three
+worktrees and `openkcd-research`).
+
+**Set up the new machine:**
+
+1. Clone `openkcd`, run `git config core.hooksPath .githooks`, set the
+   repo-local `user.email` to the GitHub no-reply address the history uses,
+   then `cd web && npm ci`.
+2. Write `CLAUDE.local.md` again (it is not committed). It names this
+   checkout, the game root (an installed copy, read-only), the GOG
+   installers, the research repo and the decompiler-output folder.
+   Repeat that folder's absolute path as a deny in
+   `.claude/settings.local.json`, as on the Mac.
+3. Clone `openkcd-research` beside it. The decompiler output never leaves
+   the research side; regenerate it there if needed.
+4. Check the harnesses find Chrome (`web/scripts/chrome.ts`; `CHROME=`
+   overrides). On Linux, see CLAUDE.md for the Vulkan and X11 flags.
+5. Smoke test: `npx tsc --noEmit`, `node scripts/test-release.ts`,
+   `node scripts/test-dialogue-camera.ts`, then a
+   `profile-browser.ts --preset=potato --bench=this` run. Label the new
+   machine's numbers in PERFORMANCE.md.
+
+**Not in git, on purpose:** the dialogue framing screenshots for #34 are
+renders of game content. Remake them with
+`profile-browser.ts --dialogue=ID --shot=… --screenshot=PREFIX` or
+`test-dialogue-camera.ts` if wanted; never commit them.
+
+**Next steps, in order:**
+
+1. The user's benchmark rerun (below, "Waiting for me"). If the GPU
+   frames line shows the slowest 1% at 2–3× the median with every pass
+   slower, the lows are the GPU's clocks; otherwise profile the CPU side
+   with `--headed --spikes`.
+2. Memory (priority 1): Potato's heap after the benchmark is about
+   1.8 GiB since #37, plus about 1.4 GiB on the GPU, so the tab is still
+   over the 2 GiB target. Next: the world store's fragmentation, then
+   16-bit indices and Henry's animation database (117 MiB).
+3. Walk CPU (priority 5): see "Findings not yet acted on".
+4. The rest of milestone 4. Facial animation and lip sync, and the
+   dialogue camera's open points, wait for the research questions below.
+5. The Vega 7 row in COMPATIBILITY.md: nothing since #24 is measured
+   there.
+
 ## Now (2026-10-30)
 
 - **Development moved to a MacBook Pro (Apple M3 Pro, 24 GB).** Chrome on
