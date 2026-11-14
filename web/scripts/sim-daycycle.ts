@@ -3,7 +3,10 @@
 // their behaviour trees run from their daily cycles (daycycle.ts) across an
 // activity change, and the script follows one NPC (the tailor by default), counts
 // how the trees start and end, and times the per-frame NPC work.
-// usage: node scripts/sim-daycycle.ts [--clock HH:MM] [--minutes N] [--max N] [--follow NAME] [--at x,y,z] [--root GAME_ROOT]
+// TRACE_AI=regex prints matching AI trace lines.
+// --track moves the centre with the followed NPC (as the view follows Henry); EVERY_MIN=1 prints
+// its position every game minute.
+// usage: node scripts/sim-daycycle.ts [--clock HH:MM] [--minutes N] [--max N] [--follow NAME] [--at x,y,z] [--track] [--root GAME_ROOT]
 
 import { openAsBlob } from "node:fs";
 import { readdir } from "node:fs/promises";
@@ -66,7 +69,9 @@ await lua.preload();
 await lua.preloadTables();
 let ai: NpcAi | null = null;
 let minute = 0;
-const world = await createAiWorld(vfs, { ents, lua, realTime: () => ai?.now ?? 0, worldTime: () => (ai?.now ?? 0) * 15, act: (a) => ai?.act(a) ?? 1, daycycleChange: (npc, f) => { console.log(`  daycycle:change for ${ents.get(npc)?.name}: ${JSON.stringify(f)}`); schedules.cycleOf(npc)?.change(f, minute); } });
+// TRACE_AI=regex prints the matching AI trace lines (messages, locks, calls, …)
+const traceRe = process.env.TRACE_AI ? new RegExp(process.env.TRACE_AI) : null;
+const world = await createAiWorld(vfs, { ents, lua, trace: traceRe ? (m) => { if (traceRe.test(m)) console.log(`    · ${m}`); } : undefined, realTime: () => ai?.now ?? 0, worldTime: () => (ai?.now ?? 0) * 15, act: (a) => ai?.act(a) ?? 1, daycycleChange: (npc, f) => { console.log(`  daycycle:change for ${ents.get(npc)?.name}: ${JSON.stringify(f)}`); schedules.cycleOf(npc)?.change(f, minute); } });
 lua.boot();
 schedules.setCycleData(await cycleData(vfs, world));
 ai = new NpcAi(world, { male: new AnimLibrary(vfs, "male"), female: new AnimLibrary(vfs, "female") });
@@ -130,6 +135,8 @@ for (let f = 0; f < frames; f++) {
     const p = npcWorld.drawn(fn.entity.id) ?? npcWorld.placeAt(fn.entity, fn.schedule, minute);
     const st = ai.state(fn.entity.id);
     const where = `${c?.activity?.handle} ${c?.target ? `${c.target.behaviour}` : "-"} | ${p.where} ${p.pose}${st?.fragment ? ` ${st.fragment}` : ""}`;
+    if (process.env.EVERY_MIN && Math.floor(minute) !== Math.floor(minute - (dt * 15) / 60)) console.log(`    ${clock()} drawn=${!!npcWorld.drawn(fn.entity.id)} ${p.pos.map((v) => v.toFixed(1)).join(",")}`);
+    if (process.argv.includes("--track")) at.splice(0, 3, ...p.pos);
     if (where !== lastWhere) console.log(`  ${clock()} ${follow}: ${where} at ${p.pos.map((v) => v.toFixed(1)).join(",")}`);
     lastWhere = where;
   }
@@ -154,4 +161,11 @@ if (process.argv.includes("--list")) {
 }
 const unsupported = [...world.unsupported].map(([k, v]) => `${k} (${v.size})`);
 if (unsupported.length) console.log(`unsupported: ${unsupported.join("; ")}`);
+// DUMP_BRAIN=entity name: that entity's brain variables at the end (t_garrisonWorkplaces, …)
+if (process.env.DUMP_BRAIN) {
+  const id = [...ents.values()].find((e) => e.name === process.env.DUMP_BRAIN)?.id;
+  const vars = id === undefined ? undefined : (world as unknown as { brains: Map<number, { vars: Map<string, unknown> }> }).brains.get(id)?.vars;
+  console.log(`  brain of ${process.env.DUMP_BRAIN} (#${id}): ${vars?.size ?? "none"} variables`);
+  for (const [k, v] of vars ?? []) if (k.startsWith("t_") && v !== null && v !== "" && v !== false && v !== 0) console.log(`  ${k} = ${JSON.stringify(v).slice(0, 1500)}`);
+}
 process.exit(0);

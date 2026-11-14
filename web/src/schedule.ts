@@ -92,6 +92,16 @@ function areaPolygon(area: EntityInfo): number[] {
   return out;
 }
 
+/**
+ * Whether a world point is inside an area: in its polygon, and between its base and its height
+ * (0: unbounded), with a metre below the base for feet on uneven ground.
+ */
+export function areaHolds(area: EntityInfo, p: [number, number, number]): boolean {
+  const h = area.areaHeight ?? 0;
+  if (h > 0 && (p[2] < area.pos[2] - 1 || p[2] > area.pos[2] + h)) return false;
+  return inside(areaPolygon(area), p[0], p[1]);
+}
+
 /** Whether a world x/y point lies inside an area's polygon. */
 export function areaContains(area: EntityInfo, x: number, y: number): boolean {
   return inside(areaPolygon(area), x, y);

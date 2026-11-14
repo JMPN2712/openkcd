@@ -92,10 +92,10 @@ check against the game later.
 - **Nodes:** Root (OnInit, then Behavior), Sequence, Selector, Parallel
   (successMode / failureMode Any|All), IfCondition, IfElseCondition,
   RandomGate, While (doFail, propagateChildFail), Loop (count, −1 =
-  forever), ForEach (array, startIndex, step, iterator, value, break), Wait
+  until a failure), ForEach (array, startIndex, step, iterator, value, break), Wait
   (duration, −1 = forever; variation; GameTime/WorldTime; doFail), Success,
   Fail, Expression, VarOperation (Reinit, PushBack, Copy, Size, Find,
-  Erase, Clear), IncludeTree, ExecuteLua and LuaWrapper (through the host).
+  Erase, Clear, Sort), IncludeTree, ExecuteLua and LuaWrapper (through the host).
 - **Variables:**
   - Typed initial values; struct types start as `{}` and are filled field
     by field.
@@ -204,13 +204,76 @@ the game's trees find the table, call its `use` behaviour, walk 2.9 m to
 its `entry` helper, hand over to `use_default` and play `Tailor`, then take
 the configured break at the area's bench.
 
-**Still missing:** messages between NPCs and areas (`ProcessMessage`,
-`ReadMessage`, `ClearInbox`: a garrison handing guards their posts, a
-shop's merchant meeting customers), area brains (`CitySA_onUpdate`),
-inventories and items, entity tags (`TagIt` runs its child), and the
-graph filters `AnyLinkFilter`, `ExistPath`, `OrByRandomOp`. A behaviour
-that returns early after reaching one of these is held (below), not
-treated as the game ending the activity.
+**Still missing:** inventories and items, entity tags (`TagIt` runs its
+child), the conversation between two NPCs (`RequestDialog`, `DialogGate`),
+and the graph filters `AnyLinkFilter`, `ExistPath`, `LinkDataFilter`. A
+behaviour that returns early after reaching one of these is held (below),
+not treated as the game ending the activity.
+
+### Messages and area brains (`web/src/mail.ts`; research notes, `npc-messaging.md`)
+
+- **Mailboxes** come from the AI tables (`mailbox`, `mailbox_filter`,
+  `brain2mailbox`, `sa_/so_behaviour_tag2mailbox`). An NPC has its
+  brain's mailboxes (its soul's `brain_id`) plus those of the area and
+  object behaviours it is running. A message goes to the first mailbox
+  whose filter type is the message's type or above it; a consuming
+  mailbox stops there, a continuing one passes it on. A full mailbox drops
+  its oldest message. Filter types are looked up in both
+  `TypeDefinitions.xml` and `typedefinitions_savegame.xml` (which declares
+  the engine's: `hearingInfo`, `npcDeath`, `daycycle:activity`, …);
+  without the second, eight mailboxes of every NPC took every message.
+- **Senders:** `InstantSendMessageToNPC` (also the variable form, which
+  sends a variable as a message of its declared type), the multi-target
+  ones, and `SendMessageToNPC`, which waits until the message is delivered
+  (`OnDelivery`) or handled (`OnProcessed`, with the reply in `answer`).
+  `daycycle:change` goes to the schedule store as before.
+- **Readers:** `ProcessMessage`, `ReadMessage` and their instant forms take
+  the oldest message whose type matches the declared type of their
+  `variable` and whose `condition` holds; `ClearInbox` drops messages.
+- **Area brains:** a smart area whose behaviours ran in the last minute
+  runs its template's update tree (`subbrain_smart_area`, e.g.
+  `sa_garrison.xml#onUpdate`), ticked like an NPC's. Its `onRequest` tree
+  runs when an NPC starts one of its behaviours, and `onEnter` / `onExit`
+  when an NPC crosses its shape (polygon and `Height`).
+- **Monologues:** each NPC whose brain has the switch subbrain
+  (`subbrain_switching`: `sb_switch.xml#switch`) runs that switch's
+  monologue server, `While(true) → sb_dialog.xml#monologRequest`, beside
+  its behaviour. `DoMonologue` waits 4 s for now; the voice comes with the
+  barks (ambient audio). The switch's other parts don't run yet.
+- **Results** (`scripts/test-messaging.ts`, Rattay):
+  - the Špalíček garrison builds its post list from its `guardPlace`
+    links; one of its two guards is sent `garrison:register` with the
+    post, walks there and plays `Guard`; the other idles (bench, table);
+  - at `sa_rat_shop2` the shop links its merchant (`onRequest`) and the
+    customer who walks in (`onEnter`). The customer sends
+    `shoppe:request`; the merchant cries her wares
+    (`MERCHANT_VYVOLAVANI`), then walks to her point nearest the customer,
+    faces him and asks for a conversation. That conversation between two
+    NPCs needs a research note, so she waits there and `shoppe:response`
+    isn't sent yet.
+- **Nodes added on the way:** `GetType` (entity kind codes: `NPC`,
+  `NPC_Female`, `TP`, `SO`, `SA`, `STASH`, `SLT`, `ITM`, `NHNPC`, `PP`,
+  `UNK`, from the entity class), `OrByRandomOp`, `Invertor`, `EvaLLyzer`
+  (each link tag a variable holding the link's data:
+  `guardPlace[guardPlace]`), `SoulIsAliveFilter`, `CheckWuidValid`,
+  `EnsureWuidValid`, `SetBehaviorState`, `SetBehaviorMaxInstances`,
+  `Add/RemoveAreaLabel`, `GetTime`, `LocalTagWrapper`, `Look`,
+  `VarOperation Sort`.
+- **Fixed on the way:** values back from Lua keep their arrays (an empty
+  array came back as `{}`); assigning into an unset variable by index
+  makes an array; a `Nodalyzer` fills a single variable with the first
+  result.
+- **ASSUMPTIONs** (for the research list):
+  - a finished `ContinuousSwitch` branch ends the switch unless finishing
+    it made another branch the one to run (the garrison's `Guard` clears
+    a flag in one branch so the job branch restarts);
+  - `IfGate` waits while its condition is false; `RunLogic=Halt` stops a
+    running child when it turns false (it used to fail at once, which
+    ended every guard post without frisking);
+  - a `ForEach` clears its `break` variable when it starts (the garrison
+    shares one `$break` between loops);
+  - mailboxes are offered in descending attachment priority;
+  - `Atomic` on `ProcessMessage` isn't modelled.
 
 **Loops** follow `bt-rules.md`: `Loop count=N` repeats until N successes
 and fails on the first failing child (−1, nearly every loop in the data,

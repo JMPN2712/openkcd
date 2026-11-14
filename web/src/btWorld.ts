@@ -16,12 +16,13 @@
 import { parseTreeFile, type BtNode, type BtTree, type BtVariable } from "./bt.ts";
 import type { Vfs } from "./vfs.ts";
 import { readTable } from "./tables.ts";
-import { MAX_NESTING, Runner, Scope, evalExpression, type Context, type Host, type Status, type Task, type Value } from "./btRuntime.ts";
+import { MAX_NESTING, Runner, Scope, evalExpression, initialValue, secondsOf, type Context, type Host, type Status, type Task, type Value } from "./btRuntime.ts";
 import { entityProperties, type EntityInfo } from "./levelEntities.ts";
 import type { Row } from "./tables.ts";
 import { setTypeDefs } from "./btRuntime.ts";
 import { TypeDefs } from "./typeDefs.ts";
 import type { LuaHost } from "./luaHost.ts";
+import { MailDb, PostOffice, typeMatches, type Mailbox, type Message } from "./mail.ts";
 
 /**
  * Smart-object classes whose helpers only make sense with the object turned 180° about Z.
@@ -62,6 +63,8 @@ export interface Behaviour {
   file: string;
   tree: string;
   maxInstances: number;
+  /** its behaviour tag id (sa_/so_behaviour_tag): the mailboxes an NPC running it has */
+  tagId?: string;
   /** so_behaviour_tag initial_state: 0 for nearly all (4,911 of 4,919); ASSUMPTION: others start closed to requests */
   initialState?: number;
 }
@@ -72,13 +75,22 @@ export class AiDb {
   readonly sa = new Map<string, Behaviour[]>();
   /** per smart-object type: its brain's update tree (subbrain_smart_object), whose OnInit sets the object up */
   readonly soBrain = new Map<string, { file: string; tree: string }>();
-  constructor(t: { soTag: Row[]; so2tag: Row[]; saTag: Row[]; sa2tag: Row[]; so?: Row[]; brain2sub?: Row[]; subSo?: Row[] }) {
+  /** brain ids (for their mailboxes): smart-object types' and smart-area templates' */
+  readonly soBrainId = new Map<string, string>();
+  readonly saBrainId = new Map<string, string>();
+  /** per smart-area template: its brain's update tree (subbrain_smart_area), the area's own loop */
+  readonly saBrain = new Map<string, { file: string; tree: string }>();
+  /** brains whose switching subbrain (subbrain_switching) is the NPC switch (final/sb_switch.xml#switch) */
+  readonly switchBrains = new Set<string>();
+  /** per smart-area template: the trees its brain runs when an NPC enters, leaves or starts one of its behaviours */
+  readonly saEvents = new Map<string, { file: string; enter: string; exit: string; request: string }>();
+  constructor(t: { soTag: Row[]; so2tag: Row[]; saTag: Row[]; sa2tag: Row[]; so?: Row[]; brain2sub?: Row[]; subSo?: Row[]; sa?: Row[]; subSa?: Row[]; subBt?: Row[] }) {
     const soTags = new Map(t.soTag.map((r) => [r.so_behaviour_tag_id, r]));
     for (const r of t.so2tag) {
       const tag = soTags.get(r.so_behaviour_tag_id);
       if (!tag) continue;
       const list = this.so.get(r.so_smart_object_id) ?? [];
-      list.push({ name: tag.so_behaviour_tag_name, file: tag.tree_file.toLowerCase().replaceAll("\\", "/"), tree: tag.tree_name.toLowerCase(), maxInstances: Number(tag.max_instances || -1), initialState: Number(tag.initial_state || 0) });
+      list.push({ name: tag.so_behaviour_tag_name, tagId: tag.so_behaviour_tag_id, file: tag.tree_file.toLowerCase().replaceAll("\\", "/"), tree: tag.tree_name.toLowerCase(), maxInstances: Number(tag.max_instances || -1), initialState: Number(tag.initial_state || 0) });
       this.so.set(r.so_smart_object_id, list);
     }
     const saTags = new Map(t.saTag.map((r) => [r.sa_behaviour_tag_id, r]));
@@ -86,7 +98,7 @@ export class AiDb {
       const tag = saTags.get(r.sa_behaviour_tag_id);
       if (!tag) continue;
       const list = this.sa.get(r.sa_smart_area_id) ?? [];
-      list.push({ name: tag.sa_behaviour_tag_name, file: tag.tree_file.toLowerCase().replaceAll("\\", "/"), tree: tag.tree_name.toLowerCase(), maxInstances: -1 });
+      list.push({ name: tag.sa_behaviour_tag_name, tagId: tag.sa_behaviour_tag_id, file: tag.tree_file.toLowerCase().replaceAll("\\", "/"), tree: tag.tree_name.toLowerCase(), maxInstances: -1 });
       this.sa.set(r.sa_smart_area_id, list);
     }
     // smart-object type → brain → its (first) subbrain → the smart-object subbrain's update tree
@@ -96,6 +108,22 @@ export class AiDb {
     for (const r of t.so ?? []) {
       const tree = r.brain_id ? trees.get(sub.get(r.brain_id) ?? "") : undefined;
       if (tree) this.soBrain.set(r.so_smart_object_id, tree);
+      if (r.brain_id) this.soBrainId.set(r.so_smart_object_id, r.brain_id);
+    }
+    // smart-area template → brain → the subbrain with a smart-area update tree
+    const saTrees = new Map((t.subSa ?? []).filter((r) => r.on_update_tree).map((r) => [r.subbrain_id, { file: r.file_name.toLowerCase().replaceAll("\\", "/"), tree: r.on_update_tree.toLowerCase() }]));
+    const saEvents = new Map((t.subSa ?? []).filter((r) => r.on_enter_tree || r.on_exit_tree || r.on_request_tree).map((r) => [r.subbrain_id, { file: r.file_name.toLowerCase().replaceAll("\\", "/"), enter: (r.on_enter_tree ?? "").toLowerCase(), exit: (r.on_exit_tree ?? "").toLowerCase(), request: (r.on_request_tree ?? "").toLowerCase() }]));
+    const subs = new Map<string, string[]>();
+    for (const r of t.brain2sub ?? []) subs.set(r.brain_id, [...(subs.get(r.brain_id) ?? []), r.subbrain_id]);
+    const switches = new Set((t.subBt ?? []).filter((r) => r.file_name?.toLowerCase().replaceAll("\\", "/") === "final/sb_switch.xml" && r.tree_name?.toLowerCase() === "switch").map((r) => r.subbrain_id));
+    for (const r of t.brain2sub ?? []) if (switches.has(r.subbrain_id)) this.switchBrains.add(r.brain_id);
+    for (const r of t.sa ?? []) {
+      if (!r.brain_id) continue;
+      this.saBrainId.set(r.sa_smart_area_id, r.brain_id);
+      const tree = (subs.get(r.brain_id) ?? []).map((x) => saTrees.get(x)).find(Boolean);
+      if (tree) this.saBrain.set(r.sa_smart_area_id, tree);
+      const ev = (subs.get(r.brain_id) ?? []).map((x) => saEvents.get(x)).find(Boolean);
+      if (ev) this.saEvents.set(r.sa_smart_area_id, ev);
     }
   }
   private offered = new Map<string, Set<string>>();
@@ -110,7 +138,7 @@ export class AiDb {
     }
     return o;
   }
-  static TABLES = { soTag: "ai/so_behaviour_tag", so2tag: "ai/so_smart_object2so_behaviour_tag", saTag: "ai/sa_behaviour_tag", sa2tag: "ai/sa_smart_area2sa_behaviour_tag", so: "ai/so_smart_object", brain2sub: "ai/brain2subbrain", subSo: "ai/subbrain_smart_object" } as const;
+  static TABLES = { soTag: "ai/so_behaviour_tag", so2tag: "ai/so_smart_object2so_behaviour_tag", saTag: "ai/sa_behaviour_tag", sa2tag: "ai/sa_smart_area2sa_behaviour_tag", so: "ai/so_smart_object", brain2sub: "ai/brain2subbrain", subSo: "ai/subbrain_smart_object", sa: "ai/sa_smart_area", subSa: "ai/subbrain_smart_area", subBt: "ai/subbrain_switching" } as const;
 }
 
 /** Something a tree asks the world to do. */
@@ -145,10 +173,35 @@ export interface WorldOptions {
   brainVars?: BtVariable[];
   /** soul names of shopkeepers (shop/shopkeeper): their work opens the shop (MERCHANT, REPAIRMAN) */
   shopkeepers?: Set<string>;
+  /** mailboxes (npc-messaging.md); without them messages other than daycycle:change are dropped */
+  mail?: MailDb;
+  /** brain id by soul name (rpg/soul): an NPC's own mailboxes */
+  soulBrains?: Map<string, string>;
+  /**
+   * DoMonologue (a merchant crying wares, a bark): play it and return its length in real seconds.
+   * Without it a monologue takes MONOLOGUE_SECONDS, silently.
+   */
+  monologue?: (npc: number, m: { topicId: string; label: string; metaroles: string }) => number | void;
   /** a `daycycle:change` message to an NPC (its fields: add, handle, name, priority, …), for its daily cycle */
   daycycleChange?: (npc: number, fields: Record<string, Value>) => void;
   /** a SetQuest / SetQuestObjective node (QuestSystem.apply in quests.ts); without it, they only succeed */
   quest?: (fn: string, quest: string, objective?: string) => boolean;
+}
+
+/**
+ * A link's data as the trees read it: "field(value), …" as a struct, anything else as a string
+ * (guardPlace[guardPlace] → "guardPlace").
+ */
+function linkData(data: string, scope: Scope, host: Host): Value {
+  const d = data.trim();
+  if (/^\w+\s*\(/.test(d)) return messageFields(d, scope, host);
+  return d.replace(/^'(.*)'$/, "$1");
+}
+
+/** A node's timeout in seconds: "-1" (none), "15", "60s #GT" (a note after #); -1 when unset. */
+function timeoutOf(text: string): number {
+  const t = text.replace(/#.*$/, "").trim();
+  return t === "" ? -1 : secondsOf(t);
 }
 
 /** A message's `values` ("add(true), handle('x'), priority(30)") as fields, each value evaluated. */
@@ -235,6 +288,12 @@ export class AiWorld {
    */
   private semaphores = new Map<string, CountedLock>();
   private locks = new Map<string, boolean>();
+  /** smart areas' labels (AddAreaLabel) */
+  readonly labels = new Map<number, Set<string>>();
+  /** queued messages (mail.ts) */
+  readonly post = new PostOffice();
+  /** per entity: the behaviour tags it is running (counted), for their mailboxes */
+  private activeTags = new Map<number, Map<string, number>>();
   private locked(key: string): boolean {
     return this.locks.get(key) ?? true;
   }
@@ -362,9 +421,81 @@ export class AiWorld {
     const tree = b && this.o.trees(b.file, b.tree);
     if (!tree) { this.trace(`no area behaviour "${name}" for ${a?.name ?? area}`); return null; }
     this.trace(`npc ${npc}: area ${a!.name} behaviour "${b!.name}" → ${b!.file}#${b!.tree}`);
+    this.areasInUse.set(area, this.o.realTime());
+    this.areaEvent(area, "request", npc, b!.name);
     this.gaps.delete(npc);
     const { task } = this.runner.instantiate(tree, this.globals(npc, { __area: { id: area }, __behaviorName: b!.name }));
-    return this.bind(npc, task);
+    return this.bind(npc, this.tagged(npc, b!.tagId, task));
+  }
+
+  /**
+   * Smart areas whose behaviours ran recently (started or called), by AI real time: their brains
+   * (the area's own update tree: a garrison handing out posts, a shop's opening) run meanwhile.
+   */
+  readonly areasInUse = new Map<number, number>();
+
+  /** Start a smart area's brain: its template's update tree, run by the area itself. */
+  startAreaBrain(area: number): Task | null {
+    const a = this.o.ents.get(area);
+    const ref = a?.saTemplate ? this.o.ai.saBrain.get(a.saTemplate) : undefined;
+    const tree = ref && this.o.trees(ref.file, ref.tree);
+    if (!tree) return null;
+    this.trace(`area ${a!.name}: brain → ${ref!.file}#${ref!.tree}`);
+    const { task } = this.runner.instantiate(tree, this.globals(area, { __area: { id: area } }));
+    return this.bind(area, task);
+  }
+
+  /**
+   * An area brain's event tree, run at once (its nodes are instant: links and checks):
+   * `request` when an NPC starts one of the area's behaviours (a shop links its merchant),
+   * `enter` / `exit` when an NPC crosses its shape (a shop links the customer who walked in).
+   * __bodyInfo is the NPC.
+   */
+  areaEvent(area: number, kind: "enter" | "exit" | "request", npc: number, behaviour = ""): void {
+    const a = this.o.ents.get(area);
+    const ev = a?.saTemplate ? this.o.ai.saEvents.get(a.saTemplate) : undefined;
+    const tree = ev && ev[kind] ? this.o.trees(ev.file, ev[kind]) : undefined;
+    if (!tree) return;
+    const { task } = this.runner.instantiate(tree, this.globals(area, { __area: { id: area }, __bodyInfo: { id: npc }, __behaviorName: behaviour }));
+    const prev = this.current;
+    this.current = { npc: area };
+    try {
+      for (let i = 0; i < 32 && task.tick() === "running"; i++);
+    } finally { this.current = prev; }
+  }
+
+  /** Whether an area's brain has enter / exit trees (NpcAi tracks who is inside only for those). */
+  hasAreaEvents(area: number): boolean {
+    const t = this.o.ents.get(area)?.saTemplate;
+    const ev = t ? this.o.ai.saEvents.get(t) : undefined;
+    return !!ev && !!(ev.enter || ev.exit);
+  }
+
+  /** An area's brain stopped (no one uses it): its mail goes. */
+  stopAreaBrain(area: number): void {
+    this.post.forget(area);
+  }
+
+  /**
+   * The part of an NPC's switch subbrain (final/sb_switch.xml#switch) that serves its monologue
+   * requests: While(true) over sb_dialog.xml#monologRequest, as in the switch (a merchant's
+   * dialog:monologRequest to itself waits on it). The switch's other parts (perception, combat,
+   * greetings, …) don't run yet. Null for NPCs whose brain has no switch.
+   */
+  startMonologServer(npc: number): Task | null {
+    const brain = this.o.soulBrains?.get(this.o.ents.get(npc)?.name ?? "");
+    const tree = brain && this.o.ai.switchBrains.has(brain) ? this.o.trees("final/sb_dialog.xml", "monologrequest") : undefined;
+    if (!tree) return null;
+    let inner: Task | null = null;
+    return this.bind(npc, this.tagged(npc, undefined, {
+      tick: () => {
+        inner ??= this.runner.instantiate(tree, this.globals(npc)).task;
+        const s = inner.tick();
+        if (s !== "running") inner = null;
+        return "running";
+      },
+      abort: () => { inner?.abort(); inner = null; },
+    }));
   }
 
   /** Wrap a task so world nodes know which NPC is ticking. */
@@ -400,7 +531,8 @@ export class AiWorld {
     const depth = Number(c.eval("depth", 1));
     const pruned = new Set(String(c.eval("EdgePruning", "")).split(",").map((s) => s.trim()).filter(Boolean));
     const or = String(c.eval("SetOperationChoice", "")).startsWith("Union");
-    const filters = n.children.filter((k) => k.tag !== "Nodalyzer" && k.tag !== "Datalyzer");
+    const filters = n.children.filter((k) => k.tag !== "Nodalyzer" && k.tag !== "Datalyzer" && k.tag !== "EvaLLyzer");
+    const evalyzers = n.children.filter((k) => k.tag === "EvaLLyzer");
     const nodalyzers = n.children.filter((k) => k.tag === "Nodalyzer");
     const datalyzers = n.children.filter((k) => k.tag === "Datalyzer");
     const found: { parent: number; child: number }[] = [];
@@ -440,9 +572,34 @@ export class AiWorld {
     for (const z of nodalyzers) {
       const childVar = this.prop(z, "Child"), all = this.prop(z, "Quantifiers") !== "Exists";
       if (childVar) {
+        // an array variable takes every result; a single one the first (Guard's tempEntity under ForAll)
         const cur = c.scope.get(childVar);
-        c.scope.set(childVar, all || Array.isArray(cur) ? found.map((f) => f.child) : (found[0]?.child ?? null));
+        let form = "";
+        for (let sc: Scope | null = c.scope; sc && !form; sc = sc.parent) form = sc.decls.get(childVar)?.form ?? "";
+        const many = form ? form !== "single" : all || Array.isArray(cur);
+        c.scope.set(childVar, many ? found.map((f) => f.child) : (found[0]?.child ?? null));
       }
+    }
+    // EvaLLyzer: its expression for each result, with $__index, $__from, $__to and each link tag
+    // between them holding the link's data (preprocessWorkplaces: "$workplaces[$__index].behavior =
+    // $guardPlace" over a garrison's guardPlace[guardPlace] links)
+    for (const z of evalyzers) {
+      const expr = this.prop(z, "Expresion");
+      const list = this.prop(z, "Quantifiers") === "Exists" ? found.slice(0, 1) : found;
+      list.forEach((f, i) => {
+        const tmp = new Scope(c.scope);
+        tmp.vars.set("__index", i);
+        tmp.vars.set("__from", f.parent);
+        tmp.vars.set("__to", f.child);
+        for (const l of this.o.ents.get(f.parent)?.links ?? []) {
+          if (l.target !== f.child) continue;
+          for (const part of l.name.split(/,(?![^[]*\])/)) {
+            const m = /^\s*([\w:]+)\s*(?:\[(.*)\])?\s*$/.exec(part);
+            if (m) tmp.vars.set(m[1], linkData(m[2] ?? "", tmp, this.runner.host));
+          }
+        }
+        evalExpression(expr, tmp, this.runner.host);
+      });
     }
     // Datalyzer: the found children linked from their parent by link Tag, and that link's data
     // (the bracketed part: "animalSpawn[amount(2),class(Boar)]" → "amount(2),class(Boar)")
@@ -462,6 +619,175 @@ export class AiWorld {
     }
     this.trace(`npc ${this.current.npc}: GraphSearch from ${this.name(origin)}${found.length ? "" : ` [${filters.map((f) => `${f.tag}(${Object.entries(f.props).filter(([k]) => /tag|categor|Behavior|Class|Expres/i.test(k)).map(([k, v]) => `${k}=${v}`).join(" ")})`).join(", ")}]`} → [${found.map((f) => this.name(f.child)).join(", ")}]`);
     return found.length || !truthyProp(c.eval("failOnEmpty", true)) ? "success" : "failure";
+  }
+
+  // ---- messages (npc-messaging.md) ----
+
+  /** The mailboxes an entity has now: its brain's and its running behaviours'. */
+  private mailboxesOf(id: number): Mailbox[] {
+    const e = this.o.ents.get(id);
+    if (!e || !this.o.mail) return [];
+    const brain = e.saTemplate ? this.o.ai.saBrainId.get(e.saTemplate) : e.soType ? this.o.ai.soBrainId.get(e.soType) : this.o.soulBrains?.get(e.name);
+    return this.o.mail.mailboxes(brain, this.activeTags.get(id)?.keys() ?? []);
+  }
+
+  /** Post a message; false when no mailbox of the receiver took it. */
+  send(to: number, msg: Message): boolean {
+    const ok = this.post.deliver(to, msg, this.mailboxesOf(to));
+    if (this.o.trace) this.trace(`npc ${msg.sender}: message ${msg.type} to ${this.name(to)}${ok ? "" : " (dropped)"} ${JSON.stringify(msg.fields).slice(0, 300)}`);
+    return ok;
+  }
+
+  /** A task that holds a behaviour tag (its mailboxes) on `npc` while it runs. */
+  private tagged(npc: number, tagId: string | undefined, task: Task): Task {
+    if (!tagId) return task;
+    const tags = this.activeTags.get(npc) ?? new Map<string, number>();
+    this.activeTags.set(npc, tags);
+    tags.set(tagId, (tags.get(tagId) ?? 0) + 1);
+    let held = true;
+    const drop = () => {
+      if (!held) return;
+      held = false;
+      const k = (tags.get(tagId) ?? 1) - 1;
+      if (k > 0) tags.set(tagId, k); else tags.delete(tagId);
+    };
+    return { tick: () => { const s = task.tick(); if (s !== "running") drop(); return s; }, abort: () => { task.abort(); drop(); } };
+  }
+
+  /**
+   * The senders: Instant ones post and succeed; SendMessageToNPC waits until the message is in a
+   * mailbox (OnDelivery) or a handler has finished with it (OnProcessed), its reply in `answer`.
+   * ASSUMPTIONs (the note: "presumably"): a waiting send fails when nothing took the message or
+   * its timeout runs out; a multi send's modes count deliveries.
+   */
+  private sendNode(n: BtNode, c: Context): Task {
+    const multi = n.tag.includes("Multi"), instant = n.tag.startsWith("Instant");
+    let waiting: { done: boolean; answer: Value | undefined; until: number } | null = null;
+    const clock = () => (this.prop(n, "timeType") === "WorldTime" ? this.o.worldTime() : this.o.realTime());
+    const post = (): boolean[] => {
+      // the message is given by type and values, or as a variable (its declared type and its value:
+      // sa_city.xml#dressUp sends $override to itself)
+      const varName = this.prop(n, "variable");
+      let type = this.prop(n, "type"), fields = messageFields(this.prop(n, "values"), c.scope, this.runner.host);
+      if (varName && !type) {
+        for (let sc: Scope | null = c.scope; sc && !type; sc = sc.parent) type = sc.decls.get(varName)?.type ?? "";
+        const v = c.scope.get(varName);
+        fields = v && typeof v === "object" && !Array.isArray(v) ? { ...(v as Record<string, Value>) } : {};
+      }
+      const raw = multi ? this.ref(n, c, "targets") : this.ref(n, c, "target");
+      const targets = (multi && Array.isArray(raw) ? raw : [raw]).map((v) => wuid(v ?? null)).filter((x): x is number => x !== null);
+      // patches for the NPC's daily cycle (daily-cycle.md section 4) go to the schedule store
+      if (type === "daycycle:change") {
+        for (const to of targets) this.o.daycycleChange?.(to, fields);
+        this.trace(`npc ${this.current.npc}: message ${type} to ${targets.map((t) => this.name(t)).join(", ")}`);
+        return targets.map(() => true);
+      }
+      return targets.map((to) => {
+        const msg: Message = { type, fields, sender: this.current.npc };
+        if (waiting) msg.processed = (answer) => { if (waiting) { waiting.done = true; waiting.answer = answer; } };
+        return this.send(to, msg);
+      });
+    };
+    const combine = (got: boolean[]) => {
+      if (!multi) return got[0] ?? false;
+      const any = got.some(Boolean), all = got.length > 0 && got.every(Boolean);
+      if ((this.prop(n, "failureMode") === "All" ? !any : !all) && this.prop(n, "failureMode")) return false;
+      return this.prop(n, "successMode") === "All" ? all : any;
+    };
+    if (instant) return { tick: () => { const got = post(); return !multi || combine(got) ? "success" : "failure"; }, abort: () => {} };
+    return {
+      tick: () => {
+        if (!waiting) {
+          const t = timeoutOf(this.prop(n, "timeout"));
+          waiting = { done: false, answer: undefined, until: t < 0 ? Infinity : clock() + t };
+          if (!combine(post())) { waiting = null; return "failure"; }
+          if (this.prop(n, "timeoutType") === "OnDelivery") { waiting = null; return "success"; }
+        }
+        if (waiting.done) {
+          const answer = this.prop(n, "answer");
+          if (answer && waiting.answer !== undefined) assignVar(c.scope, answer, waiting.answer);
+          waiting = null;
+          return "success";
+        }
+        if (clock() >= waiting.until) { waiting = null; return "failure"; }
+        return "running";
+      },
+      abort: () => { waiting = null; },
+    };
+  }
+
+  /**
+   * The readers: take the oldest message in the mailbox whose type matches the declared type of
+   * `variable` and whose `condition` holds, copy it there (the sender into `senderInfo`); a
+   * ProcessMessage runs its handler and ends with its result, replying with `answerVar`'s value.
+   * Instant readers fail when nothing waits; the others fail when `timeout` runs out.
+   * ASSUMPTION: Atomic isn't modelled (handlers already run one tree tick at a time).
+   */
+  private readNode(n: BtNode, c: Context): Task {
+    const handles = n.tag.endsWith("ProcessMessage"), instant = n.tag.startsWith("Instant");
+    const varName = this.prop(n, "variable");
+    let declared = "";
+    for (let s: Scope | null = c.scope; s; s = s.parent) { const d = s.decls.get(varName); if (d) { declared = d.type; break; } }
+    const struct = (m: Message): Value => {
+      const base = declared ? initialValue({ name: varName, type: declared, values: "", form: "single" } as BtVariable) : null;
+      return { ...(base && typeof base === "object" && !Array.isArray(base) ? base : {}), ...m.fields };
+    };
+    const hasCondition = !!this.prop(n, "condition").trim() && this.prop(n, "condition").trim() !== "true";
+    const accept = (m: Message) => {
+      if (declared && !declared.startsWith("_") && declared !== "common:wuid" && !typeMatches(m.type, declared)) return false;
+      if (!hasCondition) return true;
+      const prev = c.scope.get(varName) ?? null;
+      assignVar(c.scope, varName, struct(m));
+      const ok = truthyProp(c.eval("condition", true));
+      assignVar(c.scope, varName, prev);
+      return ok;
+    };
+    let msg: Message | null = null;
+    let body: Task | null = null;
+    let until: number | null = null;
+    const clock = () => (this.prop(n, "timeType") === "WorldTime" ? this.o.worldTime() : this.o.realTime());
+    return {
+      tick: () => {
+        if (!msg) {
+          const got = this.post.take(this.current.npc, String(c.eval("inbox", "")), accept);
+          if (!got) {
+            if (instant) return "failure";
+            if (until === null) { const t = timeoutOf(this.prop(n, "timeout")); until = t < 0 ? Infinity : clock() + t; }
+            if (clock() >= until) { until = null; return "failure"; }
+            return "running";
+          }
+          until = null;
+          msg = got;
+          assignVar(c.scope, varName, struct(got));
+          const si = this.prop(n, "senderInfo");
+          if (si) assignVar(c.scope, si, { id: got.sender, name: this.o.ents.get(got.sender)?.name ?? "" });
+          if (!handles) { msg = null; got.processed?.(undefined); return "success"; }
+          const kid = n.children.find((k) => k.tag !== "OutputBreakpoints");
+          body = kid ? this.runner.make(kid, c.scope) : null;
+        }
+        const s = body ? body.tick() : "success";
+        if (s === "running") return s;
+        const answer = this.prop(n, "answerVar");
+        msg.processed?.(answer ? c.scope.get(answer) ?? null : undefined);
+        msg = null; body = null;
+        return s;
+      },
+      abort: () => { body?.abort(); body = null; msg = null; until = null; },
+    };
+  }
+
+  /**
+   * GetType's code for an entity, from its class: the codes are the ones the trees compare
+   * against (NPC 28 times, STASH 11, SO 7, TP 6, NHNPC 6, SA 5, SLT 4, ITM 2, NPC_Female 2, PP, UNK).
+   * ASSUMPTIONs: beds and other smart-object classes are SO, animals NHNPC; disguises
+   * (ShowTrueIdentity) aren't modelled.
+   */
+  private entityType(id: number, playerAsNpc: boolean): string {
+    if (id === -1) return playerAsNpc ? "NPC" : "PP";
+    const e = this.o.ents.get(id);
+    if (!e) return "UNK";
+    const byClass: Record<string, string> = { NPC: "NPC", NPC_Female: "NPC_Female", TagPoint: "TP", SmartAreaShape: "SA", Stash: "STASH", StashCorpse: "STASH", ItemSlot: "SLT", PickableItem: "ITM", Dog: "NHNPC", Horse: "NHNPC", Chickens: "NHNPC", ChickensWhite: "NHNPC", ChickensBrownLight: "NHNPC", Fish: "NHNPC" };
+    return byClass[e.cls] ?? (e.soType ? "SO" : e.saTemplate ? "SA" : "UNK");
   }
 
   private prop(n: BtNode, k: string): string {
@@ -496,11 +822,21 @@ export class AiWorld {
         ok = w !== null && w === subject;
         break;
       }
+      case "OrByRandomOp": {
+        // its filters in a random order; the first that passes decides (ShortCircuit) and binds
+        // (so_inspection.xml picks one of a point's inspection_next_<n> links at random)
+        const kids = f.children.filter((k) => k.tag !== "OutputBreakpoints");
+        for (let i = kids.length - 1; i > 0; i--) { const j = Math.floor(this.runner.host.random() * (i + 1)); [kids[i], kids[j]] = [kids[j], kids[i]]; }
+        ok = kids.some((k) => this.filter(k, c, parent, child, tags));
+        break;
+      }
       case "NegationOp": {
         const inner = f.children.find((k) => k.tag === "Child0")?.children[0];
         ok = inner ? !this.filter(inner, c, parent, child, tags) : true;
         break;
       }
+      // nobody dies yet: every NPC (and the player) is alive
+      case "SoulIsAliveFilter": ok = subject === -1 || /^NPC/.test(this.o.ents.get(subject)?.cls ?? ""); break;
       // no inventories or item slots are modelled yet: item filters match nothing
       case "SlotClassFilter": case "ItemClassFilter": ok = false; break;
       case "HasBehaviorFilter": {
@@ -630,7 +966,8 @@ export class AiWorld {
           // a smart area's behaviour runs on that area (a shop's "customer" searches the shop); a
           // smart object's keeps the caller's area
           const area = this.o.ents.get(target)?.saTemplate ? { id: target } : c.scope.get("__area") ?? null;
-          inner = this.runner.instantiate(tree, this.globals(this.current.npc, { __object: { id: target }, __behaviorName: b.name, __area: area }, c.scope)).task;
+          if (this.o.ents.get(target)?.saTemplate) { this.areasInUse.set(target, this.o.realTime()); this.areaEvent(target, "request", this.current.npc, b.name); }
+          inner = this.tagged(this.current.npc, b.tagId, this.runner.instantiate(tree, this.globals(this.current.npc, { __object: { id: target }, __behaviorName: b.name, __area: area }, c.scope)).task);
         }
         if (this.runner.nesting > MAX_NESTING) { this.runner.report(`CallBehavior: nesting over ${MAX_NESTING} at ${String(c.eval("BehaviorName", ""))}`); inner.abort(); inner = null; release(); this.emit("BehFail"); return "failure"; }
         this.runner.nesting++;
@@ -716,17 +1053,76 @@ export class AiWorld {
           // ASSUMPTION: the node succeeds whatever the quest system answered
           return "success";
         });
-      case "InstantSendMessageToNPC": case "SendMessageToNPC": case "InstantMultiSendMessageToNPC":
+      case "InstantSendMessageToNPC": case "SendMessageToNPC": case "InstantMultiSendMessageToNPC": case "MultiSendMessageToNPC":
+        return this.sendNode(n, c);
+      case "ProcessMessage": case "InstantProcessMessage": case "ReadMessage": case "InstantReadMessage":
+        return this.readNode(n, c);
+      case "CheckWuidValid": case "EnsureWuidValid": {
+        // a set reference (an entity, an animation, …): CheckWuidValid takes Then or Else; Ensure
+        // runs its child while the reference is set (RunLogic Halt: fails once it isn't)
+        const valid = () => { const v = this.ref(n, c, n.tag === "CheckWuidValid" ? "wuid" : "Wuid"); return v !== null && v !== undefined && v !== "" && !Array.isArray(v) && (typeof v !== "object" || wuid(v) !== null); };
+        const branch = (tag: string) => n.children.find((k) => k.tag === tag)?.children[0];
+        let body: Task | null = null;
+        return {
+          tick: () => {
+            if (n.tag === "EnsureWuidValid" && body && !valid()) { body.abort(); body = null; return this.prop(n, "RunLogic") === "Halt" ? "failure" : "success"; }
+            if (!body) {
+              if (n.tag === "EnsureWuidValid" && !valid()) return this.prop(n, "RunLogic") === "Halt" ? "failure" : "running";
+              const k = n.tag === "CheckWuidValid" ? branch(valid() ? "Then" : "Else") : kids.find((x) => x.tag !== "OutputBreakpoints");
+              if (!k) return truthyProp(c.eval("FailSubtMissing", false)) ? "failure" : "success";
+              body = this.runner.make(k, c.scope);
+            }
+            const s = body.tick();
+            if (s !== "running") body = null;
+            return s;
+          },
+          abort: () => { body?.abort(); body = null; },
+        };
+      }
+      case "DoMonologue": {
+        // the voice and subtitle come with the barks (ambient audio); until then it only takes time
+        let until: number | null = null;
+        return {
+          tick: () => {
+            if (until === null) {
+              const m = { topicId: String(c.eval("TopicId", "") ?? ""), label: String(c.eval("TopicLabel", "") ?? ""), metaroles: String(c.eval("Metaroles", "") ?? "") };
+              this.trace(`npc ${this.current.npc}: monologue ${m.metaroles || m.label || m.topicId}`);
+              const d = this.o.monologue?.(this.current.npc, m);
+              until = this.o.realTime() + (typeof d === "number" ? d : MONOLOGUE_SECONDS);
+            }
+            if (this.o.realTime() < until) return "running";
+            until = null;
+            return "success";
+          },
+          abort: () => { until = null; },
+        };
+      }
+      case "GetTime":
+        // now (+ Delta) on the node's clock, in seconds: WorldTime the world clock, else game time
         return leaf(() => {
-          const type = n.props.type ?? "";
-          this.trace(`npc ${this.current.npc}: message ${type} to ${n.props.target ?? ""}`);
-          // patches for the NPC's daily cycle (note section 4); other messages aren't delivered yet
-          if (type === "daycycle:change" && this.o.daycycleChange) {
-            const to = wuid(this.lookupValue(c.scope, (n.props.target ?? "").replace(/^"|"$/g, "").replace(/^\$/, "")));
-            if (to !== null) this.o.daycycleChange(to, messageFields(n.props.values ?? "", c.scope, this.runner.host));
-          }
+          const now = this.prop(n, "TimeType") === "WorldTime" ? this.o.worldTime() : this.o.realTime();
+          const delta = this.prop(n, "Delta").trim() ? secondsOf(c.eval("Delta", 0) ?? 0) : 0;
+          setVar("OutVar", now + delta);
           return "success";
         });
+      // animation tags around a child (not modelled: the child runs as is); looking (no head IK yet)
+      case "LocalTagWrapper":
+        return kids[0] ? this.runner.make(kids[0], c.scope) : leaf(() => "success");
+      case "Look":
+        return leaf(() => "success");
+      case "AddAreaLabel": case "RemoveAreaLabel":
+        // an area's labels (private, semipublic: whom it admits); kept, not read by anything yet
+        return leaf(() => {
+          const area = wuid(this.ref(n, c, "Area"));
+          if (area === null) return "failure";
+          const set = this.labels.get(area) ?? new Set<string>();
+          this.labels.set(area, set);
+          const label = String(c.eval("Label", ""));
+          if (n.tag === "AddAreaLabel") set.add(label); else set.delete(label);
+          return "success";
+        });
+      case "ClearInbox":
+        return leaf(() => { this.post.clear(this.current.npc, String(c.eval("inbox", "")), String(c.eval("type", "") ?? "")); return "success"; });
       case "Synchronize": case "InstantSynchronize": case "InstantSemaphore": {
         // a counted lock (bt-rules.md): Synchronize waits for a place, then until SemaphoreCount
         // participants hold the lock, and runs its child with them (count 1: a first-come-first-served
@@ -788,13 +1184,14 @@ export class AiWorld {
           setVar("targetVar", out);
           return "success";
         });
-      case "SmartObjSetBehaviorState": case "SmartObjSetBehaviorMaxInstances":
-        // on the entity running the tree (a smart object's own brain)
+      case "SmartObjSetBehaviorState": case "SmartObjSetBehaviorMaxInstances": case "SetBehaviorState": case "SetBehaviorMaxInstances":
+        // on the entity running the tree (a smart object's or smart area's own brain: a shop
+        // allows one customer at a time)
         return leaf(() => {
           const id = this.current.npc;
           for (const b of String(c.eval("behaviors", "")).split(",").map((x) => x.trim()).filter(Boolean)) {
             const name = this.behaviour(id, b)?.name ?? b;
-            if (n.tag === "SmartObjSetBehaviorState") this.states.set(`${id}/${name}`, String(c.eval("state", "Enabled")));
+            if (n.tag.endsWith("SetBehaviorState")) this.states.set(`${id}/${name}`, String(c.eval("state", "Enabled")));
             else this.maxInstances.set(`${id}/${name}`, Number(c.eval("maxInstances", -1)));
           }
           return "success";
@@ -945,6 +1342,13 @@ export class AiWorld {
           abort: () => { body?.abort(); body = null; },
         };
       }
+      case "GetType":
+        // the kind of entity a WUID is, as the trees compare it: 'NPC', 'NPC_Female', 'TP', 'SO', …
+        return leaf(() => {
+          const id = wuid(this.ref(n, c, "WUID"));
+          setVar("OutString", id === null ? "UNK" : this.entityType(id, truthyProp(this.prop(n, "TreatPlayerAsNPC"))));
+          return "success";
+        });
       case "GetSpatialInfo":
         return leaf(() => {
           const id = wuid(this.ref(n, c, "In"));
@@ -1106,6 +1510,9 @@ export class AiWorld {
   }
 }
 
+/** Real seconds a monologue takes without a player for it (DoMonologue). */
+const MONOLOGUE_SECONDS = 4;
+
 /** Real seconds a TurnBody takes. ASSUMPTION: about a half turn at the walk's turning rate. */
 const TURN_SECONDS = 0.6;
 
@@ -1137,8 +1544,15 @@ function assignVar(scope: Scope, target: string, v: Value): void {
  */
 export async function createAiWorld(vfs: Vfs, opts: Omit<WorldOptions, "ai" | "trees" | "helpers">): Promise<AiWorld> {
   const td = vfs.lookup("libs/ai/typedefinitions.xml");
+  let knownType = (_: string) => true;
   if (td) {
     const defs = new TypeDefs(new TextDecoder().decode(await vfs.read(td)));
+    // a mailbox filter naming a type the definitions don't have stands for the root type
+    // engine message types (hearingInfo, npcDeath, daycycle:activity, …) are declared in the savegame
+    // definitions; without them their mailboxes would take every message
+    const sg = vfs.lookup("libs/ai/typedefinitions_savegame.xml");
+    const more = sg ? new TypeDefs(new TextDecoder().decode(await vfs.read(sg))) : null;
+    knownType = (t) => defs.types.has(t.toLowerCase()) || !!more?.types.has(t.toLowerCase());
     setTypeDefs(defs);
     opts.lua?.defineEnums(defs.luaEnums());
   }
@@ -1151,7 +1565,7 @@ export async function createAiWorld(vfs: Vfs, opts: Omit<WorldOptions, "ai" | "t
     for (const t of parseTreeFile(xml, rel)) trees.set(`${rel}#${t.name.toLowerCase()}`, t);
   }
   const T = AiDb.TABLES;
-  const ai = new AiDb({ soTag: await readTable(vfs, T.soTag), so2tag: await readTable(vfs, T.so2tag), saTag: await readTable(vfs, T.saTag), sa2tag: await readTable(vfs, T.sa2tag), so: await readTable(vfs, T.so), brain2sub: await readTable(vfs, T.brain2sub), subSo: await readTable(vfs, T.subSo) });
+  const ai = new AiDb({ soTag: await readTable(vfs, T.soTag), so2tag: await readTable(vfs, T.so2tag), saTag: await readTable(vfs, T.saTag), sa2tag: await readTable(vfs, T.sa2tag), so: await readTable(vfs, T.so), brain2sub: await readTable(vfs, T.brain2sub), subSo: await readTable(vfs, T.subSo), sa: await readTable(vfs, T.sa), subSa: await readTable(vfs, T.subSa), subBt: await readTable(vfs, T.subBt) });
   const so = vfs.lookup("libs/smartobjects.xml");
   const helpers = so ? parseSmartObjectHelpers(new TextDecoder().decode(await vfs.read(so))) : new Map<string, SoHelper[]>();
   // brain variables, one declaration per name (form ids: 0 single, 1 array, 2 associative, 3 array)
@@ -1161,7 +1575,11 @@ export async function createAiWorld(vfs: Vfs, opts: Omit<WorldOptions, "ai" | "t
     const form = ({ "1": "array", "2": "associative", "3": "array" } as Record<string, string>)[r.ai_variable_form_id] ?? "single";
     brainVars.set(r.brain_variable_name, { name: r.brain_variable_name, type: r.type, values: r.init_value ?? "", form, persistent: r.is_persistent === "True" });
   }
-  const soulNames = new Map((await readTable(vfs, "rpg/soul")).map((r) => [r.soul_id, r.soul_name]));
+  const souls = await readTable(vfs, "rpg/soul");
+  const soulNames = new Map(souls.map((r) => [r.soul_id, r.soul_name]));
+  const soulBrains = new Map(souls.filter((r) => r.brain_id).map((r) => [r.soul_name, r.brain_id]));
   const shopkeepers = new Set((await readTable(vfs, "shop/shopkeeper")).map((r) => soulNames.get(r.keeper_id) ?? "").filter(Boolean));
-  return new AiWorld({ ...opts, ai, helpers, shopkeepers, brainVars: [...brainVars.values()], trees: (f, n) => trees.get(`${f}#${n}`) });
+  const M = MailDb.TABLES;
+  const mail = new MailDb({ mailbox: await readTable(vfs, M.mailbox), filter: await readTable(vfs, M.filter), brain: await readTable(vfs, M.brain), saTag: await readTable(vfs, M.saTag), soTag: await readTable(vfs, M.soTag) }, (t) => knownType(t));
+  return new AiWorld({ ...opts, ai, helpers, shopkeepers, mail, soulBrains, brainVars: [...brainVars.values()], trees: (f, n) => trees.get(`${f}#${n}`) });
 }

@@ -150,6 +150,8 @@ const num = (v: Value | undefined): number => {
   if (typeof v === "string" && v.trim() !== "") return isNaN(Number(v)) ? seconds(v.trim()) ?? 0 : Number(v);
   return 0;
 };
+/** A number, or a duration string ("1m 30s") in seconds; 0 otherwise. */
+export const secondsOf = num;
 // ASSUMPTION: struct fields are typed and default-initialised in the game ('' / 0 / false / null);
 // without the struct schemas, an unset value compares equal to any of those defaults
 const isDefault = (v: Value | undefined) => v === undefined || v === null || v === "" || v === 0 || v === false;
@@ -173,11 +175,13 @@ function lookup(scope: Scope, path: string[], host: Host): Value | undefined {
 
 function assignPath(scope: Scope, path: string[], v: Value): void {
   if (path.length === 1) { scope.set(path[0], v); return; }
+  // a missing container is an array when indexed by number ($workplaces[$__index].target = …)
+  const fresh = (key: string): Value => (/^\d+$/.test(key) ? [] : {});
   let obj = scope.get(path[0]);
-  if (obj === null || obj === undefined || typeof obj !== "object") { obj = {}; scope.set(path[0], obj); }
+  if (obj === null || obj === undefined || typeof obj !== "object") { obj = fresh(path[1]); scope.set(path[0], obj); }
   for (let i = 1; i < path.length - 1; i++) {
     const o = obj as Record<string, Value>;
-    if (o[path[i]] === null || typeof o[path[i]] !== "object") o[path[i]] = {};
+    if (o[path[i]] === null || typeof o[path[i]] !== "object") o[path[i]] = fresh(path[i + 1]);
     obj = o[path[i]];
   }
   (obj as Record<string, Value>)[path[path.length - 1]] = v;
@@ -554,7 +558,9 @@ export class Runner {
             for (let guard = 0; guard < FOREACH_BUDGET; guard++) {
               const arr = scope.get(arrName);
               const list = Array.isArray(arr) ? arr : [];
-              if (idx === null) idx = num(c.eval("startIndex", 0));
+              // ASSUMPTION: a loop starting clears its break variable (sa_garrison.xml shares one $break
+              // between loops: assignGuard's would end at once after the search's loop set it)
+              if (idx === null) { idx = num(c.eval("startIndex", 0)); if (brk) scope.set(brk, false); }
               const end = n.tag === "For" && num(c.eval("endIndex", -1)) >= 0 ? Math.min(list.length, num(c.eval("endIndex", -1))) : list.length;
               if (idx >= end || (brk && truthy(scope.get(brk)))) { idx = null; return "success"; }
               if (!body?.active) {
@@ -676,12 +682,16 @@ export class Runner {
       }
       case "ContinuousSwitch": {
         // like Switch, but the conditions are re-evaluated every tick: a change of branch aborts the
-        // running one (IfCondition children; TimerBox / DistanceCondition are not modelled: never true)
+        // running one (IfCondition children; TimerBox / DistanceCondition are not modelled: never true).
+        // ASSUMPTION: a finished branch ends the switch with its result, unless finishing it made
+        // another branch the one to run (sa_garrison.xml#Guard's first branch only clears its
+        // workplaceChanged flag, so that the job branch starts again); then the switch goes on
         let chosenNode: BtNode | null | undefined;
         let chosen: Slot | null = null;
+        const pick = () => kids.find((k) => k.tag === "IfCondition" && truthy(this.ctx(scope, k).eval("condition", false))) ?? null;
         return {
           tick: () => {
-            const hit = kids.find((k) => k.tag === "IfCondition" && truthy(this.ctx(scope, k).eval("condition", false))) ?? null;
+            const hit = pick();
             if (hit !== chosenNode) {
               chosen?.abort();
               chosenNode = hit;
@@ -689,8 +699,11 @@ export class Runner {
             }
             if (!chosen) return "running";
             const s = chosen.tick();
-            if (s !== "running") { chosenNode = undefined; chosen = null; }
-            return s;
+            if (s === "running") return s;
+            const finished = chosenNode;
+            chosenNode = undefined; chosen = null;
+            const next = pick();
+            return next && next !== finished ? "running" : s;
           },
           abort: () => { chosen?.abort(); chosen = null; chosenNode = undefined; },
         };
@@ -759,14 +772,23 @@ export class Runner {
       case "NotSeenByPlayer":
         return leaf(() => { if (text("result")) scope.set(text("result"), true); return "success"; });
       case "IfGate": {
-        // KeepRunning: wait until the condition holds, then run the child; Halt: fail if it does not hold
+        // waits until the condition holds, then runs the child. ASSUMPTION (bt-rules.md gives
+        // RunLogic, unconfirmed, as what happens to a running child when its lock closes again):
+        // Halt stops the child when the condition stops holding and waits again; KeepRunning lets
+        // it finish. sa_garrison.xml#Guard_job loops over a Halt gate on $t_isFriskAvailable: a
+        // gate failing while closed would end every post without frisking at once
         const body = only(kids[0]);
         let open = false;
         return {
           tick: () => {
+            const holds = truthy(c.eval("condition", false));
             if (!open) {
-              if (!truthy(c.eval("condition", false))) return text("RunLogic") === "Halt" ? "failure" : "running";
+              if (!holds) return "running";
               open = true;
+            } else if (!holds && text("RunLogic") === "Halt") {
+              body?.abort();
+              open = false;
+              return "running";
             }
             const s = body ? body.tick() : "success";
             if (s !== "running") open = false;
@@ -791,6 +813,14 @@ export class Runner {
         const body = only(kids[0]);
         return {
           tick: () => { const s = body ? body.tick() : "success"; return n.tag === "SuppressFailure" && s === "failure" ? "success" : s; },
+          abort: () => body?.abort(),
+        };
+      }
+      case "Invertor": {
+        // bt-rules.md: failure for a child's success, success for anything else
+        const body = only(kids[0]);
+        return {
+          tick: () => { const s = body ? body.tick() : "success"; return s === "running" ? s : s === "success" ? "failure" : "success"; },
           abort: () => body?.abort(),
         };
       }
@@ -871,6 +901,8 @@ export class Runner {
       case "Find": { const a = arg(); scope.set(target, arr.findIndex((x) => eq(x, a))); return "success"; }
       case "Erase": { const a = arg(); scope.set(name, arr.filter((x) => !eq(x, a))); return "success"; }
       case "Clear": scope.set(name, []); return "success";
+      // argument "descending" / "desc", else ascending (sb_dialog.xml sorts monologue priorities)
+      case "Sort": { const desc = /^desc/i.test(String(arg() ?? "")); scope.set(name, [...arr].sort((a, b) => (Number(a) - Number(b)) * (desc ? -1 : 1))); return "success"; }
       // to `argument` items, new ones false (so_bench.xml#use's free-seat flags: Resize to $benchSize)
       case "Resize": { const k = Math.max(0, Math.floor(Number(arg()) || 0)); scope.set(name, Array.from({ length: k }, (_, i) => (i < arr.length ? arr[i] : false))); return "success"; }
     }

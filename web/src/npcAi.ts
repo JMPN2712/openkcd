@@ -8,6 +8,7 @@ import type { AiWorld, Action } from "./btWorld.ts";
 import type { Task } from "./btRuntime.ts";
 import type { AnimLibrary, FragmentClip } from "./mannequin.ts";
 import type { NpcEntity } from "./levelEntities.ts";
+import { areaHolds } from "./schedule.ts";
 import type { NavMesh } from "./navmesh.ts";
 
 type Vec3 = [number, number, number];
@@ -33,6 +34,8 @@ export interface AiState {
 
 interface Driven {
   task: Task;
+  /** the NPC's monologue server (AiWorld.startMonologServer), beside its behaviour */
+  monologs?: Task | null;
   state: AiState;
   done: boolean;
   /** how the tree ended (when done) */
@@ -41,7 +44,12 @@ interface Driven {
   deadline?: number;
   /** AI clock time of the tree's next tick */
   due: number;
+  /** the smart area its behaviour runs on */
+  area?: number;
 }
+
+/** Seconds an area's brain keeps running after its last use. */
+const BRAIN_LINGER = 60;
 
 /**
  * Trees are ticked ten times a (game) second, not every frame, spread over the frames so they
@@ -61,6 +69,8 @@ export class NpcAi {
   /** level navmesh: moves longer than 1.5 m follow it (else straight lines) */
   nav: NavMesh | null = null;
   private pending = new Set<Promise<unknown>>();
+  /** smart-area brains running (AiWorld.startAreaBrain), with their next tick and who is inside */
+  private brains = new Map<number, { task: Task; due: number; done: boolean; inside: Set<number> }>();
   private started = 0;
 
   constructor(world: AiWorld, libs: Record<"male" | "female", AnimLibrary>) {
@@ -118,7 +128,7 @@ export class NpcAi {
     this.world.beginActivity(npc.id);
     const task = this.world.startAreaBehaviour(npc.id, area, behaviour);
     if (!task) return false;
-    this.driven.set(npc.id, { task, state: { pos: [...pos], rot: [...rot], mode: "idle", clip: null, fragment: "", since: this.now }, done: false, due: this.now + ((this.started++ * 0.37) % 1) * TICK });
+    this.driven.set(npc.id, { task, area, monologs: this.world.startMonologServer(npc.id), state: { pos: [...pos], rot: [...rot], mode: "idle", clip: null, fragment: "", since: this.now }, done: false, due: this.now + ((this.started++ * 0.37) % 1) * TICK });
     return true;
   }
 
@@ -131,6 +141,7 @@ export class NpcAi {
     const d = this.driven.get(id);
     if (!d) return;
     d.task.abort();
+    d.monologs?.abort();
     this.driven.delete(id);
   }
 
@@ -171,9 +182,58 @@ export class NpcAi {
    */
   readonly paused = new Set<number>();
 
+  /**
+   * Keep the brains of the smart areas in use running: an area whose behaviours ran in the last
+   * BRAIN_LINGER seconds (an NPC working there, a customer calling it), or that an NPC in view
+   * is running a behaviour on.
+   */
+  private updateBrains(): void {
+    const w = this.world;
+    for (const [area, last] of w.areasInUse) {
+      if (this.now - last > BRAIN_LINGER) { w.areasInUse.delete(area); continue; }
+      if (!this.brains.has(area)) {
+        const task = w.startAreaBrain(area);
+        this.brains.set(area, { task: task ?? { tick: () => "success", abort: () => {} }, due: this.now, done: !task, inside: new Set() });
+      }
+    }
+    // who walked into or out of each area with enter / exit trees (a shop's customers)
+    for (const [area, b] of this.brains) {
+      const shape = w.o.ents.get(area);
+      if (!shape?.points || !w.hasAreaEvents(area)) continue;
+      for (const [id, d] of this.driven) {
+        const now = areaHolds(shape, d.state.pos), was = b.inside.has(id);
+        if (now === was) continue;
+        if (now) b.inside.add(id); else b.inside.delete(id);
+        w.areaEvent(area, now ? "enter" : "exit", id);
+      }
+      for (const id of b.inside) if (!this.driven.has(id)) { b.inside.delete(id); w.areaEvent(area, "exit", id); }
+    }
+    for (const [area, b] of this.brains) {
+      if (w.areasInUse.has(area)) continue;
+      b.task.abort();
+      this.brains.delete(area);
+      w.stopAreaBrain(area);
+    }
+  }
+
+  /** Smart-area brains running now. */
+  brainCount(): number {
+    let k = 0;
+    for (const b of this.brains.values()) if (!b.done) k++;
+    return k;
+  }
+
   /** Advance the AI clock, every walk, and the trees that are due (TICK). */
   tick(dt: number): void {
     this.now += dt;
+    // areas whose NPCs are running keep their brains (refreshed here, checked twice a second)
+    for (const d of this.driven.values()) if (d.area !== undefined && !d.done) this.world.areasInUse.set(d.area, this.now);
+    if (Math.floor(this.now * 2) !== Math.floor((this.now - dt) * 2)) this.updateBrains();
+    for (const [, b] of this.brains) {
+      if (b.done || this.now < b.due) continue;
+      b.due = Math.max(b.due + TICK, this.now);
+      if (b.task.tick() !== "running") b.done = true;
+    }
     for (const [id, d] of this.driven) {
       // paused: the clock moves on around it (walks, clips and a wind-down deadline hold)
       if (this.paused.has(id)) { d.due = this.now + TICK; d.state.since += dt; if (d.deadline !== undefined) d.deadline += dt; continue; }
@@ -195,6 +255,7 @@ export class NpcAi {
       if (d.deadline !== undefined && this.now >= d.deadline) { d.task.abort(); d.done = true; d.status = "success"; continue; }
       if (this.now < d.due) continue;
       d.due = Math.max(d.due + TICK, this.now);
+      d.monologs?.tick();
       const s = d.task.tick();
       if (s !== "running") { d.done = true; d.status = s; }
     }

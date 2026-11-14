@@ -231,6 +231,11 @@ export class NpcWorld {
     if (st) this.schedules?.depart(n.entity, n.schedule, minute, st.pos);
     this.stopTree(n.entity.id);
   }
+  /** The NPC each running tree was started for (leaveTree when it streams out of view). */
+  private treeNpcs = new Map<number, WorldNpc>();
+  treeNpc(id: number): WorldNpc | undefined {
+    return this.treeNpcs.get(id);
+  }
 
   /** NPCs whose shop is open (shopOpen): the work behaviour of a shopkeeper runs */
   private shops = new Set<number>();
@@ -250,6 +255,7 @@ export class NpcWorld {
   /** Stop an NPC's tree (closing a shop it kept open). */
   stopTree(id: number): void {
     this.ai?.stop(id);
+    this.treeNpcs.delete(id);
     this.running.delete(id);
     this.shopOpen(id, false);
   }
@@ -261,6 +267,7 @@ export class NpcWorld {
     if (t.where === "work" && ai.world.keepsShop(n.entity.id)) this.shopOpen(n.entity.id, true);
     const ok = ai.start(n.entity, t.area, t.behaviour, pos, rot);
     this.running.set(n.entity.id, ok ? key : `!${key}`);
+    if (ok) this.treeNpcs.set(n.entity.id, n);
     return ok;
   }
 
@@ -532,7 +539,8 @@ export function updateAi(npcs: WorldNpc[], world: NpcWorld, minute: number): voi
   const ai = world.ai;
   if (!ai) return;
   const inView = new Set(npcs.map((n) => n.entity.id));
-  for (const id of ai.ids()) if (!inView.has(id)) world.stopTree(id);
+  // an NPC streamed out keeps where its tree left it (a city walk resumes there, not back at work)
+  for (const id of ai.ids()) if (!inView.has(id)) { const n = world.treeNpc(id); if (n) world.leaveTree(n, minute); else world.stopTree(id); }
   for (const n of npcs) {
     const id = n.entity.id;
     const c = world.cycle(n.entity, n.schedule, minute);

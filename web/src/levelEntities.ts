@@ -58,6 +58,8 @@ export interface EntityInfo {
   rot: [number, number, number, number];
   /** area polygon, x/y pairs relative to pos (AreaShape, SmartAreaShape, …) */
   points?: number[];
+  /** area height above its points (AreaShape Height; 0: unbounded) */
+  areaHeight?: number;
   /** the entity's own mesh (Properties object_Model), e.g. a bed's .cgf */
   model?: string;
   scale?: [number, number, number];
@@ -137,6 +139,8 @@ export function parseEntityIndex(xml: string): Map<number, EntityInfo> {
     const scale = attr(head, "Scale");
     if (scale) info.scale = num(scale, 3, [1, 1, 1]) as [number, number, number];
     if (cls.endsWith("AreaShape")) {
+      const h = /<Area\b[^>]*\bHeight="([^"]*)"/.exec(body)?.[1];
+      if (h !== undefined) info.areaHeight = Number(h) || 0;
       const pts = body.slice(body.indexOf("<Points>"), body.indexOf("</Points>"));
       info.points = [];
       for (const p of pts.matchAll(/<Point\s+Pos="([^"]*)"/g)) {

@@ -500,7 +500,30 @@ export class LuaHost {
     const after = JSON.parse(out) as Record<string, Value>;
     const old = JSON.parse(before) as Record<string, Value>;
     const changed: Record<string, Value> = {};
-    for (const [k, v] of Object.entries(after)) if (JSON.stringify(v) !== JSON.stringify(old[k])) changed[k] = v;
+    for (const [k, v0] of Object.entries(after)) {
+      const v = reshape(old[k], v0);
+      if (JSON.stringify(v) !== JSON.stringify(old[k])) changed[k] = v;
+    }
     return changed;
   }
+}
+
+/**
+ * A value back from Lua in the shape it went in: an empty Lua table comes back as {} where an
+ * array went in (preprocessWorkplaces' $workplaces, untouched by its Lua, would turn into an
+ * object), and arrays inside structs likewise.
+ */
+function reshape(before: Value | undefined, after: Value): Value {
+  if (Array.isArray(before) && after && typeof after === "object" && !Array.isArray(after)) {
+    const keys = Object.keys(after);
+    if (keys.every((k) => /^\d+$/.test(k))) return keys.map(Number).sort((a, b) => a - b).map((k) => after[String(k)]);
+    return after;
+  }
+  if (Array.isArray(before) && Array.isArray(after)) return after.map((x, i) => reshape(before[i], x));
+  if (before && typeof before === "object" && !Array.isArray(before) && after && typeof after === "object" && !Array.isArray(after)) {
+    const out: Record<string, Value> = {};
+    for (const [k, x] of Object.entries(after)) out[k] = reshape((before as Record<string, Value>)[k], x);
+    return out;
+  }
+  return after;
 }
