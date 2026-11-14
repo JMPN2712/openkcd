@@ -57,8 +57,8 @@ for a stand-in inventory. `node scripts/test-quest-opening.ts`.
 4. **Profiles to the scene:** show and hide a profile's layers when
    `EnableProfile` switches it (`WorldOptions.profile`), in place of
    `defaultHiddenLayers`' guess.
-5. **Quest state the opening needs:** objective timers (`duration.ts` has
-   the parser), rewards, and a real player inventory behind
+5. **Quest state the opening needs:** rewards and a real player inventory
+   behind
    `QuestSystem.world.itemCount` (tracked assets are read through
    `QuestSystem.world`; call `recheck()` when the inventory, the player's
    place or who is alive changes). Place assets need `world.playerAt`.
@@ -194,6 +194,9 @@ follows them):
      count the player being at the place's entity. What is the real test
      (inside the area, a distance), and when is it checked?
   4. Assets given by item category, soul class or faction: what counts?
+- **Expired objectives** (quest-system.md, Timers): after the `Expired`
+  message, is the objective cancelled, completed or left active? We leave
+  it active (38 objectives expire after `0s #WT`).
 - **Behaviour-tree nodes the quest trees use, implemented from the data
   with ASSUMPTIONs** (`btWorld.ts`, `btRuntime.ts`; bt-rules.md covers
   loops, locks and Wait only):
@@ -349,6 +352,10 @@ follows them):
   `RunLogic` (it failed under `Halt`), so the quest trees that ended early
   (`q_plagueInMerhojed`, `q_night_rescue`, `q_huntPtacek`, `q_questItems`,
   `q_devilplay`, `q_millerDate`) keep running: none ends by itself now.
+- #45 (2026-11-14): objective timers (auto-complete and expiration on the
+  calendar's clocks, `QuestSystem.update()`, saved with the quest), run in
+  the world view; `scripts/test-quests.ts` (tracked assets and timers on a
+  made-up quest).
 
 ## Findings not yet acted on
 

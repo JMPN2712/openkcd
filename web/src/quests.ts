@@ -7,11 +7,12 @@
 // through it, so an overlay (diet.ts) can stand between them and the stored state: it can make a
 // quest read as cancelled and refuse every change to it without writing anything.
 //
-// Not yet: tracked assets (items, NPCs, statistics), timers, paying rewards (they are announced as
-// events), saving on objectives.
+// Tracked assets and timers read the game through QuestSystem.world. Not yet: paying rewards
+// (they are announced as events), saving on objectives.
 
 import { readTable, groupBy, type Row } from "./tables.ts";
 import { holds, type CondValue } from "./dialogueCondition.ts";
+import { durationMs, timerClock } from "./duration.ts";
 import type { Vfs } from "./vfs.ts";
 
 /** Objective states (quest-system.md, "Objective state"). */
@@ -41,8 +42,10 @@ export interface Objective {
   exclusive: boolean;
   /** shown in the journal (not hidden, with a journal element) */
   journal: boolean;
-  /** an auto-complete or expiration timer (not run yet) */
-  timer: boolean;
+  /** the auto-complete timer's duration ("2h #WT"), or "" */
+  autocomplete: string;
+  /** the expiration timer's duration, or "" ("0s #WT" expires at once) */
+  expiration: string;
 }
 
 /** A dialogue sequence's quest change (sequence2quest_objective). */
@@ -81,6 +84,11 @@ export interface QuestWorld {
   /** whether the player is at a quest place (the entity's name) */
   playerAt?: (entity: string) => boolean;
   statistic?: (id: number) => number;
+  /**
+   * The calendar's clocks in milliseconds, for objective timers: "world" (15× real time, "#WT")
+   * and "play" (real time at the game's speed, "#GT" or no suffix). Without it timers never elapse.
+   */
+  clock?: (which: "world" | "play") => number;
 }
 
 export interface QuestMarker {
@@ -94,7 +102,8 @@ export interface QuestMarker {
 const int = (s: string | undefined) => (s ? Number(s) : 0);
 const yes = (s: string | undefined) => s === "True";
 const NONE: Tracked[] = [];
-const blankTimer = (s: string | undefined) => !s || s === "-1" || s === "0";
+/** A timer column's duration, "" for none ("-1", "0", blank, or text that is no duration). */
+const timerText = (s: string | undefined) => (!s || s === "-1" || s === "0" || !Number.isFinite(durationMs(s) ?? NaN) ? "" : s);
 
 /** The quest tables, by quest name. */
 export class QuestDb {
@@ -150,7 +159,7 @@ export class QuestDb {
       const o: Objective = {
         id: int(r.objective_id), name: r.objective_name, condition: r.condition ?? "", hidden: yes(r.is_hidden), exclusive: yes(r.is_exclusive),
         journal: !yes(r.is_hidden) && journalRows.has(`${r.quest_id}/${r.objective_id}`),
-        timer: !blankTimer(r.autocomplete_timeout_str) || !blankTimer(r.expiration_timeout_str),
+        autocomplete: timerText(r.autocomplete_timeout_str), expiration: timerText(r.expiration_timeout_str),
       };
       let m = db.objectives.get(q);
       if (!m) { m = new Map(); db.objectives.set(q, m); db.objectiveIds.set(q, new Map()); }
@@ -262,12 +271,17 @@ export interface QuestRecord {
   finishesLeft: number;
   /** objective id → state */
   objectives: Record<number, number>;
+  /**
+   * armed timers of active objectives: deadlines in milliseconds on the timer's own clock
+   * (`auto`, `expire`), and `autoDone` once the auto-complete timer has elapsed
+   */
+  timers?: Record<number, { auto?: number; expire?: number; autoDone?: boolean }>;
 }
 
 export type QuestEvent =
   /** quest message states: Started 0, Completed 1, Canceled 2, Reset 4, Active 5; `banner` for visible quests */
   | { kind: "quest"; quest: string; state: number; banner: boolean }
-  /** objective message states: 0 started, 1 completed, 2 canceled; `journal` when it has a journal entry */
+  /** objective message states: 0 started, 1 completed, 2 canceled, 3 expired; `journal` when it has a journal entry */
   | { kind: "objective"; quest: string; objective: number; state: number; journal: boolean }
   | { kind: "reward"; quest: string; objective: number; immediate: boolean };
 
@@ -486,8 +500,44 @@ export class QuestSystem {
     const o = this.db.objective(q, id);
     if (o && this.overlay?.blocks?.(q, o.name)) return false;
     r.objectives[id] = STARTED;
+    this.arm(r, o);
     this.emit({ kind: "objective", quest: q, objective: id, state: 0, journal: !!o?.journal });
     return true;
+  }
+
+  /** Arm a started objective's timers from its strings (quest-system.md, "Start objective" step 2). */
+  private arm(r: QuestRecord, o: Objective | undefined): void {
+    if (r.timers) delete r.timers[o?.id ?? -1];
+    const clock = this.world.clock;
+    if (!o || !clock || (!o.autocomplete && !o.expiration)) return;
+    const at = (text: string) => (text ? clock(timerClock(text)) + (durationMs(text) ?? 0) : undefined);
+    (r.timers ??= {})[o.id] = { auto: at(o.autocomplete), expire: at(o.expiration) };
+  }
+
+  /**
+   * Run the objective timers (call it every so often; "Automatic completion", Timers): an
+   * elapsed auto-complete timer lets its objective complete at the re-check; an elapsed
+   * expiration timer announces the objective as expired (message state 3). Each fires once.
+   * ASSUMPTION: an expired objective stays active (what the game does after the message is not
+   * in the notes; the quests' trees hear `Expired` and act).
+   */
+  update(): void {
+    const clock = this.world.clock;
+    if (!clock) return;
+    let due = false;
+    for (const [q, r] of this.records) {
+      if (!r.timers || this.isCut(q)) continue;
+      for (const [k, t] of Object.entries(r.timers)) {
+        const id = Number(k), o = this.db.objective(q, id);
+        if (!o || !isActive(r.objectives[id] ?? UNCHANGED)) { delete r.timers[id]; continue; }
+        if (t.auto !== undefined && clock(timerClock(o.autocomplete)) >= t.auto) { t.auto = undefined; t.autoDone = true; due = true; }
+        if (t.expire !== undefined && clock(timerClock(o.expiration)) >= t.expire) {
+          t.expire = undefined;
+          this.emit({ kind: "objective", quest: q, objective: id, state: 3, journal: o.journal && r.started });
+        }
+      }
+    }
+    if (due) this.recheck();
   }
 
   completeObjective(quest: string, ref: string | number): boolean {
@@ -612,12 +662,12 @@ export class QuestSystem {
   /**
    * The re-check (quest-system.md, "Automatic completion"): an active objective completes when
    * what it tracks has reached its counts (nothing tracked counts as reached), its condition is
-   * not blank and holds, and it has no timer. Repeats until nothing changes. Call it when the
+   * not blank and holds, and its auto-complete timer, if it has one, has elapsed (`update`).
+   * Repeats until nothing changes. Call it when the
    * player's inventory or place, a statistic, or who is alive changes. An objective whose
    * tracking is done but which has not completed reads as "tracked completed".
    * ASSUMPTIONs: an NPC asset counts that NPC's deaths (such objectives are named "…IsDead",
-   * "kill…"), a place asset is reached while the player is at the place's entity, and timers are
-   * not run yet, so objectives with a timer wait for a script.
+   * "kill…"), and a place asset is reached while the player is at the place's entity.
    */
   recheck(): void {
     for (let pass = 0; pass < 100; pass++) {
@@ -630,7 +680,7 @@ export class QuestSystem {
           if (!o) continue;
           const done = this.trackingDone(q, o.id);
           if (this.db.tracked(q, o.id).length) r.objectives[o.id] = done ? TRACKING_DONE : STARTED;
-          if (!done || o.timer || !o.condition.trim()) continue;
+          if (!done || !o.condition.trim() || (o.autocomplete && !r.timers?.[o.id]?.autoDone)) continue;
           if (this.holds(o.condition, false) && this.completeObjectiveId(q, o.id)) changed = true;
         }
       }

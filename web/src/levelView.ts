@@ -9,6 +9,7 @@ import { FOV_Y, TerrainRenderer, type FlyCamera } from "./terrainRenderer.ts";
 import type { PakSource } from "./paks.ts";
 import type { LevelObjects } from "./levelObjects.ts";
 import type { Cover } from "./cover.ts";
+import type { QuestSystem } from "./quests.ts";
 import { MergedMeshes } from "./mergedMeshes.ts";
 import { Roads } from "./roads.ts";
 import { Decals } from "./decals.ts";
@@ -469,6 +470,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let stopped = false;
   let npcAi: NpcAi | null = null;
   let viewLua: LuaHost | null = null;
+  let viewQuests: QuestSystem | null = null;
+  let questsCheckedAt = 0;
   void (async () => {
     // Lua 5.1 with the game's scripts (Scripts/main.lua) for the trees' Lua code
     const lua = await LuaHost.create(vfs, luaWasm);
@@ -480,6 +483,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const quests = await dialogue.questSystem();
     if (stopped) return null;
     lua.quests = quests;
+    // objective timers run on the calendar's clocks: play time, and world time at 15× (quests.ts)
+    quests.world.clock = (which) => simSeconds * 1000 * (which === "world" ? 15 : 1);
+    viewQuests = quests;
     const w = await createAiWorld(vfs, {
       quest: (fn, q, o) => quests.apply(fn, q, o),
       questCall: (fn, q, o) => !!quests.call(fn, o === undefined ? [q] : [q, o]),
@@ -893,6 +899,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const simDt = (dt * Number(speedSel.value)) / 15;
     simSeconds += simDt;
     if (!worldLoading) npcAi?.tick(simDt);
+    if (viewQuests && simSeconds - questsCheckedAt >= 0.5) { questsCheckedAt = simSeconds; viewQuests.update(); }
     const hh = Math.floor(minute / 60), mm = Math.floor(minute % 60);
     clockLabel.textContent = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
     if (document.activeElement !== clockRange) clockRange.value = String(Math.floor(minute));

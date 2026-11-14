@@ -676,6 +676,14 @@ game's data.
   Before, such objectives completed as soon as they started ("…IsDead"
   objectives too). An objective whose tracking is done but which has not
   completed reads as tracked-completed.
+- **Objective timers** (`quests.ts`; the note's timeout suffixes). Starting
+  an objective arms its auto-complete and expiration timers on the
+  calendar's clocks (`#WT` world time at 15×, `#GT` or none play time;
+  `QuestSystem.world.clock`). `QuestSystem.update()` runs them (twice a
+  second in the world view): an elapsed auto-complete timer lets the
+  objective complete at the re-check, an elapsed expiration announces it as
+  `Expired` once. An expired objective stays active (ASSUMPTION). Armed
+  timers are saved with the quest. `scripts/test-quests.ts`.
 - **How the opening goes on** (the test drives it): Henry's mother runs
   `motherPatch` and asks for `q_skalitz_characterCreation`; the conversation
   plays through the dialogue flow, completes `objectiveStart` and starts
@@ -683,8 +691,7 @@ game's data.
   (`buyCharcoal` ×10, `getDebtMoney`, `getCrossguard`, `collectBeer`).
 - **Not yet:** the trees are not started in the world view (only the quest
   reads are wired there) and its dialogue doesn't take the trees' requests;
-  objective timers; a real
-  inventory; combat and perception nodes; the calendar functions the
+  a real inventory; combat and perception nodes; the calendar functions the
   scripts call (`forwardTime`).
 
 ### Diet mode (`web/src/diet.ts`, `web/src/dietConfig.ts`)

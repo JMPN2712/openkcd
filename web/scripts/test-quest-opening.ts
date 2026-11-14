@@ -87,7 +87,9 @@ const cutWithEntity = [...ents.values()].filter((e) => e.cls === "QuestObject" &
 check(cutWithEntity.length > 0 && cutWithEntity.every((q) => !brains.entities.has(qdb.canonical(q)!)), `the ${cutWithEntity.length} cut quests with an entity run no tree (${cutWithEntity.slice(0, 4).join(", ")}, …)`);
 let ticks = 0;
 const t0 = performance.now();
-const run = (seconds: number) => { for (let i = 0; i < seconds * 10; i++) { brains.tick(); clock.real += 0.1; ticks++; } };
+// objective timers on the calendar's clocks (play time, world time at 15×)
+quests.world.clock = (which) => clock.real * 1000 * (which === "world" ? 15 : 1);
+const run = (seconds: number) => { for (let i = 0; i < seconds * 10; i++) { brains.tick(); quests.update(); clock.real += 0.1; ticks++; } };
 
 // before the game starts: the hubs and trackers that are activated from the start set themselves up
 run(2);
@@ -139,7 +141,7 @@ const step = (seconds: number) => {
   for (let i = 0; i < seconds * 10; i++) {
     for (; handed < patches.length; handed++) if (patches[handed].fields.add === true) runPatch(patches[handed]);
     for (const [id, t] of npcTasks) { const r = t.task.tick(); if (r !== "running") { npcTasks.delete(id); ended.push(`${t.name} ${r}`); } }
-    brains.tick(); clock.real += 0.1;
+    brains.tick(); quests.update(); clock.real += 0.1;
   }
 };
 step(0.1);
