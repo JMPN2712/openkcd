@@ -1,6 +1,9 @@
 // Node test: a new game up to the opening of the main quest (src/questTrees.ts, quests.ts,
 // btWorld.ts; research notes quest-system.md), with the game's own quest trees and diet mode on.
-// usage: node scripts/test-quest-opening.ts [--root GAME_ROOT] (DEBUG=1: every trace line)
+// A new game → the opening quest → Henry's mother's patch asks for the first conversation, which
+// plays through the dialogue flow → the talk with his father → the errands' objectives, with
+// tracked items read from a stand-in inventory.
+// usage: node scripts/test-quest-opening.ts [--root GAME_ROOT] (DEBUG=1: every trace line; FAILS=1: failing node chains)
 
 import { openAsBlob } from "node:fs";
 import { homedir } from "node:os";
@@ -18,6 +21,9 @@ import { DietMode } from "../src/diet.ts";
 import { DIET } from "../src/dietConfig.ts";
 import { QuestBrains } from "../src/questTrees.ts";
 import { layerEntities, parseProfiles } from "../src/profiles.ts";
+import { DialogRequests } from "../src/dialogRequests.ts";
+import { Conversation, DialogueState, luaScripts, neutralWorld, participant, type Step } from "../src/dialogueFlow.ts";
+import { readTable } from "../src/tables.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
@@ -51,8 +57,9 @@ const objective = (e: QuestEvent & { kind: "objective" }) => `${e.quest}/${qdb.o
 quests.on((e) => { if (e.kind === "quest" && e.state === 0 && e.banner) return; const s = e.kind === "quest" ? `quest ${e.quest} ${["started", "completed", "canceled", "failed", "reset", "active"][e.state]}` : e.kind === "objective" ? `objective ${objective(e)} ${["started", "completed", "canceled", "expired"][e.state]}` : `reward ${e.quest}`; events.push(s); if (debug) console.log(`${clock.real.toFixed(1).padStart(7)} s  ** ${s}`); });
 
 const clock = { real: 0 };
+const requests = new DialogRequests(ddb);
 const lines: string[] = [];
-const patches: { npc: number; name: string; handle: string }[] = [];
+const patches: { npc: number; name: string; handle: string; source: number; fields: Record<string, unknown> }[] = [];
 const world = await createAiWorld(vfs, {
   ents, lua,
   realTime: () => clock.real,
@@ -60,7 +67,10 @@ const world = await createAiWorld(vfs, {
   random: () => 0.5,
   quest: (fn, q, o) => quests.apply(fn, q, o),
   questCall: (fn, q, o) => !!quests.call(fn, o === undefined ? [q] : [q, o]),
-  daycycleChange: (npc, f) => { patches.push({ npc, name: String(f.name ?? ""), handle: String(f.handle ?? "") }); },
+  requestDialog: (r) => requests.request(r),
+  dialogStatus: (id) => requests.status(id),
+  playerInDialog: () => requests.playerTalking,
+  daycycleChange: (npc, f) => { patches.push({ npc, name: String(f.name ?? ""), handle: String(f.handle ?? ""), source: typeof f.sourceId === "number" ? f.sourceId : (f.sourceId as { id?: number } | null)?.id ?? -1, fields: f }); },
   trace: (m) => { lines.push(m); if (debug) console.log(`${clock.real.toFixed(1).padStart(7)} s  ${m}`); },
 });
 lua.boot();
@@ -108,6 +118,111 @@ brains.tickOne(brains.entities.get("q_skalitz")!);
 check(world.runner.leaves().some((l) => l.endsWith("DialogGate")), "the cutscene's end waits for the player's conversation to begin (DialogGate)");
 world.runner.waiting = null;
 check(brains.ended.length <= 6, `quest trees that ended: ${brains.ended.map((id) => ents.get(id)?.name).join(", ") || "none"}`);
+// the NPCs' quest patches: a patch whose source is the quest's entity names one of its behaviours
+const mp = patches.find((p) => p.npc === mother?.id && p.name === "motherPatch")!;
+check(mp.source === brains.entities.get("q_skalitz") && world.offersObjectBehaviour(mp.source, "motherPatch"), "the patch's source is the quest's entity, which offers motherPatch");
+// a stand-in for the NPCs' daily cycles: every NPC handed a quest patch runs it (the last one
+// handed wins; npcAi.ts and daycycle.ts do this with priorities in the world view)
+const npcTasks = new Map<number, { name: string; task: ReturnType<typeof world.startObjectBehaviour> & {} }>();
+const ended: string[] = [];
+const runPatch = (p: (typeof patches)[number]) => {
+  if (!world.offersObjectBehaviour(p.source, p.name)) return false;
+  const e = ents.get(p.npc)!;
+  world.positions.set(p.npc, [...e.pos]);
+  npcTasks.get(p.npc)?.task.abort();
+  const task = world.startObjectBehaviour(p.npc, p.source, p.name);
+  if (task) npcTasks.set(p.npc, { name: `${e.name}/${p.name}`, task });
+  return !!task;
+};
+let handed = 0;
+const step = (seconds: number) => {
+  for (let i = 0; i < seconds * 10; i++) {
+    for (; handed < patches.length; handed++) if (patches[handed].fields.add === true) runPatch(patches[handed]);
+    for (const [id, t] of npcTasks) { const r = t.task.tick(); if (r !== "running") { npcTasks.delete(id); ended.push(`${t.name} ${r}`); } }
+    brains.tick(); clock.real += 0.1;
+  }
+};
+step(0.1);
+check(npcTasks.has(mother!.id) && npcTasks.has(father!.id), `the NPCs run their quest patches (${[...npcTasks.values()].map((t) => t.name).join(", ")})`);
+step(2);
+const asked = requests.next(true);
+check(!!asked && asked.initiator === mother!.id && asked.label === "q_skalitz_characterCreation" && asked.topic > 0, `she asks for the opening conversation with Henry (${asked?.label}, topic ${asked?.topic})`);
+// the conversation itself, through the dialogue flow: Henry takes the first option at every menu
+const souls = await readTable(vfs, "rpg/soul");
+const soulOf = (name: string) => { const r = souls.find((x) => x.soul_name === name); return { id: r?.soul_id ?? "", name }; };
+const entityOf = (name: string) => (name === "dude" ? -1 : [...ents.values()].find((e) => e.name === name)?.id);
+const dstate = new DialogueState();
+const flowHost = { now: () => clock.real, call: neutralWorld(() => 8, quests), runScript: luaScripts(lua, entityOf), played: (seq: number, holds: (c: string) => boolean) => quests.runSequence(seq, holds), report: (w: string) => { if (debug) console.log(`  dialogue: ${w}`); } };
+/** Play a conversation through the flow, Henry taking `pick`'s option at each menu; time passes while lines play. */
+function play(names: string[], o: { topic?: number; greeting?: boolean; farewell?: boolean } = {}, pick: (labels: string[]) => number = () => 0): string[] {
+  // Henry first, as in a conversation the player starts
+  names.sort((a, b) => Number(b === "dude") - Number(a === "dude"));
+  const conv = new Conversation(ddb, dstate, names.map((n) => participant(ddb, soulOf(n), n === "dude", lua.metaroleChanges(entityOf(n)!))), flowHost, o);
+  const log: string[] = [];
+  let s: Step = conv.start();
+  for (let guard = 0; guard < 80; guard++) {
+    if (s.kind === "play") { log.push(`seq ${s.candidate.sequence.id} (topic ${s.candidate.topic})`); step(1); s = conv.played(); }
+    else if (s.kind === "menu") { const labels = s.options.map((x) => x.label); const k = Math.max(0, Math.min(labels.length - 1, pick(labels))); log.push(`menu [${labels.join(", ")}]: picks ${k + 1}`); s = conv.choose(k); }
+    else if (s.kind === "haggle") s = conv.played();
+    else { log.push(s.kind === "bark" ? "farewell" : `end: ${s.reason}`); break; }
+  }
+  return log;
+}
+/** A conversation a tree asked for. */
+function converse(r: NonNullable<typeof asked>): string[] {
+  requests.begin(r.id);
+  const log = play([r.initiator, ...r.souls].map((id) => (id === -1 ? "dude" : ents.get(id)!.name)), { topic: r.topic, greeting: r.greeting, farewell: r.ending });
+  requests.end(r.id, log.some((l) => l.startsWith("seq ")));
+  return log;
+}
+if (asked) {
+  check(requests.status(asked.id) === "waiting" && !requests.playerTalking, "the request waits until the conversation is played");
+  const before = events.length;
+  const log = converse(asked);
+  console.log(`  ${log.join("\n  ")}`);
+  check(log.some((l) => l.startsWith("seq ")) && requests.status(asked.id) === "done", "the conversation plays through the dialogue flow");
+  step(3);
+  console.log(`  quest events during and after it:\n    ${events.slice(before).join("\n    ") || "none"}`);
+}
+// then Henry talks to his father (the player starts this one)
+{
+  const before = events.length;
+  check(quests.call("IsObjectiveStarted", ["q_skalitz", "speakWithFather"]) === 1, "after the talk with his mother the objective is to speak with his father");
+  const log = play(["dude", "ska_fatherOfHenry"]);
+  console.log(`  ${log.join("\n  ")}`);
+  step(3);
+  console.log(`  quest events during and after it:\n    ${events.slice(before).join("\n    ") || "none"}`);
+  check(quests.call("IsObjectiveCompleted", ["q_skalitz", "speakWithFather"]) === 1, "talking to his father completes it");
+}
+// tracked assets (quest-system.md, "Automatic completion"): the theft objectives track items in
+// Henry's inventory, so they wait until he has them; a place objective waits until he is there
+{
+  const started = (o: string) => quests.call("IsObjectiveStarted", ["q_skalitz", o]) === 1, completed = (o: string) => quests.call("IsObjectiveCompleted", ["q_skalitz", o]) === 1;
+  check(["stealHammer", "stealNails", "stealAxe", "takeHammer", "buyCharcoal"].every(started), "objectives that track items wait for the items (stealHammer, takeHammer, buyCharcoal, …)");
+  const hammer = qdb.tracked("q_skalitz", qdb.objectivesOf("q_skalitz").find((o) => o.name === "takeHammer")!.id)[0];
+  const charcoal = qdb.tracked("q_skalitz", qdb.objectivesOf("q_skalitz").find((o) => o.name === "buyCharcoal")!.id)[0];
+  check(hammer?.kind === "item" && charcoal?.kind === "item" && charcoal.count === 10, `takeHammer tracks one item, buyCharcoal ten (${charcoal?.what})`);
+  const bag = new Map<string, number>([[charcoal.what, 9]]);
+  quests.world.itemCount = (item) => bag.get(item) ?? 0;
+  quests.recheck();
+  check(started("buyCharcoal") && quests.call("IsObjectiveTrackedCompleted", ["q_skalitz", "buyCharcoal"]) === 0, "nine pieces of charcoal are not enough");
+  bag.set(charcoal.what, 10);
+  quests.recheck();
+  check(completed("buyCharcoal"), "the tenth completes buyCharcoal");
+  bag.set(hammer.what, 1);
+  quests.recheck();
+  check(completed("takeHammer") && completed("stealHammer") && started("stealNails"), "with the hammer in the bag takeHammer and stealHammer complete; the nails still wait");
+  const dead = qdb.objectivesOf("q_skalitz").map((o) => qdb.tracked("q_skalitz", o.id)).flat().filter((t) => t.kind === "npc").length;
+  console.log(`  q_skalitz tracks ${dead} NPC deaths; nobody has died`);
+}
+console.log(`  patches ended: ${ended.join(", ") || "none"}`);
+for (const [, t] of npcTasks) {
+  if (!debug && !/ska_(mother|father)OfHenry/.test(t.name)) continue;
+  world.runner.waiting = [];
+  t.task.tick();
+  console.log(`${t.name} waits in:\n  ${world.runner.leaves().map((l) => l.split(" > ").slice(-5).join(" > ")).join("\n  ")}`);
+  world.runner.waiting = null;
+}
 const ms = (performance.now() - t0) / ticks;
 check(ms < 8, `one tick of all ${running} quest trees takes ${ms.toFixed(2)} ms here`);
 

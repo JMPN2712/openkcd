@@ -615,8 +615,7 @@ game's data.
      hands Henry's mother, father, Kunesh and friends their parts as
      daily-cycle patches (`motherPatch`, `fatherPatch`, …);
   6. the automaton then waits for the player's conversation with his mother
-     to begin (`DialogGate`). The NPCs' quest patches and the dialogue they
-     ask for are the next step.
+     to begin (`DialogGate`).
 - **Nodes added for it** (`btWorld.ts`), each from the notes or marked
   ASSUMPTION in the code:
   - quest reads: `QuestCondition`, `QuestObjectiveCondition` (Then / Else),
@@ -648,11 +647,40 @@ game's data.
 - **Test:** `scripts/test-quest-opening.ts` runs steps 1–6 with every quest
   tree and diet mode on; `scripts/test-diet.ts` has unit checks for the
   quest nodes.
+- **Quest patches.** A `daycycle:change` whose `sourceId` is a quest's
+  entity names one of that quest's smart-object behaviours (`motherPatch` →
+  `quests/q_skalitz.xml#motherPatch`). The daily cycle resolves such a
+  patch to a target on the quest entity (`where: "patch"`, started where
+  the NPC stands), and `AiWorld.startObjectBehaviour` runs the tree in the
+  NPC's brain with the quest entity as `__object`. A critical priority
+  arrives as an enum value (`daycyclePatchCriticalPriority.cutscene_init`).
+  Patches call the NPC's usual work through `SmartAreaBehaviorTag` (the
+  first preferred behaviour the area offers: ASSUMPTION).
+- **Conversations the trees ask for** (`dialogRequests.ts`).
+  `RequestDialog` files a request (topic id, topic label or metaroles; the
+  participants) and gets an id; `DoDialog` runs while that conversation is
+  waiting or playing. Whoever plays conversations takes the oldest waiting
+  request, plays it with the requested topic and reports its end. Two links
+  from one entity to another (a mother's `Work[…]` and `Home` to her house)
+  are one edge with both tags in graph searches.
+- **Tracked assets** (`quests.ts`, the note's "Automatic completion"). An
+  objective completes by itself only when what it tracks has reached its
+  count: an item in the player's inventory, an NPC's deaths, the player at
+  a place, a statistic (`QuestSystem.world`; a count nobody gives is 0).
+  Before, such objectives completed as soon as they started ("…IsDead"
+  objectives too). An objective whose tracking is done but which has not
+  completed reads as tracked-completed.
+- **How the opening goes on** (the test drives it): Henry's mother runs
+  `motherPatch` and asks for `q_skalitz_characterCreation`; the conversation
+  plays through the dialogue flow, completes `objectiveStart` and starts
+  `speakWithFather`; the talk with his father starts the errands
+  (`buyCharcoal` ×10, `getDebtMoney`, `getCrossguard`, `collectBeer`).
 - **Not yet:** the trees are not started in the world view (only the quest
-  reads are wired there); six trees end early (`q_plagueInMerhojed`,
-  `q_night_rescue`, `q_huntPtacek`, `q_questItems`, `q_millerDate`,
-  `q_devilplay`: not looked into); combat, perception and inventory nodes;
-  the calendar functions the scripts call (`forwardTime`).
+  reads are wired there) and its dialogue doesn't take the trees' requests;
+  five trees end early (`q_plagueInMerhojed`, `q_night_rescue`,
+  `q_huntPtacek`, `q_questItems`, `q_devilplay`); objective timers; a real
+  inventory; combat and perception nodes; the calendar functions the
+  scripts call (`forwardTime`).
 
 ### Diet mode (`web/src/diet.ts`, `web/src/dietConfig.ts`)
 

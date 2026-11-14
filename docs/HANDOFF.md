@@ -32,23 +32,24 @@ numbers.
    conversations, facial animation).
 
 **Where priority 1 stands** (GAMELOGIC.md, "The quests' own trees"): every
-quest tree diet mode keeps runs headless, and a new game reaches the
-opening quest's first conversation: `q_master_main` → `q_skalitz`
-activated → the cutscene automaton → the quest started, Henry's mother and
-father given their quest patches. `node scripts/test-quest-opening.ts`.
+quest tree diet mode keeps runs headless, and a new game plays up to the
+errands of the opening quest: `q_master_main` → `q_skalitz` activated → the
+cutscene automaton → the quest started → Henry's mother runs her quest
+patch and asks for the first conversation, which plays through the
+dialogue flow → Henry talks to his father → `buyCharcoal`, `getDebtMoney`,
+`getCrossguard` and `collectBeer` start. Objectives that track items wait
+for a stand-in inventory. `node scripts/test-quest-opening.ts`.
 
-**Next steps for it, in order:**
+**Next steps for it, in order** (1 and 2 are done headless, 2026-11-14):
 
-1. **The NPCs' quest patches.** A `daycycle:change` whose `sourceId` is a
-   quest's entity names a behaviour of that quest (`motherPatch` →
-   `quests/q_skalitz.xml#motherPatch`). Resolve such an activity on the
-   quest's smart-object behaviours and run it for the NPC (`npcAi.ts`),
-   with the quest entity as `__object`.
-2. **Dialogue the trees ask for.** `final/questUtils.xml#playerDialog` and
-   `tryPlayerDialog` send the requests; `DialogGate` reads whether the
-   player is in a conversation (`WorldOptions.playerInDialog`). Connect
-   them to `dialogueFlow.ts`, then drive the talk with Henry's mother and
-   father in the test (their sequences change `q_skalitz`'s objectives).
+1. Done: quest patches (`AiWorld.startObjectBehaviour`, the daily cycle's
+   `"patch"` target), `SmartAreaBehaviorTag`.
+2. Done headless: `RequestDialog` / `DoDialog` and `DialogRequests`
+   (`dialogRequests.ts`). **Left:** the world view's dialogue
+   (`dialogueView.ts`) must take the waiting request
+   (`requests.next(true)`), start that conversation with the requested
+   topic, and call `begin` / `end`; `playerInDialog` should also be true in
+   conversations the player starts.
 3. **Start the quest trees in the world view** (`QuestBrains` in
    `levelView.ts`, with the layer entities from `profiles.ts` and a "New
    game" control). Today only the quest reads are wired there. Watch the
@@ -57,7 +58,10 @@ father given their quest patches. `node scripts/test-quest-opening.ts`.
    `EnableProfile` switches it (`WorldOptions.profile`), in place of
    `defaultHiddenLayers`' guess.
 5. **Quest state the opening needs:** objective timers (`duration.ts` has
-   the parser), tracked items with a minimal player inventory, rewards.
+   the parser), rewards, and a real player inventory behind
+   `QuestSystem.world.itemCount` (tracked assets are read through
+   `QuestSystem.world`; call `recheck()` when the inventory, the player's
+   place or who is alive changes). Place assets need `world.playerAt`.
 6. **Shops** (`notes/economy.md`): buying the charcoal is an objective of
    the opening quest; then diet mode's shop grants.
 7. Lua's remaining `QuestSystem` functions (`GetActiveObjectives`, …) and
@@ -110,9 +114,10 @@ father given their quest patches. `node scripts/test-quest-opening.ts`.
   written. If the 1% lows still matter on this PC, run the ⏱ Benchmark in
   your own Chrome here (X11, Vulkan): the report's "GPU frames" line tells
   whether the lows are the GPU's slow frames.
-- **Six quest trees end early** in the headless run (`q_plagueInMerhojed`,
-  `q_night_rescue`, `q_huntPtacek`, `q_questItems`, `q_millerDate`,
-  `q_devilplay`). Not a decision for you yet; listed so you know.
+- **Five quest trees end early** in the headless run (`q_plagueInMerhojed`,
+  `q_night_rescue`, `q_huntPtacek`, `q_questItems`, `q_devilplay`;
+  `q_millerDate` no longer does). Not a decision for you yet; being looked
+  into.
 
 ## Diet mode (milestone 5)
 
@@ -169,6 +174,30 @@ follows them):
 
 ## Questions for a research session
 
+- **Conversations asked for by trees** (dialogue.md gives `RequestDialog`'s
+  fields only; `btWorld.ts`, `dialogRequests.ts`):
+  1. What `RequestDialog` returns when the conversation can't start, and
+     what `DoDialog` returns (we: success when the conversation ended,
+     failure when it never started).
+  2. The `dialogModule:onDialog` messages in `DialogMailbox` that
+     `final/dialogUtils.xml#dialogInitiator_instant` reads after `DoDialog`
+     (`reqId`, and which states): we send none.
+  3. Who waits for whom: does a request with the player start at once
+     (`bruteForceDialogOnPlayer`), or when the player is near or free?
+- **`SmartAreaBehaviorTag`** (`smartArea`, `preferredBehaviors`,
+  `forbiddenBehaviors`, `preferredBehaviorsOnly`, `stopAfterFirstFound`):
+  we run the first preferred behaviour the area's template offers. How
+  does the game choose, and what does it return?
+- **Tracked assets** (quest-system.md, "Automatic completion"):
+  1. The note gives `quest_asset.type` 1 = place, 3 = item; in the data
+     type 1 assets are in `quest_item` and type 3 in `quest_place` (we go by
+     the table that holds the asset). Please check the note.
+  2. NPC assets: we count the NPC's deaths (the objectives are named
+     "…IsDead", "kill…"). Is that the NPC event, and what is "a meeting"?
+  3. Place assets (`isHenryThere`, count 1, never completed by a tree): we
+     count the player being at the place's entity. What is the real test
+     (inside the area, a distance), and when is it checked?
+  4. Assets given by item category, soul class or faction: what counts?
 - **Behaviour-tree nodes the quest trees use, implemented from the data
   with ASSUMPTIONs** (`btWorld.ts`, `btRuntime.ts`; bt-rules.md covers
   loops, locks and Wait only):

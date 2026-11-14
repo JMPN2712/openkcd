@@ -168,7 +168,7 @@ export class ScheduleStore {
 export interface Target {
   area: number;
   behaviour: string;
-  /** "work" | "home" | "fun" | "bed": where the schedule places the NPC (schedule.ts) */
+  /** "work" | "home" | "fun" | "bed" | "patch": where the schedule places the NPC (schedule.ts) */
   where: string;
   /** walk to the area first (false: start where the NPC stands, as cityWalk does) */
   moveToArea: boolean;
@@ -183,6 +183,8 @@ export interface CycleWorld {
   areaBehaviours: (template: string) => Set<string> | undefined;
   /** hobby_name → mass, per soul name (soul2hobby.xml + hobby.xml) */
   hobbies: Map<string, Map<string, number>>;
+  /** whether an entity's smart-object type offers a behaviour: a quest's entity offers its quest's patches */
+  objectBehaviour?: (entity: number, behaviour: string) => boolean;
   /** whether an area can take another instance of a behaviour now (reservations); default yes */
   requestable?: (area: number, behaviour: string) => boolean;
   random?: () => number;
@@ -413,7 +415,8 @@ export class NpcCycle {
     const handle = String(f.handle ?? "");
     if (!handle) return;
     if (f.add !== true) { this.store.remove(handle); return; }
-    const critical = String(f.criticalPriority ?? "");
+    // (the trees send it as an enum value: daycyclePatchCriticalPriority.cutscene_init)
+    const critical = String(f.criticalPriority ?? "").replace(/^.*\./, "");
     const priority = critical === "cutscene_init" ? 100 : critical === "cutscene_dialogFadingIn" ? 95 : typeof f.priority === "number" ? f.priority : 10;
     if (f.nowOrNever === true && this.activity && priority < this.activity.priority) return;
     const now = minute / 60;
@@ -447,6 +450,10 @@ export class NpcCycle {
   private resolve(a: Activity, quiet = false): Target | null {
     const e = this.npc;
     const name = a.name.toLowerCase();
+    // a patch whose source is a smart object offering a behaviour of the patch's name (a quest's
+    // entity: motherPatch → quests/q_skalitz.xml#motherPatch) runs that behaviour where the NPC
+    // stands; the tree itself moves the NPC
+    if (a.source !== null && this.w.objectBehaviour?.(a.source, a.name)) return { area: a.source, behaviour: a.name, where: "patch", moveToArea: false };
     const home = linkOf(e, "Home");
     if (name === "work") {
       const l = linkOf(e, "Work[") ?? linkOf(e, "Work");
@@ -554,5 +561,5 @@ export async function loadHobbies(vfs: Vfs): Promise<Map<string, Map<string, num
 
 /** What daily cycles need beyond the entities: the hobby tables and the AI world's area behaviours and reservations. */
 export async function cycleData(vfs: Vfs, world: AiWorld): Promise<Omit<CycleWorld, "ents">> {
-  return { hobbies: await loadHobbies(vfs), areaBehaviours: (t) => world.o.ai.areaBehaviours(t), requestable: (a, b) => world.requestable(a, b) };
+  return { hobbies: await loadHobbies(vfs), areaBehaviours: (t) => world.o.ai.areaBehaviours(t), objectBehaviour: (e, b) => world.offersObjectBehaviour(e, b), requestable: (a, b) => world.requestable(a, b) };
 }

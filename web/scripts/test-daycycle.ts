@@ -77,6 +77,17 @@ const tailor = [{ start: 542, activity: "work" }, { start: 1111, activity: "fun"
   check(cycles.at(npc, tailor, 661).activity!.name === "cutscene" && cycles.at(npc, tailor, 661).activity!.priority === 100 && c.haltNow, "immediate cutscene patch: priority 100, all day, halts at once");
   c.change({ add: false, handle: "cut" }, 670);
   check(cycles.at(npc, tailor, 671).activity!.name === "work", "removing the patch: back to work");
+  // a quest's patch: its source is the quest's entity (a smart object offering a behaviour of
+  // that name), so the NPC runs that behaviour where it stands
+  const quest = 77;
+  const q = new DayCycles({ ents: new Map(), hobbies: new Map(), areaBehaviours: () => undefined, objectBehaviour: (e, b) => e === quest && b === "motherPatch" });
+  const m = q.at(npc, tailor, 600);
+  m.change({ add: true, handle: "q_motherPatch", sourceId: { id: quest }, name: "motherPatch", startTime: 0, endTime: 24, priority: 60, criticalPriority: "daycyclePatchCriticalPriority.cutscene_dialogFadingIn" }, 600);
+  const a = q.at(npc, tailor, 601);
+  check(a.activity!.name === "motherPatch" && a.activity!.priority === 95, "a quest patch with a critical priority sent as an enum value: priority 95");
+  check(a.target?.area === quest && a.target.behaviour === "motherPatch" && !a.target.moveToArea && a.target.where === "patch", "its target is the quest entity's behaviour, started where the NPC stands");
+  m.change({ add: true, handle: "other", sourceId: 5, name: "notOffered", priority: 99 }, 602);
+  check(q.at(npc, tailor, 603).target === null, "a patch whose source offers no such behaviour has no target");
 }
 
 // ---- the game data ----

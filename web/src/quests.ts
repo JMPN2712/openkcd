@@ -57,6 +57,32 @@ export interface SequenceWrite {
 
 export const SEQ_START = 1, SEQ_COMPLETE = 2, SEQ_CANCEL = 3;
 
+/**
+ * What an objective tracks (quest_tracked_asset joined to the asset's own table): an item in the
+ * player's inventory, an NPC's death, a place the player reaches, or a statistic. `count` is the
+ * target; 0 is a map marker only.
+ */
+export interface Tracked {
+  kind: "item" | "npc" | "place" | "statistic";
+  count: number;
+  /** item: item id; npc: soul id; place: entity name; statistic: its id */
+  what: string;
+}
+
+/**
+ * The game around the quests, for tracked assets (quest-system.md, "Automatic completion").
+ * A count nobody can give is 0, so its objective waits.
+ */
+export interface QuestWorld {
+  /** how many of an item (by item id) the player carries */
+  itemCount?: (item: string) => number;
+  /** how many times an NPC with this soul id has died */
+  deaths?: (soul: string) => number;
+  /** whether the player is at a quest place (the entity's name) */
+  playerAt?: (entity: string) => boolean;
+  statistic?: (id: number) => number;
+}
+
 export interface QuestMarker {
   quest: string;
   objective?: number;
@@ -67,6 +93,7 @@ export interface QuestMarker {
 
 const int = (s: string | undefined) => (s ? Number(s) : 0);
 const yes = (s: string | undefined) => s === "True";
+const NONE: Tracked[] = [];
 const blankTimer = (s: string | undefined) => !s || s === "-1" || s === "0";
 
 /** The quest tables, by quest name. */
@@ -85,22 +112,29 @@ export class QuestDb {
   private topics = new Map<string, number[]>();
   private places = new Map<string, QuestMarker[]>();
   private rewardRows = new Map<string, boolean[]>();
+  private tracking = new Map<string, Tracked[]>();
 
   private constructor() {}
 
+  /** What an objective tracks (rows with a count; markers alone are not listed). */
+  tracked(quest: string, objective: number): Tracked[] {
+    return this.tracking.get(`${quest}/${objective}`) ?? NONE;
+  }
+
   static async load(vfs: Vfs): Promise<QuestDb> {
     const t = (n: string) => readTable(vfs, n);
-    const [quests, objectives, transitions, s2q, subchapters, topics, skald, places, tracked, exp, money, item, perk] = await Promise.all([
+    const [quests, objectives, transitions, s2q, subchapters, topics, skald, places, tracked, exp, money, item, perk, assetItems, assetNpcs, assetStats] = await Promise.all([
       t("quest/quest"), t("quest/quest_objective"), t("quest/quest_transition"), t("text/sequence2quest_objective"),
       t("quest/quest2skald_subchapter"), t("text/v_topic2subchapter_id"), t("skald/skald_objective"),
       t("quest/quest_place"), t("quest/quest_tracked_asset"),
       t("quest/quest_reward_exp"), t("quest/quest_reward_money"), t("quest/quest_reward_item"), t("quest/quest_reward_perk"),
+      t("quest/quest_item"), t("quest/quest_npc"), t("quest/quest_statistic"),
     ]);
-    return QuestDb.from({ quests, objectives, transitions, s2q, subchapters, topics, skald, places, tracked, rewards: [...exp, ...money, ...item, ...perk] });
+    return QuestDb.from({ quests, objectives, transitions, s2q, subchapters, topics, skald, places, tracked, rewards: [...exp, ...money, ...item, ...perk], assetItems, assetNpcs, assetStats });
   }
 
   /** Build from table rows (tests build small ones by hand). */
-  static from(t: { quests: Row[]; objectives: Row[]; transitions: Row[]; s2q?: Row[]; subchapters?: Row[]; topics?: Row[]; skald?: Row[]; places?: Row[]; tracked?: Row[]; rewards?: Row[] }): QuestDb {
+  static from(t: { quests: Row[]; objectives: Row[]; transitions: Row[]; s2q?: Row[]; subchapters?: Row[]; topics?: Row[]; skald?: Row[]; places?: Row[]; tracked?: Row[]; rewards?: Row[]; assetItems?: Row[]; assetNpcs?: Row[]; assetStats?: Row[] }): QuestDb {
     const db = new QuestDb();
     const sub = new Map((t.subchapters ?? []).map((r) => [r.quest_id, r.skald_subchapter_id]));
     const journalRows = new Set((t.skald ?? []).map((r) => `${r.quest_id}/${r.objective_id}`));
@@ -150,6 +184,21 @@ export class QuestDb {
     for (const r of t.tracked ?? []) {
       const q = name(r.quest_id);
       if (q && r.on_map === "True") db.places.set(q, [...(db.places.get(q) ?? []), { quest: q, objective: int(r.objective_id), pos: r.pos }]);
+    }
+    // what each objective tracks: the asset's kind is the table that holds it (an item, an NPC, a
+    // place or a statistic); an item given by category only, or an NPC by class or faction, has
+    // no single thing to count and is left out
+    const assets = new Map<string, Omit<Tracked, "count">>();
+    const ak = (r: Row) => `${r.quest_id}/${r.quest_asset_id}`;
+    for (const r of t.assetItems ?? []) if (r.item_id) assets.set(ak(r), { kind: "item", what: r.item_id });
+    for (const r of t.assetNpcs ?? []) if (r.soul_id) assets.set(ak(r), { kind: "npc", what: r.soul_id });
+    for (const r of t.places ?? []) if (r.quest_asset_id && r.entity) assets.set(ak(r), { kind: "place", what: r.entity });
+    for (const r of t.assetStats ?? []) assets.set(ak(r), { kind: "statistic", what: r.statistic_id });
+    for (const r of t.tracked ?? []) {
+      const q = name(r.quest_id), a = r.quest_asset_id ? assets.get(ak(r)) : undefined;
+      if (!q || !a || !(int(r.count) > 0)) continue;
+      const k = `${q}/${int(r.objective_id)}`;
+      db.tracking.set(k, [...(db.tracking.get(k) ?? []), { ...a, count: int(r.count) }]);
     }
     for (const r of t.rewards ?? []) { const q = name(r.quest_id); if (q) { const k = `${q}/${r.objective_id}`; db.rewardRows.set(k, [...(db.rewardRows.get(k) ?? []), yes(r.is_immediate)]); } }
     return db;
@@ -239,6 +288,8 @@ export class QuestSystem {
   /** an overlay (diet mode); null reads the stored state as it is */
   overlay: QuestOverlay | null = null;
   report?: (what: string) => void;
+  /** what tracked assets count (the player's inventory, deaths, places, statistics) */
+  world: QuestWorld = {};
 
   readonly db: QuestDb;
 
@@ -545,11 +596,28 @@ export class QuestSystem {
     this.rec(q).tracked = true;
   }
 
+  /** Whether everything an objective tracks has reached its count (nothing tracked: yes). */
+  private trackingDone(quest: string, objective: number): boolean {
+    const w = this.world;
+    for (const t of this.db.tracked(quest, objective)) {
+      const have = t.kind === "item" ? w.itemCount?.(t.what) ?? 0
+        : t.kind === "npc" ? w.deaths?.(t.what) ?? 0
+        : t.kind === "statistic" ? w.statistic?.(Number(t.what)) ?? 0
+        : w.playerAt?.(t.what) ? t.count : 0;
+      if (have < t.count) return false;
+    }
+    return true;
+  }
+
   /**
-   * The generic re-check (quest-system.md, "Automatic completion"): an active objective with no
-   * tracked asset and no timer completes when its non-blank condition holds. Repeats until nothing
-   * changes. ASSUMPTION: tracked assets and timers are not run yet, so objectives with a timer wait
-   * for a script.
+   * The re-check (quest-system.md, "Automatic completion"): an active objective completes when
+   * what it tracks has reached its counts (nothing tracked counts as reached), its condition is
+   * not blank and holds, and it has no timer. Repeats until nothing changes. Call it when the
+   * player's inventory or place, a statistic, or who is alive changes. An objective whose
+   * tracking is done but which has not completed reads as "tracked completed".
+   * ASSUMPTIONs: an NPC asset counts that NPC's deaths (such objectives are named "…IsDead",
+   * "kill…"), a place asset is reached while the player is at the place's entity, and timers are
+   * not run yet, so objectives with a timer wait for a script.
    */
   recheck(): void {
     for (let pass = 0; pass < 100; pass++) {
@@ -559,7 +627,10 @@ export class QuestSystem {
         for (const [k, s] of Object.entries(r.objectives)) {
           if (!isActive(s)) continue;
           const o = this.db.objective(q, Number(k));
-          if (!o || o.timer || !o.condition.trim()) continue;
+          if (!o) continue;
+          const done = this.trackingDone(q, o.id);
+          if (this.db.tracked(q, o.id).length) r.objectives[o.id] = done ? TRACKING_DONE : STARTED;
+          if (!done || o.timer || !o.condition.trim()) continue;
           if (this.holds(o.condition, false) && this.completeObjectiveId(q, o.id)) changed = true;
         }
       }

@@ -320,6 +320,16 @@ export class DialogueDb {
     return this.topicInfo.get(id) ?? { id, priority: 7, role: 0, label: "", timeLimit: 0 };
   }
 
+  private labels: Map<string, number> | null = null;
+  /** The topic with this label (`topic.label`, the alias behaviour trees ask for), or 0. */
+  topicByLabel(label: string): number {
+    if (!this.labels) {
+      this.labels = new Map();
+      for (const t of this.topicInfo.values()) if (t.label && !this.labels.has(t.label.toLowerCase())) this.labels.set(t.label.toLowerCase(), t.id);
+    }
+    return this.labels.get(label.toLowerCase()) ?? 0;
+  }
+
   /** The role pairs a topic needs (topictorole), in table order. */
   rolePairs(topic: number): RolePair[] {
     return this.topicPairs.get(topic) ?? [];

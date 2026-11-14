@@ -8,9 +8,11 @@ because the low-end target is an AMD Vega 7 laptop with 16 GB RAM.
 - **Quest runtime (2026-11-13, in progress):** the quests' own behaviour
   trees run (`web/src/questTrees.ts`), trees read the quest state, and the
   level's profiles (named layer sets) are read from the level data. A new
-  game reaches the opening quest's first conversation headless, with diet
-  mode on. Next: the NPCs' quest patches, the dialogue they ask for, then
-  the world view (`docs/HANDOFF.md`).
+  game plays headless, with diet mode on, through the opening quest's first
+  conversation (asked for by Henry's mother's quest patch) and the talk
+  with his father, up to the errands; objectives that track items wait for
+  them (2026-11-14). Next: the world view, timers, an inventory and shops
+  (`docs/HANDOFF.md`).
 - **NPC messaging (2026-11-13):** mailboxes, area brains, garrison posts
   and shop requests (`web/src/mail.ts`).
 
@@ -512,9 +514,11 @@ content, without deleting anything.
   - [x] Quest state and lifecycle; dialogue, trees and Lua drive it.
   - [x] The quests' own trees, headless, up to the opening quest's first
         conversation (2026-11-13, `scripts/test-quest-opening.ts`).
-  - [ ] NPC quest patches, dialogue asked for by trees, the opening quest
-        played through; quest trees in the world view; timers, tracked
-        items, rewards; shops.
+  - [x] NPC quest patches, dialogue asked for by trees, tracked assets
+        (2026-11-14, headless: up to the opening quest's errands).
+  - [ ] The opening quest played through; quest trees and requested
+        conversations in the world view; timers, an inventory, rewards;
+        shops.
 - [ ] The RPG layer.
 
 ## 7. Diet playthrough

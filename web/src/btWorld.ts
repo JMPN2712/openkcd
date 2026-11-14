@@ -205,10 +205,33 @@ export interface WorldOptions {
   /** whether the player is in a conversation (DialogGate's Condition: InAny, InDialog, InInteractiveDialog) */
   playerInDialog?: (condition: string) => boolean;
   /**
+   * A tree asks for a conversation (RequestDialog; dialogue.md, "Requests from behaviour trees"):
+   * returns the request's id, 0 when it can't be taken. Without it the node is not supported.
+   */
+  requestDialog?: (r: DialogRequest) => number;
+  /** how a requested conversation stands (DoDialog waits while it is "waiting" or "playing") */
+  dialogStatus?: (id: number) => "waiting" | "playing" | "done" | "failed";
+  /**
    * A message to the player (entity -1). The player's own brain (player.xml) doesn't run here, so
    * by default such a message counts as taken and handled at once; return a value to answer it.
    */
   playerMessage?: (msg: Message) => Value | void;
+}
+
+/** What a RequestDialog node passes (dialogue.md, "Requests from behaviour trees"). */
+export interface DialogRequest {
+  /** the entity whose tree asks */
+  initiator: number;
+  /** what to play: a topic id, a topic's label, or metaroles ("GOSSIP") */
+  topicId: number;
+  label: string;
+  metaroles: string;
+  /** the participants (entity ids; -1 is the player), the initiator not among them */
+  souls: number[];
+  once: boolean;
+  greeting: boolean;
+  ending: boolean;
+  interruptible: boolean;
 }
 
 /**
@@ -445,9 +468,33 @@ export class AiWorld {
     return !!b && this.available(target, b);
   }
 
+  /** Whether an entity's smart-object type offers behaviour `name` (a quest's entity: the quest's patches). */
+  offersObjectBehaviour(object: number, name: string): boolean {
+    const e = this.o.ents.get(object);
+    return !!e?.soType && !!this.o.ai.so.get(e.soType)?.some((b) => b.name.toLowerCase() === name.toLowerCase());
+  }
+
+  /**
+   * Start an NPC's behaviour on a smart object: a daily-cycle patch whose source is a quest's
+   * entity names one of that quest's behaviours (daily-cycle.md, section 4: patches sent by
+   * trees name their source; `motherPatch` → quests/q_skalitz.xml#motherPatch). The tree runs in
+   * the NPC's brain with the object as `__object`.
+   */
+  startObjectBehaviour(npc: number, object: number, name: string): Task | null {
+    const e = this.o.ents.get(object);
+    const b = e?.soType ? this.o.ai.so.get(e.soType)?.find((x) => x.name.toLowerCase() === name.toLowerCase()) : undefined;
+    const tree = b && this.o.trees(b.file, b.tree);
+    if (!tree) { this.trace(`no object behaviour "${name}" for ${e?.name ?? object}`); return null; }
+    this.trace(`npc ${npc}: object ${e!.name} behaviour "${b!.name}" → ${b!.file}#${b!.tree}`);
+    this.gaps.delete(npc);
+    const { task } = this.runner.instantiate(tree, this.globals(npc, { __object: { id: object }, __behaviorName: b!.name }));
+    return this.bind(npc, this.tagged(npc, b!.tagId, task));
+  }
+
   /** Start an NPC's smart-area behaviour (e.g. its workplace): the area template's behaviour `name`. */
   startAreaBehaviour(npc: number, area: number, name: string): Task | null {
     const a = this.o.ents.get(area);
+    if (!a?.saTemplate && this.offersObjectBehaviour(area, name)) return this.startObjectBehaviour(npc, area, name);
     const b = a?.saTemplate ? this.o.ai.sa.get(a.saTemplate)?.find((x) => x.name.toLowerCase() === name.toLowerCase()) : undefined;
     const tree = b && this.o.trees(b.file, b.tree);
     if (!tree) { this.trace(`no area behaviour "${name}" for ${a?.name ?? area}`); return null; }
@@ -621,7 +668,13 @@ export class AiWorld {
   private edges(id: number, pruned: Set<string>): { to: number; tags: string[] }[] {
     const out: { to: number; tags: string[] }[] = [];
     // tags are separated by commas outside the brackets (QuestLocation[ctx('a'),npc('b')],Lean)
-    for (const l of this.o.ents.get(id)?.links ?? []) out.push({ to: l.target, tags: l.name.split(/,(?![^[]*\])/).map((t) => t.replace(/\[.*$/, "").trim()).filter(Boolean) });
+    // (two links to one entity, a mother's Work[…] and Home to her house, are one edge with both's tags)
+    const byTarget = new Map<number, { to: number; tags: string[] }>();
+    for (const l of this.o.ents.get(id)?.links ?? []) {
+      const tags = l.name.split(/,(?![^[]*\])/).map((t) => t.replace(/\[.*$/, "").trim()).filter(Boolean);
+      const e = byTarget.get(l.target);
+      if (e) e.tags.push(...tags); else { const n = { to: l.target, tags }; byTarget.set(l.target, n); out.push(n); }
+    }
     // ASSUMPTION: reverse links are "parent" edges (the area containing an object, …)
     if (!pruned.has("parent")) for (const l of this.parents.get(id) ?? []) out.push({ to: l.target, tags: ["parent"] });
     return out.filter((e) => !e.tags.some((t) => pruned.has(t)));
@@ -1119,6 +1172,45 @@ export class AiWorld {
     };
   }
 
+  /**
+   * SmartAreaBehaviorTag: run a behaviour of a smart area (`smartArea`, a variable) chosen by
+   * tag, as the land's daily-cycle trees do for an NPC's work or home (quest patches call it for
+   * "housework", "BlackSmith"). ASSUMPTION (no note yet): the first of `preferredBehaviors` the
+   * area's template offers runs, with the area as __area; without one the node fails when
+   * `preferredBehaviorsOnly` is set and succeeds otherwise. `forbiddenBehaviors` and
+   * `stopAfterFirstFound` are not read.
+   */
+  private areaBehaviourByTag(n: BtNode, c: Context): Task {
+    let inner: Task | null = null;
+    return {
+      tick: () => {
+        if (!inner) {
+          const area = wuid(this.ref(n, c, "smartArea"));
+          const wanted = String(c.eval("preferredBehaviors", "") ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+          const a = area === null ? undefined : this.o.ents.get(area);
+          const offered = a?.saTemplate ? this.o.ai.sa.get(a.saTemplate) : undefined;
+          const b = wanted.map((w) => offered?.find((x) => x.name.toLowerCase() === w.toLowerCase())).find(Boolean);
+          const tree = b && this.o.trees(b.file, b.tree);
+          if (area === null || !b || !tree) {
+            this.trace(`npc ${this.current.npc}: SmartAreaBehaviorTag [${wanted.join(", ")}] on ${area === null ? "nothing" : this.name(area)}: not offered`);
+            return truthyProp(c.eval("preferredBehaviorsOnly", false)) ? "failure" : "success";
+          }
+          this.trace(`npc ${this.current.npc}: SmartAreaBehaviorTag "${b.name}" on ${this.name(area)} → ${b.file}#${b.tree}`);
+          this.areasInUse.set(area, this.o.realTime());
+          this.areaEvent(area, "request", this.current.npc!, b.name);
+          inner = this.tagged(this.current.npc!, b.tagId, this.runner.instantiate(tree, this.globals(this.current.npc!, { __area: { id: area }, __behaviorName: b.name }, c.scope)).task);
+        }
+        if (this.runner.nesting > MAX_NESTING) { inner.abort(); inner = null; return "failure"; }
+        this.runner.nesting++;
+        let s: Status;
+        try { s = inner.tick(); } finally { this.runner.nesting--; }
+        if (s !== "running") inner = null;
+        return s;
+      },
+      abort: () => { inner?.abort(); inner = null; },
+    };
+  }
+
   // ---- host nodes ----
 
   /** Whether an entity (the player: -1) stands inside an area's shape. */
@@ -1186,6 +1278,11 @@ export class AiWorld {
   private node(n: BtNode, c: Context): Task | undefined {
     const kids = n.children;
     const leaf = (f: () => Status): Task => ({ tick: f, abort: () => {} });
+    // a number in a property the parser reads as text (names ending in Id): "$dialogId", "12"
+    const idProp = (prop: string): number => {
+      const v = c.eval(prop, 0);
+      return Number(typeof v === "string" && v.includes("$") ? evalExpression(v, c.scope, this.runner.host) ?? 0 : v ?? 0) || 0;
+    };
     const setVar = (prop: string, v: Value) => { const name = this.prop(n, prop); if (name) assignVar(c.scope, name, v); };
     switch (n.tag) {
       case "SetQuest": case "SetQuestObjective":
@@ -1288,6 +1385,30 @@ export class AiWorld {
       case "StateMachineGate":
         if (this.prop(n, "State") !== "Dead") return undefined;
         return this.gate(n, c, () => false);
+      // a conversation the tree asks for (dialogue.md, "Requests from behaviour trees"): the request
+      // gets an id (DialogId), DoDialog runs while that conversation does. ASSUMPTIONs (the note
+      // gives the request's fields only): a request the host refuses fails the node; DoDialog
+      // succeeds when the conversation ended, fails when it never started, and aborting it leaves
+      // the conversation be
+      case "RequestDialog": {
+        if (!this.o.requestDialog) return undefined;
+        const topicId = idProp("TopicId");
+        return leaf(() => {
+          const list = this.lookupValue(c.scope, this.prop(n, "Souls").replace(/^\$/, ""));
+          const souls = (Array.isArray(list) ? list : []).map((v) => wuid(v as Value)).filter((v): v is number => v !== null);
+          const id = this.o.requestDialog!({
+            initiator: this.current.npc!, topicId, label: String(c.eval("TopicLabel", "") ?? ""), metaroles: String(c.eval("Metaroles", "") ?? ""), souls,
+            once: truthyProp(c.eval("Once", false)), greeting: truthyProp(c.eval("Greeting", false)), ending: truthyProp(c.eval("Ending", false)), interruptible: truthyProp(c.eval("IsInterruptibleByPlayer", false)),
+          });
+          this.trace(`npc ${this.current.npc}: RequestDialog ${String(c.eval("TopicLabel", "") ?? "") || topicId || String(c.eval("Metaroles", "") ?? "")} with [${souls.map((x) => this.name(x)).join(", ")}] → ${id}`);
+          setVar("DialogId", id);
+          return id ? "success" : "failure";
+        });
+      }
+      case "DoDialog": {
+        if (!this.o.dialogStatus) return undefined;
+        return { tick: () => { const st = this.o.dialogStatus!(idProp("DialogId")); return st === "done" ? "success" : st === "failed" ? "failure" : "running"; }, abort: () => {} };
+      }
       // the player in a conversation (any, or one with choices): the host knows
       case "DialogGate":
         return this.gate(n, c, () => wuid(this.ref(n, c, "Who")) === -1 && !!this.o.playerInDialog?.(this.prop(n, "Condition")));
@@ -1668,6 +1789,7 @@ export class AiWorld {
         return leaf(() => { this.trace(`npc ${this.current.npc}: ${n.tag}`); return "success"; });
       case "GraphSearch": return leaf(() => this.graphSearch(n, c));
       case "CallBehavior": return this.callBehaviour(n, c);
+      case "SmartAreaBehaviorTag": return this.areaBehaviourByTag(n, c);
       case "LODGuardian": {
         const branch = kids.find((k) => k.tag === ((this.o.detail ?? true) ? "Detail" : "LOD"));
         return branch?.children[0] ? this.runner.make(branch.children[0], c.scope) : leaf(() => "success");
