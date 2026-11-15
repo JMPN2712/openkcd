@@ -16,6 +16,7 @@ import { readTable } from "./tables.ts";
 import type { Vfs } from "./vfs.ts";
 import { VoiceBank } from "./voice.ts";
 import { QuestDb, QuestSystem } from "./quests.ts";
+import { DialogRequests, type FiledRequest } from "./dialogRequests.ts";
 import { DietMode } from "./diet.ts";
 import { ShotPlanner, type Framing } from "./dialogueCamera.ts";
 
@@ -95,6 +96,14 @@ export class DialogueHost {
     return !!this.player || !!this.conv;
   }
 
+  /**
+   * Conversations the behaviour trees ask for (RequestDialog; dialogRequests.ts), once the tables
+   * have loaded. The view starts the waiting ones with `talk(npc, request)`.
+   */
+  requests: DialogRequests | null = null;
+  /** the request the running conversation answers */
+  private answering = 0;
+
   /** A conversation with an NPC is on (Henry stays put, the NPC waits). */
   get talkingTo(): TalkTarget | null {
     return this.conv ? this.with : null;
@@ -130,6 +139,7 @@ export class DialogueHost {
       quests.report = (w) => console.debug("quests:", w);
       const diet = new DietMode(questDb, db).attach(quests);
       this.ready = { db, voices, text, souls: new Map(souls.map((r) => [r.soul_name, r.soul_id])), quests, diet };
+      this.requests = new DialogRequests(db);
       return this.ready;
     })());
   }
@@ -186,14 +196,16 @@ export class DialogueHost {
   private ready: Loaded | null = null;
 
   /** Talk to an NPC. Call from a user gesture (it starts the audio context). */
-  async talk(npc: TalkTarget): Promise<void> {
+  async talk(npc: TalkTarget, request?: FiledRequest): Promise<void> {
     this.stop();
     this.audio ??= new AudioContext();
     void this.audio.resume();
     const l = await this.load();
     this.with = npc;
     this.shots.reset();
-    this.conv = new Conversation(l.db, this.state, this.people(l, npc), this.flowHost(l));
+    // a conversation a tree asked for starts at its topic, with the greeting and farewell it allows
+    if (request) { this.answering = request.id; this.requests?.begin(request.id); }
+    this.conv = new Conversation(l.db, this.state, this.people(l, npc), this.flowHost(l), request ? { topic: request.topic, greeting: request.greeting, farewell: request.ending } : {});
     this.somethingToSay.delete(npc.entity);
     await this.go(() => this.conv!.start());
   }
@@ -270,6 +282,7 @@ export class DialogueHost {
 
   private endConversation(reason: string): void {
     this.info = `Conversation ${reason}`;
+    this.answered(true);
     this.conv = null;
     this.with = null;
     this.partner = null;
@@ -413,7 +426,14 @@ export class DialogueHost {
     return `Dialogue ${id}: ${await this.playTimeline(l, seq, castFor(l.db, seq, named, henry))}`;
   }
 
+  /** The conversation a tree asked for is over (`played`: it got to play). */
+  private answered(played: boolean): void {
+    if (this.answering) this.requests?.end(this.answering, played);
+    this.answering = 0;
+  }
+
   stop(): void {
+    this.answered(!!this.conv);
     this.playing?.stop();
     this.playing = null;
     this.player = null;

@@ -6,7 +6,7 @@
 // `layers/<layer>.xml` of the level pak (lower case), each entity carrying its Layer attribute.
 // Alternative states of a place are separate profiles (q_skalitz_normal, q_skalitz_burned).
 
-import { parseEntityIndex, type EntityInfo } from "./levelEntities.ts";
+import { parseEntityIndex, parseNpcEntities, type EntityInfo, type NpcEntity } from "./levelEntities.ts";
 import type { PakEntry } from "./zip.ts";
 
 export interface Profile {
@@ -47,6 +47,30 @@ export async function layerEntities(entries: PakEntry[], read: (e: PakEntry) => 
     const layer = layerOfEntry(e.name);
     if (!layer || (want && !want(layer))) continue;
     for (const ent of parseEntityIndex(dec.decode(await read(e))).values()) { ent.layer = layer; out.push(ent); }
+  }
+  return out;
+}
+
+/** What the layer files hold beyond the mission file: every entity with its layer, and the NPCs among them. */
+export interface LayerContents {
+  profiles: Map<string, Profile>;
+  entities: EntityInfo[];
+  /** NPC entities of the layers, and each one's layer by entity id */
+  npcs: NpcEntity[];
+  npcLayer: Map<number, string>;
+}
+
+/** Read the level's profiles (`whdata_1`) and all its layer files. A few seconds for Rataje's 1,831 files. */
+export async function readLayers(entries: PakEntry[], read: (e: PakEntry) => Promise<Uint8Array>): Promise<LayerContents> {
+  const dec = new TextDecoder();
+  const wh = entries.find((e) => e.name.toLowerCase() === "whdata_1");
+  const out: LayerContents = { profiles: wh ? parseProfiles(dec.decode(await read(wh))) : new Map(), entities: [], npcs: [], npcLayer: new Map() };
+  for (const e of entries) {
+    const layer = layerOfEntry(e.name);
+    if (!layer) continue;
+    const xml = dec.decode(await read(e));
+    for (const ent of parseEntityIndex(xml).values()) { ent.layer = layer; out.entities.push(ent); }
+    if (xml.includes('EntityClass="NPC')) for (const n of parseNpcEntities(xml)) { out.npcs.push(n); out.npcLayer.set(n.id, layer); }
   }
   return out;
 }

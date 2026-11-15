@@ -210,6 +210,7 @@ export class Schedules {
    */
   clearCycleData(): void {
     this.cycles = new DayCycles({ ents: this.ents, hobbies: new Map(), areaBehaviours: () => undefined, ready: false });
+    this.pending.clear();
     this.routes.clear();
     this.departures.clear();
   }
@@ -221,12 +222,33 @@ export class Schedules {
 
   /** An NPC's daily cycle, caught up to game minute `minute`. */
   cycle(npc: NpcEntity, schedule: ScheduleItem[], minute: number): NpcCycle {
+    const c = this.cycles.at(npc, schedule, minute);
+    const waiting = this.pending.get(npc.id);
+    if (!waiting) return c;
+    this.pending.delete(npc.id);
+    for (const f of waiting) c.change(f, minute);
     return this.cycles.at(npc, schedule, minute);
+  }
+
+  /** `daycycle:change` messages for NPCs whose cycle doesn't exist yet (not streamed in so far) */
+  private pending = new Map<number, Record<string, unknown>[]>();
+
+  /**
+   * A `daycycle:change` message to an NPC (a patch laid on or taken off its schedule). An NPC
+   * that has no cycle yet (quests hand patches to NPCs far from the player) gets it when its
+   * cycle is first made.
+   */
+  change(id: number, f: Record<string, unknown>, minute: number): void {
+    const c = this.cycles.get(id);
+    if (c) { c.change(f, minute); return; }
+    const list = this.pending.get(id) ?? [];
+    list.push(f);
+    this.pending.set(id, list);
   }
 
   /** The NPC left its activity's behaviour tree at `pos`: the walk to its next activity starts there. */
   depart(npc: NpcEntity, schedule: ScheduleItem[], minute: number, pos: [number, number, number]): void {
-    const c = this.cycles.at(npc, schedule, minute);
+    const c = this.cycle(npc, schedule, minute);
     if (c.activity) this.departures.set(npc.id, { activity: c.activity.id, pos: [...pos] });
   }
 
@@ -258,7 +280,7 @@ export class Schedules {
    * starts with a walk from the previous one's place at `speed` m/s (real time).
    */
   at(npc: NpcEntity, schedule: ScheduleItem[], minute: number, groundAt: (x: number, y: number) => number, speed: number): Placement {
-    const c = this.cycles.at(npc, schedule, minute);
+    const c = this.cycle(npc, schedule, minute);
     const activity = c.activity?.name ?? "";
     const dep = this.departures.get(npc.id);
     const left = dep && dep.activity === c.activity?.id ? dep.pos : null;

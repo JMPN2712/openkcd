@@ -15,6 +15,7 @@ import { ReadWorkers } from "./readWorkers.ts";
 import { parseNpcEntities, parseEntityIndex, propEntities, type EntityInfo, type NpcEntity } from "./levelEntities.ts";
 import { Schedules } from "./schedule.ts";
 import { NavMesh } from "./navmesh.ts";
+import { readLayers, type LayerContents } from "./profiles.ts";
 import { parseLayerNames, defaultHiddenLayers, layerDoors } from "./levelLayers.ts";
 import { ASSET_RE } from "./assets.ts";
 import { parseTimeOfDay, type TimeOfDay } from "./tod.ts";
@@ -26,6 +27,8 @@ export interface LevelData {
   objects: LevelObjects;
   cover?: Cover;
   npcEntities: NpcEntity[];
+  /** the layer files' entities and the level's profiles (profiles.ts), read on first use */
+  layers: () => Promise<LayerContents>;
   schedules: Schedules;
   props: EntityInfo[];
   ents: Map<number, EntityInfo>;
@@ -114,7 +117,10 @@ export function levelData(paks: PakSource[], level: string, status: (s: string) 
       } catch (err) {
         console.warn("occluder.ocm:", err);
       }
-      return { occluders, terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(blob, entries), roads: new Roads(blob, dataStart(blob, entry), objects.roads), decals: new Decals(objects.decalIndex, terrain) };
+      // the editor layers' entities and the level's profiles, read when a new game asks for them
+      let layers: Promise<LayerContents> | null = null;
+      const readLayerFiles = () => (layers ??= readLayers(entries, (e) => readEntry(blob, e, undefined, false)));
+      return { layers: readLayerFiles, occluders, terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(blob, entries), roads: new Roads(blob, dataStart(blob, entry), objects.roads), decals: new Decals(objects.decalIndex, terrain) };
     })();
     p.catch(() => dataCache.delete(pakPath));
     dataCache.set(pakPath, p);

@@ -689,8 +689,18 @@ game's data.
   plays through the dialogue flow, completes `objectiveStart` and starts
   `speakWithFather`; the talk with his father starts the errands
   (`buyCharcoal` ×10, `getDebtMoney`, `getCrossguard`, `collectBeer`).
-- **Not yet:** the trees are not started in the world view (only the quest
-  reads are wired there) and its dialogue doesn't take the trees' requests;
+- **In the world view: "New game"** (`levelView.ts`). It reads the editor
+  layers (`profiles.ts` `readLayers`, on first use), hands their entities
+  to the AI world (`AiWorld.addEntities`), starts `QuestBrains` (ticked ten
+  times a second of play time) and puts Henry at the level's spawn point
+  (the mission file's `SpawnPoint`, by his home in Skalitz). The NPCs of
+  the layers of the profiles the trees switch on join the level's NPCs
+  (139 for the prologue). A patch for an NPC that has no daily cycle yet is
+  kept until it is streamed in (`Schedules.change`). The view's dialogue
+  takes a waiting request when its NPC is within 12 m (ours) and plays it
+  from the requested topic. Health conditions read as unhurt
+  (`get_health` 100, `GetBleeding` 0).
+- **Not yet:**
   a real inventory; combat and perception nodes; the calendar functions the
   scripts call (`forwardTime`).
 

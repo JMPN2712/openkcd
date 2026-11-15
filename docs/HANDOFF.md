@@ -44,16 +44,22 @@ for a stand-in inventory. `node scripts/test-quest-opening.ts`.
 
 1. Done: quest patches (`AiWorld.startObjectBehaviour`, the daily cycle's
    `"patch"` target), `SmartAreaBehaviorTag`.
-2. Done headless: `RequestDialog` / `DoDialog` and `DialogRequests`
-   (`dialogRequests.ts`). **Left:** the world view's dialogue
-   (`dialogueView.ts`) must take the waiting request
-   (`requests.next(true)`), start that conversation with the requested
-   topic, and call `begin` / `end`; `playerInDialog` should also be true in
-   conversations the player starts.
-3. **Start the quest trees in the world view** (`QuestBrains` in
-   `levelView.ts`, with the layer entities from `profiles.ts` and a "New
-   game" control). Today only the quest reads are wired there. Watch the
-   memory: the layer files add 29,307 entities.
+2. Done: `RequestDialog` / `DoDialog` and `DialogRequests`
+   (`dialogRequests.ts`); the world view's dialogue starts the waiting
+   request when its NPC is within 12 m (`DialogueHost.talk(npc, request)`).
+3. Done (2026-11-14): **"New game" in the world view.** It reads the
+   editor layers (about 12 s on the main thread: make it lazy per profile
+   or move it to a worker), starts the quest trees, puts Henry at the
+   level's spawn point (`spawnStart`, Skalitz) and adds the NPCs of the
+   layers of the profiles switched on. Henry's mother then opens the first
+   conversation. `node scripts/profile-browser.ts --preset=potato
+   --new-game --pick=1,1,4`. **Open points seen there:**
+   - the mother's follow-up menu has no way out but Backspace, and an
+     option already asked stays ("Do you need help?" repeats);
+   - `playerInDialog` is true only for the view's conversations;
+   - the story's NPCs have no beds or hobbies (`Schedules` is built from
+     the mission file's NPCs only);
+   - nothing saves the story; reopening the view starts without it.
 4. **Profiles to the scene:** show and hide a profile's layers when
    `EnableProfile` switches it (`WorldOptions.profile`), in place of
    `defaultHiddenLayers`' guess.
@@ -356,6 +362,11 @@ follows them):
   calendar's clocks, `QuestSystem.update()`, saved with the quest), run in
   the world view; `scripts/test-quests.ts` (tracked assets and timers on a
   made-up quest).
+- #46 (2026-11-14): "New game" in the world view: quest trees, the
+  layers' NPCs of the profiles switched on, Henry at the level's spawn
+  point, conversations asked for by trees played by the view's dialogue;
+  patches for NPCs not streamed in yet are kept for them; unhurt answers
+  for the health conditions. `profile-browser.ts --new-game`.
 
 ## Findings not yet acted on
 

@@ -350,15 +350,28 @@ export class AiWorld {
     return l;
   }
 
+  /**
+   * Take in entities (the level's at the start; the editor layers' when a new game loads them):
+   * a quest's entity gets its smart-object type, links are indexed from their targets. Entities
+   * not yet in the world's map are added to it.
+   */
+  addEntities(list: Iterable<EntityInfo>): void {
+    const o = this.o;
+    for (const e of list) {
+      if (!o.ents.has(e.id)) o.ents.set(e.id, e);
+      // a quest's entity carries no smart-object type: it is the smart object of its own name
+      if (e.cls === "QuestObject" && !e.soType) { const t = o.ai.soByName.get(e.name.toLowerCase()); if (t) e.soType = t; }
+      for (const l of e.links ?? []) {
+        const back = this.parents.get(l.target) ?? [];
+        back.push({ target: e.id, name: l.name });
+        this.parents.set(l.target, back);
+      }
+    }
+  }
+
   constructor(o: WorldOptions) {
     this.o = o;
-    // a quest's entity carries no smart-object type: it is the smart object of its own name
-    for (const e of o.ents.values()) if (e.cls === "QuestObject" && !e.soType) { const t = o.ai.soByName.get(e.name.toLowerCase()); if (t) e.soType = t; }
-    for (const e of o.ents.values()) for (const l of e.links ?? []) {
-      const list = this.parents.get(l.target) ?? [];
-      list.push({ target: e.id, name: l.name });
-      this.parents.set(l.target, list);
-    }
+    this.addEntities([...o.ents.values()]);
     const host: Host = {
       worldTime: o.worldTime,
       realTime: o.realTime,

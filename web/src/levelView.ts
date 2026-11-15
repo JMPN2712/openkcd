@@ -10,6 +10,8 @@ import type { PakSource } from "./paks.ts";
 import type { LevelObjects } from "./levelObjects.ts";
 import type { Cover } from "./cover.ts";
 import type { QuestSystem } from "./quests.ts";
+import { QuestBrains } from "./questTrees.ts";
+import type { LayerContents } from "./profiles.ts";
 import { MergedMeshes } from "./mergedMeshes.ts";
 import { Roads } from "./roads.ts";
 import { Decals } from "./decals.ts";
@@ -100,6 +102,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let schedules: Schedules;
   let props: EntityInfo[];
   let ents: Map<number, EntityInfo>;
+  let readLayerFiles: () => Promise<LayerContents>;
   let hiddenLayers: Set<number>;
   let tod: TimeOfDay | null;
   let surfaceTypes: Map<number, string>;
@@ -111,7 +114,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let device: GPUDevice;
   let adapterInfo: GPUAdapterInfo | null = null;
   try {
-    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, tod, surfaceTypes, merged, roads, decals, occluders } = await levelData(paks, level, (m) => { status.textContent = m; }));
+    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, tod, surfaceTypes, merged, roads, decals, occluders, layers: readLayerFiles } = await levelData(paks, level, (m) => { status.textContent = m; }));
     vfs = await levelVfs(paks, level, (m) => { status.textContent = m; });
     if (!navigator.gpu) throw new Error("WebGPU is not available in this browser (chrome://flags/#enable-unsafe-webgpu).");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
@@ -215,6 +218,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   shotSel.title = "Dialogue camera shot (debug)";
   for (const s of ["auto", "off", ...SHOTS]) shotSel.append(new Option(s === "auto" ? "Camera: dialogue" : s === "off" ? "Camera: normal" : `Camera: ${s}`, s));
   clockBar.append(dlgId, dlgBtn, shotSel);
+  // a new game: the quests' own trees start and the story begins in Skalitz (work in progress)
+  const newGameBtn = el("button", undefined, "New game");
+  newGameBtn.type = "button";
+  newGameBtn.title = "Start the story: the quests' own trees run, the opening quest begins and Henry is taken to Skalitz (work in progress)";
+  newGameBtn.addEventListener("click", () => { void startStory().catch((err) => { storyInfo = `New game: ${(err as Error).message}`; }); canvas.focus(); });
+  clockBar.append(newGameBtn);
   let cameraRig: Promise<DialogueCameraRig | null> | null = null;
   let rig: DialogueCameraRig | null = null;
   const loadRig = () => {
@@ -472,6 +481,51 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let viewLua: LuaHost | null = null;
   let viewQuests: QuestSystem | null = null;
   let questsCheckedAt = 0;
+  // ---- the story (a new game): quest trees, the layers' NPCs of the profiles they switch on ----
+  let story: { brains: QuestBrains; layers: LayerContents; added: Set<number>; tickedAt: number } | null = null;
+  let storyInfo = "";
+  let profilesChanged = false;
+  let storyShownAt = 0;
+  /** The NPCs of the layers of the profiles switched on join the level's NPCs; the others' leave. */
+  const syncProfileNpcs = () => {
+    const w = npcAi?.world;
+    if (!story || !w) return;
+    profilesChanged = false;
+    const on = new Set<string>();
+    for (const name of w.profiles) for (const l of story.layers.profiles.get(name)?.layers ?? []) on.add(l);
+    const want = new Set(story.layers.npcs.filter((n) => on.has(story!.layers.npcLayer.get(n.id) ?? "")).map((n) => n.id));
+    for (let i = npcEntities.length - 1; i >= 0; i--) if (story.added.has(npcEntities[i].id) && !want.has(npcEntities[i].id)) { story.added.delete(npcEntities[i].id); npcEntities.splice(i, 1); }
+    for (const n of story.layers.npcs) if (want.has(n.id) && !story.added.has(n.id)) { story.added.add(n.id); npcEntities.push(n); }
+    npcCheckedAt = -Infinity;
+  };
+  /**
+   * A new game (GAMELOGIC.md, "The quests' own trees"): read the editor layers' entities, start
+   * every quest tree diet mode keeps, and tell them a new game began. The master quest activates
+   * the opening quest, whose tree loads Skalitz's profile and hands its people their parts.
+   */
+  const startStory = async () => {
+    const w = npcAi?.world, quests = viewQuests;
+    if (story || !w || !quests) { storyInfo = story ? "New game: already started" : "New game: the behaviour trees are still loading"; return; }
+    storyInfo = "New game: reading the editor layers…";
+    const layers = await readLayerFiles();
+    if (stopped || story) return;
+    w.addEntities(layers.entities);
+    const brains = new QuestBrains(w, quests, { runs: (q) => !quests.isCut(q) });
+    story = { brains, layers, added: new Set(), tickedAt: simSeconds };
+    const running = brains.start();
+    brains.newGame();
+    storyInfo = `New game: ${running} quest trees`;
+    newGameBtn.disabled = true;
+    // Henry starts at the level's spawn point (the mission file's first SpawnPoint entity:
+    // "spawnStart", by his home in Skalitz)
+    const spawn = [...ents.values()].find((e) => e.cls === "SpawnPoint" && !e.layer);
+    if (spawn && player) {
+      player.controller.pos = [spawn.pos[0], spawn.pos[1], spawn.pos[2]];
+      player.controller.vel = [0, 0, 0];
+      player.controller.yaw = 2 * Math.atan2(spawn.rot[3], spawn.rot[0]);
+      mode = "player";
+    }
+  };
   void (async () => {
     // Lua 5.1 with the game's scripts (Scripts/main.lua) for the trees' Lua code
     const lua = await LuaHost.create(vfs, luaWasm);
@@ -490,7 +544,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       quest: (fn, q, o) => quests.apply(fn, q, o),
       questCall: (fn, q, o) => !!quests.call(fn, o === undefined ? [q] : [q, o]),
       ents, lua, realTime: () => npcAi?.now ?? 0, worldTime: () => (npcAi?.now ?? 0) * 15, act: (a) => npcAi?.act(a) ?? 1,
-      daycycleChange: (npc, f) => schedules.cycleOf(npc)?.change(f, minute),
+      daycycleChange: (npc, f) => schedules.change(npc, f, minute),
+      // conversations the trees ask for go to the dialogue (it starts them when the NPC is near)
+      requestDialog: (r) => dialogue.requests?.request(r) ?? 0,
+      dialogStatus: (id) => dialogue.requests?.status(id) ?? "failed",
+      playerInDialog: () => !!dialogue.talkingTo,
+      profile: () => { profilesChanged = true; },
     });
     // (createAiWorld hands the host callbacks that reach this view: close it again if it stopped meanwhile)
     if (stopped) { lua.close(); return null; }
@@ -900,6 +959,27 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     simSeconds += simDt;
     if (!worldLoading) npcAi?.tick(simDt);
     if (viewQuests && simSeconds - questsCheckedAt >= 0.5) { questsCheckedAt = simSeconds; viewQuests.update(); }
+    if (story && !worldLoading) {
+      // the quests' trees, ten times a second of play time
+      if (simSeconds - story.tickedAt >= 0.1) { story.tickedAt = simSeconds; story.brains.tick(); }
+      if (profilesChanged) syncProfileNpcs();
+      if (simSeconds - storyShownAt >= 1) {
+        storyShownAt = simSeconds;
+        const waiting = dialogue.requests?.next(true);
+        storyInfo = `New game: ${story.brains.entities.size} quest trees, ${npcAi?.world.profiles.size ?? 0} profiles on, ${story.added.size} NPCs from their layers${waiting ? `, ${ents.get(waiting.initiator)?.name ?? "someone"} asks to talk (${waiting.label || waiting.topic})` : ""}`;
+      }
+      // Henry starts beside his mother, who asks for the first conversation
+      const asked = dialogue.requests?.next(true);
+      if (asked && player && !dialogue.talkingTo) {
+        const other = asked.initiator === -1 ? asked.souls.find((x) => x !== -1) : asked.initiator;
+        const n = npcs.find((x) => x.entity.id === other);
+        if (n && Math.hypot(n.placement.pos[0] - player.controller.pos[0], n.placement.pos[1] - player.controller.pos[1]) < 12) {
+          storyInfo = `New game: ${n.entity.name} starts a conversation`;
+          loadRig();
+          void dialogue.talk({ soul: n.soul, name: n.entity.name, entity: n.entity.id }, asked).catch((err) => { storyInfo = `New game: ${(err as Error).message}`; });
+        }
+      }
+    }
     const hh = Math.floor(minute / 60), mm = Math.floor(minute % 60);
     clockLabel.textContent = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
     if (document.activeElement !== clockRange) clockRange.value = String(Math.floor(minute));
@@ -1026,7 +1106,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     }
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
     const benchInfo = bench ? `⏱ benchmark ${q.label}: ${bench.phase === "settle" ? "loading…" : `${bench.segment} ${Math.round((now - bench.start) / 1000)}/${Math.round(PATH_SECONDS)} s`} · ` : "";
-    hud.textContent = `${benchInfo}${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms${timer.available ? `, gpu ${timer.total.toFixed(1)} ms (${timer.summary()}${splitPasses ? "" : "; G splits"})` : ""} (${q.label}, ${canvas.width}×${canvas.height}${q.upscale ? `, scene ×${scale.toFixed(2)}` : ""}) · memory: JS ${(jsHeap() / 2 ** 20).toFixed(0)} MiB, GPU ${((gpuMem.buffers + gpuMem.textures + gpuMem.targets) / 2 ** 20).toFixed(0)} MiB · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}${dialogueInfo ? ` · ${dialogueInfo}` : ""}${cameraInfo ? ` · ${cameraInfo}` : ""}`;
+    hud.textContent = `${benchInfo}${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms${timer.available ? `, gpu ${timer.total.toFixed(1)} ms (${timer.summary()}${splitPasses ? "" : "; G splits"})` : ""} (${q.label}, ${canvas.width}×${canvas.height}${q.upscale ? `, scene ×${scale.toFixed(2)}` : ""}) · memory: JS ${(jsHeap() / 2 ** 20).toFixed(0)} MiB, GPU ${((gpuMem.buffers + gpuMem.textures + gpuMem.targets) / 2 ** 20).toFixed(0)} MiB · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}${storyInfo ? ` · ${storyInfo}` : ""}${dialogueInfo ? ` · ${dialogueInfo}` : ""}${cameraInfo ? ` · ${cameraInfo}` : ""}`;
   };
   raf = requestAnimationFrame(frame);
   canvas.focus();
@@ -1040,6 +1120,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     // function table would keep this whole closure, caches and scene included. And the caches'
     // released models can't be uploaded to the next view's renderer (releaseVertexData).
     schedules.clearCycleData();
+    // the level data outlives the view: the story's NPCs leave its list again
+    if (story) for (let i = npcEntities.length - 1; i >= 0; i--) if (story.added.has(npcEntities[i].id)) npcEntities.splice(i, 1);
+    story = null;
     viewLua?.close();
     worldCaches.clear();
     gpuDevice.removeEventListener("uncapturederror", onGpuError);

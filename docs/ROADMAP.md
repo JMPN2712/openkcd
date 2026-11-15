@@ -516,9 +516,11 @@ content, without deleting anything.
         conversation (2026-11-13, `scripts/test-quest-opening.ts`).
   - [x] NPC quest patches, dialogue asked for by trees, tracked assets
         (2026-11-14, headless: up to the opening quest's errands).
-  - [ ] The opening quest played through; quest trees and requested
-        conversations in the world view; timers, an inventory, rewards;
-        shops.
+  - [x] Objective timers; "New game" in the world view (quest trees, the
+        prologue's NPCs, the first conversation asked for by a tree)
+        (2026-11-14).
+  - [ ] The opening quest played through; profiles shown in the scene; an
+        inventory, rewards; shops.
 - [ ] The RPG layer.
 
 ## 7. Diet playthrough

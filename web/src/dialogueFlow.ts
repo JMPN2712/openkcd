@@ -556,8 +556,11 @@ export function neutralWorld(hour: () => number, quests?: { call(name: string, a
       case "IsObjectiveStarted": case "IsObjectiveCompleted": case "IsObjectiveCanceled": case "IsObjectiveFailed": case "IsObjectiveUnchanged":
       case "HasSoulTag": case "HasBehaviorTag": case "HasPerk": case "HasAbility": case "IsRaining": case "IsActorInside":
       case "GetActorAngriness": case "GetActorMoney": case "CountOfActorItems": case "GetBloodiness": case "GetDirtiness": case "GetArmorRating":
-      case "GetPlayerRelativeCharisma": case "GetFactionReputation":
+      case "GetPlayerRelativeCharisma": case "GetFactionReputation": case "GetBleeding":
         return 0;
+      // nobody is hurt yet (combat comes later): full health, on the 0–100 scale the conditions
+      // compare against (get_health()[0] < 100, <= 25)
+      case "get_health": return 100;
     }
     return undefined;
   };
