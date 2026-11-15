@@ -18,6 +18,8 @@ import { ShopDb, Shops } from "./shops.ts";
 import { attachInventory } from "./playerState.ts";
 import { TradePanel } from "./tradeView.ts";
 import { Calendar } from "./calendar.ts";
+import { CombatDb } from "./combat.ts";
+import { FightBars, FightView, REACH } from "./combatView.ts";
 import type { LayerContents } from "./profiles.ts";
 import { MergedMeshes } from "./mergedMeshes.ts";
 import { Roads } from "./roads.ts";
@@ -228,6 +230,25 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   shotSel.title = "Dialogue camera shot (debug)";
   for (const s of ["auto", "off", ...SHOTS]) shotSel.append(new Option(s === "auto" ? "Camera: dialogue" : s === "off" ? "Camera: normal" : `Camera: ${s}`, s));
   debugRow.append(dlgId, dlgBtn, shotSel);
+  // debug: a fist fight with the NPC named in the box, or the nearest one within 6 m
+  const fightBtn = el("button", undefined, "⚔ Fight");
+  fightBtn.type = "button";
+  fightBtn.title = "Fist fight with the NPC named in the box, or the nearest (debug). Keys: 1 light, 2 heavy, F kick, Q block (pressed just before the hit: a perfect block), A/D/S just before the hit: dodge; or the mouse buttons";
+  fightBtn.addEventListener("click", () => {
+    const at = player && mode === "player" ? player.controller.pos : cam.pos;
+    const who = dlgId.value.trim();
+    const near = npcs.map((n) => { const p = (npcWorld.drawn(n.entity.id) ?? n.placement).pos; return { n, p, d: Math.hypot(p[0] - at[0], p[1] - at[1]) }; }).sort((a, b) => a.d - b.d);
+    const pick = /^\d*$/.test(who) ? near.find((x) => x.d < 6) : near.find((x) => x.n.entity.name === who);
+    if (!pick) { fightInfo = `Fight: ${/^\d*$/.test(who) ? "nobody" : who} isn't near`; canvas.focus(); return; }
+    // Henry steps up to the NPC: 1.3 m away, on his side
+    if (player && mode === "player" && pick.d > 1.6) {
+      const c = player.controller, dx = c.pos[0] - pick.p[0], dy = c.pos[1] - pick.p[1], d = Math.hypot(dx, dy) || 1;
+      c.place(pick.p[0] + (dx / d) * 1.3, pick.p[1] + (dy / d) * 1.3, pick.p[2] + 1);
+    }
+    void startFight(pick.n).catch((err) => { fightInfo = `Fight: ${(err as Error).message}`; });
+    canvas.focus();
+  });
+  debugRow.append(fightBtn);
   // a new game: the quests' own trees start and the story begins in Skalitz (work in progress)
   const newGameBtn = el("button", undefined, "New game");
   newGameBtn.type = "button";
@@ -555,6 +576,38 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let viewLua: LuaHost | null = null;
   let viewQuests: QuestSystem | null = null;
   let trade: TradePanel | null = null;
+  // ---- a fight (combatView.ts): Henry against one NPC, fists for now ----
+  let animLibs: Record<"male" | "female", AnimLibrary> | null = null;
+  let combatDb: Promise<CombatDb> | null = null;
+  let fightView: FightView | null = null;
+  let fightWith: WorldNpc | null = null;
+  let fightInfo = "";
+  const fightBars = new FightBars();
+  stage.append(fightBars.el);
+  /** Start a fist fight with an NPC shown (debug control; the fight trees will decide this later). */
+  const startFight = async (n: WorldNpc) => {
+    if (!player || !animLibs || fightView) { fightInfo = fightView ? "Fight: already fighting" : "Fight: still loading"; return; }
+    fightInfo = "Fight: loading the combat tables…";
+    const db = await (combatDb ??= CombatDb.load(vfs));
+    const henry = db.fighter("dude", null), foe = db.fighter(n.entity.name, null);
+    if (stopped || !henry || !foe || !player || !animLibs) { fightInfo = `Fight: no soul for ${n.entity.name}`; return; }
+    const session = player, id = n.entity.id;
+    const unarmed = ["r_noweapon", "or_noweapon", "l_noShield", "ol_noShield"];
+    fightWith = n;
+    fightView = new FightView(db, henry, foe, [
+      { lib: animLibs.male, state: unarmed, play: (clip, o) => { session.overlay = clip ? { clip, t: 0, ...o } : null; } },
+      { lib: animLibs[n.entity.female ? "female" : "male"], state: unarmed, play: (clip, o) => { npcWorld.overrides.set(id, { clip, since: simSeconds, loop: o.loop }); } },
+    ], ["Henry", dialogue.displayName(n.soul) ?? n.entity.name]);
+  };
+  const endFight = () => {
+    if (!fightView) return;
+    // a fighter who is out stays down (the clip holds its last frame); the other goes back to normal
+    if (player && !fightView.fight.a[0].out) player.overlay = null;
+    if (fightWith && !fightView.fight.a[1].out) npcWorld.overrides.delete(fightWith.entity.id);
+    fightInfo = fightView.summary();
+    fightView = null;
+    fightWith = null;
+  };
   // the calendar the scripts see: its world time follows the view's clock (`minute`), which a
   // script can set; while a script holds world time the clock stands still
   const calendar = new Calendar();
@@ -673,7 +726,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     return w;
   })().then((w) => {
     if (stopped || !w) return;
-    npcAi = new NpcAi(w, { male: new AnimLibrary(vfs, "male"), female: new AnimLibrary(vfs, "female") });
+    animLibs = { male: new AnimLibrary(vfs, "male"), female: new AnimLibrary(vfs, "female") };
+    npcAi = new NpcAi(w, animLibs);
     npcAi.nav = schedules.navMesh;
     npcWorld.ai = npcAi;
     npcCheckedAt = -Infinity;
@@ -887,6 +941,13 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   canvas.addEventListener("keydown", (e) => {
     // in a conversation the menu takes the keys (numbers, arrows, Enter, Space)
     if (dialogue.talkingTo && !e.repeat && dialogue.key(e)) { e.preventDefault(); return; }
+    // a fight's keys: 1 light, 2 heavy, F special, Q block (its press is the perfect-block press),
+    // A / D / S as a dodge press
+    if (fightView && !fightView.over && !e.repeat) {
+      if (e.code === "Digit1" || e.code === "Digit2" || e.code === "KeyF") { fightView.attack(e.code === "Digit1" ? 0 : e.code === "Digit2" ? 1 : 2); e.preventDefault(); return; }
+      if (e.code === "KeyQ") { fightView.block(true); e.preventDefault(); return; }
+      if (e.code === "KeyA" || e.code === "KeyD" || e.code === "KeyS") fightView.dodge();
+    }
     if (!e.repeat) {
       if (e.code === "KeyF" && player) {
         mode = mode === "player" ? "fly" : "player";
@@ -920,7 +981,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     keys.add(e.code);
     e.preventDefault();
   });
-  canvas.addEventListener("keyup", (e) => keys.delete(e.code));
+  canvas.addEventListener("keyup", (e) => { keys.delete(e.code); if (e.code === "KeyQ") fightView?.block(false); });
+  canvas.addEventListener("contextmenu", (e) => { if (fightView) e.preventDefault(); });
   canvas.addEventListener("blur", () => keys.clear());
   let drag: { x: number; y: number } | null = null;
   canvas.addEventListener("pointerdown", (e) => {
@@ -929,6 +991,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       if (document.pointerLockElement !== canvas) lockPointer(canvas);
       // in a conversation a click picks the highlighted choice
       else if (dialogue.talkingTo) dialogue.click();
+      // in a fight the left button is a light attack, the right a heavy one
+      else if (fightView && !fightView.over) fightView.attack(e.button === 2 ? 1 : 0);
       return;
     }
     canvas.setPointerCapture(e.pointerId);
@@ -1011,8 +1075,19 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         const d = ((want - player.controller.yaw + 3 * Math.PI) % (2 * Math.PI)) - Math.PI;
         player.controller.yaw += Math.sign(d) * Math.min(Math.abs(d), 4 * Math.PI * dt);
       }
-      for (const id of npcWorld.held.keys()) if (id !== talker?.entity.id) npcWorld.held.delete(id);
-      if (talker) npcWorld.held.set(talker.entity.id, [...player.controller.pos]);
+      // in a fight Henry faces his opponent, who holds its ground facing him
+      const foeAt = fightView && fightWith ? (npcWorld.drawn(fightWith.entity.id) ?? fightWith.placement) : undefined;
+      if (fightView && foeAt) {
+        const want = Math.atan2(foeAt.pos[1] - player.controller.pos[1], foeAt.pos[0] - player.controller.pos[0]);
+        const d = ((want - player.controller.yaw + 3 * Math.PI) % (2 * Math.PI)) - Math.PI;
+        if (!fightView.fight.a[0].out) player.controller.yaw += Math.sign(d) * Math.min(Math.abs(d), 4 * Math.PI * dt);
+        fightView.update((dt * Number(speedSel.value)) / 15, Math.hypot(foeAt.pos[0] - player.controller.pos[0], foeAt.pos[1] - player.controller.pos[1]) <= REACH);
+        fightInfo = fightView.summary();
+        if (fightView.over || !npcs.includes(fightWith!)) endFight();
+      }
+      const holder = talker ?? (fightView ? fightWith : null) ?? undefined;
+      for (const id of npcWorld.held.keys()) if (id !== holder?.entity.id) npcWorld.held.delete(id);
+      if (holder) npcWorld.held.set(holder.entity.id, [...player.controller.pos]);
       Object.assign(cam, player.camera(dt));
       // the dialogue camera: in a conversation the planned shot on whoever speaks (the rig on the
       // listener); a forced debug shot keeps that framing with another shot. A sequence played by
@@ -1073,8 +1148,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       talkHint = best ? { npc: best, name: dialogue.displayName(best.soul) ?? "them", ready: dialogue.hasSomethingToSay({ soul: best.soul, name: best.entity.name, entity: best.entity.id }) } : null;
       // the NPC Henry talks to waits (its behaviour tree is paused)
       if (npcAi) {
-        for (const id of npcAi.paused) if (id !== talking?.entity) npcAi.paused.delete(id);
-        if (talking) npcAi.paused.add(talking.entity);
+        const busy = talking?.entity ?? (fightView ? fightWith?.entity.id : undefined);
+        for (const id of npcAi.paused) if (id !== busy) npcAi.paused.delete(id);
+        if (busy !== undefined) npcAi.paused.add(busy);
       }
       const chest = chests.target(feet, cam.pos, fwd);
       chestHint = chest ? { chest, act: chest === openChest ? "close" : chests.action(chest) } : null;
@@ -1309,7 +1385,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
     const benchInfo = bench ? `⏱ benchmark ${q.label}: ${bench.phase === "settle" ? "loading…" : `${bench.segment} ${Math.round((now - bench.start) / 1000)}/${Math.round(PATH_SECONDS)} s`} · ` : "";
     // the status line: the story's and the dialogue's messages, and "loading" while they last
-    const status = [storyInfo, dialogueInfo.startsWith("Dialogue:") || dialogueInfo.startsWith("Loading") ? dialogueInfo : ""].filter(Boolean).join(" · ");
+    // (a fight's own messages: loading, nobody near; its progress is on the fight bars)
+    const fightNote = fightInfo && !fightView && !/^Fight: Henry/.test(fightInfo) ? fightInfo : "";
+    const status = [storyInfo, dialogueInfo.startsWith("Dialogue:") || dialogueInfo.startsWith("Loading") ? dialogueInfo : "", fightNote].filter(Boolean).join(" · ");
+    fightBars.update(fightView);
     if (status !== statusText) { statusText = status; statusAt = now; }
     // without the mouse captured (and nothing else up), how to play
     const idle = mode === "player" && document.pointerLockElement !== canvas && !menu.isOpen && !trade?.isOpen && !dialogue.talkingTo;

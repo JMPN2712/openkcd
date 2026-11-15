@@ -19,6 +19,8 @@ import { workSlice } from "./frameBudget.ts";
 
 export interface FragmentVariant {
   tags: string;
+  /** the fragment's own tags (FragTags: "rightGuard+eZ4+aZ2+slash+attack_heavy+…"), split */
+  fragTags: string[];
   /** animations of the first AnimLayer, in sequence */
   anims: { name: string; loop: boolean }[];
 }
@@ -32,7 +34,7 @@ export function parseAdb(xml: string): Map<string, FragmentVariant[]> {
     for (const f of frag.children.filter((c: XmlNode) => c.tag === "Fragment")) {
       const layer = f.children.find((c) => c.tag === "AnimLayer");
       const anims = (layer?.children ?? []).filter((c) => c.tag === "Animation" && c.attrs.name).map((a) => ({ name: a.attrs.name.toLowerCase(), loop: /\bLoop\b/.test(a.attrs.flags ?? "") }));
-      variants.push({ tags: f.attrs.Tags ?? "", anims });
+      variants.push({ tags: f.attrs.Tags ?? "", fragTags: (f.attrs.FragTags ?? "").split("+").filter(Boolean), anims });
     }
     out.set(frag.tag.toLowerCase(), variants);
   }
@@ -112,6 +114,35 @@ export class AnimLibrary {
         return hit ? (await this.dba(hit.dba)).clip(hit.anim) : null;
       })();
       this.aliasClips.set(key, p);
+    }
+    return p;
+  }
+
+  /**
+   * The clip of the variant of fragment `id` that fits best: its state tags (Tags: what the
+   * character holds, "r_noweapon") must all be in `state`, and of those the one sharing most
+   * fragment tags with `want` wins, fewer unmatched tags breaking ties (combat actions name their
+   * variant by tags: the attack row's "rightGuard+eZ0+aZ0+direct+attack_light+…").
+   */
+  tagged(id: string, state: string[], want: string[]): Promise<FragmentClip | null> {
+    const key = `${id.toLowerCase()}|${state.join("+")}|${want.join("+")}`;
+    let p = this.clips.get(key);
+    if (!p) {
+      p = (async () => {
+        this.adb ??= this.vfs.read(this.vfs.lookup(`animations/mannequin/adb/kcd_${this.gender}_database.adb`)!).then((b) => parseAdb(new TextDecoder().decode(b)));
+        const has = new Set(state.map((t) => t.toLowerCase())), wanted = new Set(want.map((t) => t.toLowerCase()));
+        let best: FragmentVariant | null = null, bestScore = -Infinity;
+        for (const v of (await this.adb).get(id.toLowerCase()) ?? []) {
+          if (!v.anims.length || !v.tags.split("+").filter(Boolean).every((t) => has.has(t.toLowerCase()))) continue;
+          const hits = v.fragTags.filter((t) => wanted.has(t.toLowerCase())).length;
+          const score = hits * 100 - (v.fragTags.length - hits) + (v.tags ? 10 : 0);
+          if (score > bestScore) { best = v; bestScore = score; }
+        }
+        const a = best?.anims[0];
+        const clip = a ? await this.alias(a.name) : null;
+        return clip ? { clip, loop: a!.loop, seconds: (clip.end - clip.start) / clip.fps, name: a!.name } : null;
+      })().catch(() => null);
+      this.clips.set(key, p);
     }
     return p;
   }

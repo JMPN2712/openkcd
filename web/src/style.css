@@ -413,3 +413,15 @@ details.part p { margin: 4px 0; }
 .kcd-ui .level-trade header h3 { font-weight: normal; font-size: 20px; color: var(--kcd-gold); }
 .kcd-ui .level-trade li { font-size: 16px; }
 .kcd-ui .level-trade button { font-family: var(--kcd-font); font-size: 15px; color: #2a1b0b; background: #d6b25e var(--kcd-selector, none) center / 100% 100% no-repeat; border: 0; padding: 2px 14px; }
+
+/* a fight (combatView.ts FightBars): Henry's bars on the left, the opponent's on the right */
+.level-fight { position: absolute; left: 16px; right: 16px; bottom: 18px; z-index: 3; pointer-events: none; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; font-family: var(--kcd-font); color: var(--kcd-ink); text-shadow: 0 1px 2px #000; }
+.level-fight .fighter { width: min(300px, 40%); }
+.level-fight .fighter.foe { text-align: right; }
+.level-fight .name { font-size: 18px; }
+.level-fight .bars b { display: block; height: 8px; margin-top: 4px; background: rgba(0, 0, 0, 0.55); border: 1px solid rgba(214, 178, 94, 0.5); }
+.level-fight .fighter.foe .bars b { direction: rtl; }
+.level-fight .bars i { display: block; height: 100%; transition: width 0.25s; }
+.level-fight .hp { background: #a3261c; }
+.level-fight .st { background: #c9b26a; }
+.level-fight .last { flex: 1 1 100%; order: -1; margin: 0 0 10px; text-align: center; font-size: 19px; }

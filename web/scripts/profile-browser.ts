@@ -5,7 +5,7 @@
 // call crosses into the GPU process: this measures what a player gets.
 // Driven over the DevTools protocol (Node's built-in WebSocket); no npm deps.
 // usage: node scripts/profile-browser.ts [--root=GAME_ROOT] [--preset=high] [--settle=30]
-//          [--seconds=8] [--windowed] [--headed] [--dialogue=SEQUENCE_ID [--shot=close_up] [--screenshot=PREFIX]] [--talk=NPC_NAME [--pick=1,2]] [--new-game [--pick=1,1]] [--at=x,y[,yaw°]] [--fly=SECONDS [--spikes]] [--bench=this --spikes] [--build-slim=full|potato] [--package] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080] [--bench[=this]] [--query=gpu-mem] [--heap] [--reopen=low,potato]
+//          [--seconds=8] [--windowed] [--headed] [--dialogue=SEQUENCE_ID [--shot=close_up] [--screenshot=PREFIX]] [--talk=NPC_NAME [--pick=1,2]] [--new-game [--pick=1,1]] [--fight=NPC_NAME] [--at=x,y[,yaw°]] [--fly=SECONDS [--spikes]] [--bench=this --spikes] [--build-slim=full|potato] [--package] (settle: seconds after the models have loaded) [--out=FILE.cpuprofile] [--size=1920x1080] [--bench[=this]] [--query=gpu-mem] [--heap] [--reopen=low,potato]
 //   CHROME=… picks the browser binary, CHROME_FLAGS=… adds flags, PROFILE_DIR=… keeps the profile; --probe stops after naming the
 //   WebGPU adapter; --fly then flies north-west across the map (free-fly, 60 m/s: a streaming
 //   step every few seconds) printing the HUD every 10 s, then profiles there; with --spikes it
@@ -521,6 +521,30 @@ if (talkTo || newGame) {
 }
 
 if (arg("tour", "") && process.argv.includes("--new-game")) await runTour(arg("tour", ""));
+// --fight=NPC_NAME: a fist fight with that NPC (the debug control), Henry blocking and throwing
+// heavy punches in turn; prints the fight's HUD line as it changes, until it is over (or 90 s)
+const fightWith = arg("fight", "");
+if (fightWith) {
+  const press = async (code: string, key: string, type: "keyDown" | "keyUp") => page("Input.dispatchKeyEvent", { type, code, key, windowsVirtualKeyCode: key.toUpperCase().charCodeAt(0) });
+  await evaluate(`(() => { const i = document.querySelector(".level-dialogue-id"); i.value = ${JSON.stringify(fightWith)}; [...document.querySelectorAll("button")].find((b) => /Fight/.test(b.textContent)).click(); })()`);
+  await evaluate(`document.querySelector(".level-canvas").focus()`);
+  const tf = Date.now();
+  let last = "", n = 0;
+  while (Date.now() - tf < 90000) {
+    // the fight bars' summary, else the status line (loading, nobody near)
+    const line = await evaluate<string>(`(() => { const f = document.querySelector(".level-fight"); if (f && !f.hidden && f.dataset.summary) return f.dataset.summary; const s = document.querySelector(".level-status"); return s && !s.hidden && /Fight/.test(s.textContent) ? s.textContent : ""; })()`);
+    if (line && line !== last) { console.log(`  ${((Date.now() - tf) / 1000).toFixed(1).padStart(5)} s  ${line}`); last = line; }
+    if (/ · over$/.test(line) || /isn't near|no soul/.test(line)) break;
+    // every 1.5 s: a heavy punch; in between Henry holds his block
+    if (n++ % 6 === 0) { await press("KeyQ", "q", "keyUp"); await press("Digit2", "2", "keyDown"); await press("Digit2", "2", "keyUp"); }
+    else if (n % 6 === 3) await press("KeyQ", "q", "keyDown");
+    await sleep(250);
+  }
+  if (arg("screenshot", "")) {
+    const shot = await page("Page.captureScreenshot", { format: "png" }) as { data: string };
+    (await import("node:fs")).writeFileSync(`${arg("screenshot", "")}-fight.png`, Buffer.from(shot.data, "base64"));
+  }
+}
 
 const fly = Number(arg("fly", "0"));
 if (fly) {

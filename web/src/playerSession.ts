@@ -3,6 +3,7 @@
 //
 // Controls: WASD move · mouse look · Shift sprint · X / Caps Lock walk ↔ run · Space jump.
 
+import type { Clip } from "./anim.ts";
 import { PlayerController, type MoveInput, type Surroundings, type Vec3 } from "./player.ts";
 import { PlayerAvatar } from "./playerAvatar.ts";
 import { LocomotionPlayer } from "./locomotion.ts";
@@ -75,6 +76,8 @@ export class PlayerSession {
 
   /** seconds Henry has wanted to move without moving (blocked) */
   private stuck = 0;
+  /** a clip played over the locomotion until it ends (`hold`: kept on its last frame; `loop`) */
+  overlay: { clip: Clip; t: number; loop: boolean; hold: boolean } | null = null;
 
   /** Input from held keys (KeyboardEvent.code). */
   input(keys: Set<string>): MoveInput {
@@ -100,7 +103,14 @@ export class PlayerSession {
     this.stuck = c.wantSpeed > 0.05 && c.speed() < 0.2 ? this.stuck + dt : 0;
     const wantSpeed = this.stuck > 0.25 ? 0 : c.wantSpeed;
     this.loco.update(dt, { speed: c.speed(), travelAngle: travel, turnSpeed: this.turnRate, wantSpeed, gait: c.gait, moved });
-    this.avatar.animator.evaluateLayers(this.loco.layers(), true);
+    const o = this.overlay;
+    if (o) {
+      // a full-body clip over the locomotion (a fight's swings and reactions), in place
+      o.t += dt;
+      const f = o.t * o.clip.fps, len = Math.max(1, o.clip.end - o.clip.start);
+      this.avatar.animator.evaluate(o.clip, o.clip.start + (o.loop ? f % len : Math.min(f, len)), true);
+      if (!o.loop && !o.hold && f >= len) this.overlay = null;
+    } else this.avatar.animator.evaluateLayers(this.loco.layers(), true);
     // sprinting narrows the pitch range: ease into it rather than snapping the view
     const want = this.clampPitch(this.pitch);
     this.pitch += (want - this.pitch) * Math.min(1, dt * 8);
