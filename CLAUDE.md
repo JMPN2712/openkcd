@@ -125,6 +125,7 @@ questlines whole and never cuts anything the main quest depends on.
 | Navigation | `navmesh.ts`, `crowd.ts` | Navmesh decode, A* plus funnel, collision avoidance |
 | NPCs | `levelEntities.ts`, `schedule.ts`, `npcs.ts`, `npcAi.ts` | Placement, daily schedules, crowd |
 | Game logic | `bt.ts`, `btRuntime.ts`, `btWorld.ts`, `luaHost.ts` (wasmoon Lua 5.1), `typeDefs.ts` | Behaviour-tree interpreter running work routines |
+| Inventory, shops | `inventory.ts`, `playerState.ts`, `shops.ts`, `tradeView.ts`, `calendar.ts` | Henry's items and money, quest rewards, shop stock and prices, a plain trade panel, the calendar scripts set |
 | Quests, diet mode | `quests.ts`, `questTrees.ts`, `profiles.ts`, `diet.ts`, `dietConfig.ts` | Quest state and lifecycle (dialogue, trees and Lua read and drive it); the quests' own trees run headless up to the opening quest's first conversation; level profiles (layer sets) from the level data; diet mode cuts 39 side quests as an overlay, on by default |
 
 - **Docs:** `docs/RECON.md`, `LEVELS.md`, `CHARACTERS.md`, `ANIMATION.md`,

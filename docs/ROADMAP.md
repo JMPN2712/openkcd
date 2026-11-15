@@ -519,8 +519,11 @@ content, without deleting anything.
   - [x] Objective timers; "New game" in the world view (quest trees, the
         prologue's NPCs, the first conversation asked for by a tree)
         (2026-11-14).
-  - [ ] The opening quest played through; profiles shown in the scene; an
-        inventory, rewards; shops.
+  - [x] Henry's inventory, money and item rewards, shops with a plain
+        trade panel, the shop and calendar script functions (2026-11-14).
+  - [ ] The opening quest played through (its errands need money, so
+        fights or thefts); profiles shown in the scene; haggling, repairs,
+        restocking; picking things up.
 - [ ] The RPG layer.
 
 ## 7. Diet playthrough

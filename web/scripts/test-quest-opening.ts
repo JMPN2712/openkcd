@@ -24,6 +24,10 @@ import { layerEntities, parseProfiles } from "../src/profiles.ts";
 import { DialogRequests } from "../src/dialogRequests.ts";
 import { Conversation, DialogueState, luaScripts, neutralWorld, participant, type Step } from "../src/dialogueFlow.ts";
 import { readTable } from "../src/tables.ts";
+import { Inventory, ItemDb } from "../src/inventory.ts";
+import { ShopDb, Shops } from "../src/shops.ts";
+import { attachInventory } from "../src/playerState.ts";
+import { Calendar } from "../src/calendar.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
@@ -56,6 +60,16 @@ const events: string[] = [];
 const objective = (e: QuestEvent & { kind: "objective" }) => `${e.quest}/${qdb.objective(e.quest, e.objective)?.name}`;
 quests.on((e) => { if (e.kind === "quest" && e.state === 0 && e.banner) return; const s = e.kind === "quest" ? `quest ${e.quest} ${["started", "completed", "canceled", "failed", "reset", "active"][e.state]}` : e.kind === "objective" ? `objective ${objective(e)} ${["started", "completed", "canceled", "expired"][e.state]}` : `reward ${e.quest}`; events.push(s); if (debug) console.log(`${clock.real.toFixed(1).padStart(7)} s  ** ${s}`); });
 
+// Henry's inventory behind the quests' tracked items and rewards; the shops, opened by the trees' Lua
+const [itemDb, shopDb] = await Promise.all([ItemDb.load(vfs), ShopDb.load(vfs)]);
+const bag = new Inventory();
+const paid = attachInventory(quests, bag, itemDb);
+const shops = new Shops(shopDb, itemDb);
+const soulRows = await readTable(vfs, "rpg/soul");
+lua.shops = shops.script((entity) => soulRows.find((r) => r.soul_name === ents.get(entity)?.name)?.soul_id);
+const calendar = new Calendar();
+calendar.world = 6 * 3600;
+lua.calendar = calendar.script();
 const clock = { real: 0 };
 const requests = new DialogRequests(ddb);
 const lines: string[] = [];
@@ -89,7 +103,7 @@ let ticks = 0;
 const t0 = performance.now();
 // objective timers on the calendar's clocks (play time, world time at 15×)
 quests.world.clock = (which) => clock.real * 1000 * (which === "world" ? 15 : 1);
-const run = (seconds: number) => { for (let i = 0; i < seconds * 10; i++) { brains.tick(); quests.update(); clock.real += 0.1; ticks++; } };
+const run = (seconds: number) => { for (let i = 0; i < seconds * 10; i++) { brains.tick(); quests.update(); clock.real += 0.1; calendar.advance(0.1); ticks++; } };
 
 // before the game starts: the hubs and trackers that are activated from the start set themselves up
 run(2);
@@ -141,7 +155,7 @@ const step = (seconds: number) => {
   for (let i = 0; i < seconds * 10; i++) {
     for (; handed < patches.length; handed++) if (patches[handed].fields.add === true) runPatch(patches[handed]);
     for (const [id, t] of npcTasks) { const r = t.task.tick(); if (r !== "running") { npcTasks.delete(id); ended.push(`${t.name} ${r}`); } }
-    brains.tick(); quests.update(); clock.real += 0.1;
+    brains.tick(); quests.update(); clock.real += 0.1; calendar.advance(0.1);
   }
 };
 step(0.1);
@@ -150,7 +164,7 @@ step(2);
 const asked = requests.next(true);
 check(!!asked && asked.initiator === mother!.id && asked.label === "q_skalitz_characterCreation" && asked.topic > 0, `she asks for the opening conversation with Henry (${asked?.label}, topic ${asked?.topic})`);
 // the conversation itself, through the dialogue flow: Henry takes the first option at every menu
-const souls = await readTable(vfs, "rpg/soul");
+const souls = soulRows;
 const soulOf = (name: string) => { const r = souls.find((x) => x.soul_name === name); return { id: r?.soul_id ?? "", name }; };
 const entityOf = (name: string) => (name === "dude" ? -1 : [...ents.values()].find((e) => e.name === name)?.id);
 const dstate = new DialogueState();
@@ -204,19 +218,26 @@ if (asked) {
   const hammer = qdb.tracked("q_skalitz", qdb.objectivesOf("q_skalitz").find((o) => o.name === "takeHammer")!.id)[0];
   const charcoal = qdb.tracked("q_skalitz", qdb.objectivesOf("q_skalitz").find((o) => o.name === "buyCharcoal")!.id)[0];
   check(hammer?.kind === "item" && charcoal?.kind === "item" && charcoal.count === 10, `takeHammer tracks one item, buyCharcoal ten (${charcoal?.what})`);
-  const bag = new Map<string, number>([[charcoal.what, 9]]);
-  quests.world.itemCount = (item) => bag.get(item) ?? 0;
-  quests.recheck();
+  // Henry's inventory and the collier's shop (inventory.ts, shops.ts): the quest's tree opens the
+  // shop by script (Shops.OpenShop(17)); ten pieces of charcoal bought there complete buyCharcoal
+  const collier = shopDb.shopOf(soulOf("ska_collierVarlet").id);
+  check(collier === 17 && shops.open.has(17), `the quest's tree has opened the collier's shop by script (shop ${collier}: ${shopDb.shops.get(17)?.name})`);
+  const offer = shops.offers(17).find((o) => o.item === charcoal.what);
+  check(!!offer && offer.amount >= 10 && offer.price > 0, `the collier sells charcoal (${offer?.amount} at ${(offer?.price ?? 0) / 10} groschen each)`);
+  check(shops.buy(17, charcoal.what, 10, bag) === "not enough money", "Henry has no money yet: no deal");
+  bag.add(itemDb.money, offer!.price * 9);
+  check(shops.buy(17, charcoal.what, 9, bag) === null && bag.count(charcoal.what) === 9 && bag.count(itemDb.money) === 0, "with the money for nine he buys nine");
   check(started("buyCharcoal") && quests.call("IsObjectiveTrackedCompleted", ["q_skalitz", "buyCharcoal"]) === 0, "nine pieces of charcoal are not enough");
-  bag.set(charcoal.what, 10);
-  quests.recheck();
-  check(completed("buyCharcoal"), "the tenth completes buyCharcoal");
-  bag.set(hammer.what, 1);
-  quests.recheck();
+  bag.add(itemDb.money, offer!.price);
+  check(shops.buy(17, charcoal.what, 1, bag) === null && completed("buyCharcoal"), "the tenth completes buyCharcoal");
+  check(shops.money(17) === 200 + offer!.price * 10, `the collier's money grew by what Henry paid (${shops.money(17) / 10} groschen)`);
+  bag.add(hammer.what, 1);
   check(completed("takeHammer") && completed("stealHammer") && started("stealNails"), "with the hammer in the bag takeHammer and stealHammer complete; the nails still wait");
   const dead = qdb.objectivesOf("q_skalitz").map((o) => qdb.tracked("q_skalitz", o.id)).flat().filter((t) => t.kind === "npc").length;
   console.log(`  q_skalitz tracks ${dead} NPC deaths; nobody has died`);
 }
+check(Math.abs(calendar.hourOfDay - 10) < 1e-6 && calendar.paused, `the opening cutscene's script sets the clock to 10:00 and holds world time (${calendar.hourOfDay.toFixed(2)} h, paused ${calendar.paused})`);
+console.log(`  Henry carries: ${bag.entries().map(([i, n]) => `${itemDb.get(i)?.name ?? i} ×${n}`).join(", ") || "nothing"}; rewards waiting for the RPG layer: ${paid.pending.length}`);
 console.log(`  patches ended: ${ended.join(", ") || "none"}`);
 for (const [, t] of npcTasks) {
   if (!debug && !/ska_(mother|father)OfHenry/.test(t.name)) continue;

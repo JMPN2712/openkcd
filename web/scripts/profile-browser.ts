@@ -432,7 +432,7 @@ if (talkTo || newGame) {
   if (newGame) await evaluate(`[...document.querySelectorAll("button")].find((b) => /New game/.test(b.textContent)).click()`);
   else await evaluate(`(() => { const i = document.querySelector(".level-dialogue-id"); i.value = ${JSON.stringify(talkTo)}; [...document.querySelectorAll("button")].find((b) => /Dialogue/.test(b.textContent)).click(); })()`);
   const td = Date.now();
-  let lastSub = "", lastMenu = "", quietFor = 0, k = 0, lastStory = "", talked = false;
+  let lastSub = "", lastMenu = "", quietFor = 0, k = 0, lastStory = "", lastTrade = "", talked = false;
   // (a new game takes a while to reach its first conversation: the layers, the world around Skalitz)
   while ((quietFor < 10 || (newGame && !talked && Date.now() - td < 120000)) && Date.now() - td < 240000) {
     if (newGame) {
@@ -444,6 +444,9 @@ if (talkTo || newGame) {
       return [s && !s.hidden ? s.textContent : "", m && !m.hidden ? [...m.querySelectorAll("li")].map((li) => li.textContent).join(" | ") || m.textContent : "", h.slice(h.lastIndexOf(" · ") + 3)];
     })()`);
     const t = ((Date.now() - td) / 1000).toFixed(1).padStart(5);
+    // the trade panel a conversation's script opened (Shops.OpenInventory): its heading and first lines
+    const tradeText = await evaluate<string>(`(() => { const p = document.querySelector(".level-trade"); return p && !p.hidden ? [p.querySelector("h3")?.textContent ?? "", ...[...p.querySelectorAll("li")].slice(0, 4).map((li) => li.textContent.replace(/(Buy|Sell)$/, "").trim())].join(" | ") : ""; })()`);
+    if (tradeText && tradeText !== lastTrade) { console.log(`  ${((Date.now() - td) / 1000).toFixed(1).padStart(5)} s  trade panel: ${tradeText}`); lastTrade = tradeText; }
     if (sub || menu) talked = true;
     if (sub && sub !== lastSub) console.log(`  ${t} s  ${sub}`);
     if (menu && menu !== lastMenu) {

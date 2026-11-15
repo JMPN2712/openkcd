@@ -63,15 +63,27 @@ for a stand-in inventory. `node scripts/test-quest-opening.ts`.
 4. **Profiles to the scene:** show and hide a profile's layers when
    `EnableProfile` switches it (`WorldOptions.profile`), in place of
    `defaultHiddenLayers`' guess.
-5. **Quest state the opening needs:** rewards and a real player inventory
-   behind
-   `QuestSystem.world.itemCount` (tracked assets are read through
-   `QuestSystem.world`; call `recheck()` when the inventory, the player's
-   place or who is alive changes). Place assets need `world.playerAt`.
-6. **Shops** (`notes/economy.md`): buying the charcoal is an objective of
-   the opening quest; then diet mode's shop grants.
-7. Lua's remaining `QuestSystem` functions (`GetActiveObjectives`, …) and
-   the calendar functions the scripts call (`forwardTime` fails today).
+5. Done (2026-11-14): Henry's inventory (`inventory.ts`) behind the quests'
+   tracked items; money and item rewards are paid into it
+   (`playerState.ts`); experience and perk rewards wait for the RPG layer.
+6. Done (2026-11-14): shops (`shops.ts`, `tradeView.ts`): stock from the
+   shop type, prices from economy.md, buying and selling in a plain trade
+   panel, the script functions (`Shops.OpenShop`, …), diet mode's grants.
+   **Left:** haggling, repairs, restocking, business hours in the view,
+   stolen goods, item health; picking things up and taking from chests
+   (so Henry can earn or find money: today he starts with none).
+7. Done (2026-11-14): the calendar for scripts (`calendar.ts`):
+   `forwardTime` works, the prologue sets 10:00 and holds world time. The
+   scripts call nothing else of `QuestSystem` but `OpenInventory` (item
+   deliveries, 6 sequences) and `RegisterQuestEntity`: still stubs.
+8. **Next for the opening quest:** the errands themselves. Henry needs
+   money (Kunesh's debt: `getDebtMoney`, a fight or a theft), so combat or
+   lockpicking stand-ins; the trader's and innkeeper's conversations; the
+   quest's later cutscenes. Drive each headless in `test-quest-opening.ts`
+   first.
+9. Two Lua errors appear in the headless run now that the calendar
+   answers (`tree:2: attempt to compare number with nil`,
+   `SocialClass.lua:31`): find which tree's script and what it reads.
 
 ## Now (2026-10-30)
 
@@ -200,6 +212,19 @@ follows them):
      count the player being at the place's entity. What is the real test
      (inside the area, a distance), and when is it checked?
   4. Assets given by item category, soul class or faction: what counts?
+- **Shops** (economy.md leaves these open; `shops.ts` lists its guesses):
+  1. `shop_type2item.default_on`: the collier's charcoal and every shop's
+     money row are "off", yet both are there in the game. What does it
+     mean, and what does `amount` of the money row count (we: tenths of a
+     groschen, so the tailor has 1,000 groschen)?
+  2. Where the shop's `price_buy_multiplier` / `price_sell_multiplier`
+     enter, the base `sma` / `bma` stats, whose barter stat, and how the
+     price is rounded (we cut to whole tenths; charcoal comes to 0.6).
+  3. Dialogue sequence types 9 and 10 (not in the note's list): the four
+     type-9 sequences are the "Let's talk trade" lines with no script, so
+     we open the trade screen; the type-10 ones look like repair.
+  4. `money_change.change`: groschen (we) or tenths?
+  5. `Shops.OpenInventory(keeper, true)`: what the second argument is.
 - **Expired objectives** (quest-system.md, Timers): after the `Expired`
   message, is the objective cancelled, completed or left active? We leave
   it active (38 objectives expire after `0s #WT`).
@@ -367,6 +392,10 @@ follows them):
   point, conversations asked for by trees played by the view's dialogue;
   patches for NPCs not streamed in yet are kept for them; unhurt answers
   for the health conditions. `profile-browser.ts --new-game`.
+- #47 (2026-11-14): Henry's inventory, quest rewards in money and items,
+  shops with a trade panel (the tailor's "Let's talk trade" opens it), the
+  shop and calendar script functions, diet mode's shop grants.
+  `test-shops.ts`; `test-quest-opening.ts` now buys the charcoal.
 
 ## Findings not yet acted on
 

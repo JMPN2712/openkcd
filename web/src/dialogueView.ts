@@ -43,6 +43,9 @@ export interface TalkTarget {
   entity: number;
 }
 
+/** The sequence type of the "Let's talk trade" lines. */
+const TYPE_TRADE = 9;
+
 /** Sequence types the menu marks (the game shows icons). */
 const TYPE_TAGS: Record<number, string> = { 1: "Strength", 2: "Speech", 3: "Charisma", 4: "Bribe", 6: "Stealth", 8: "First aid" };
 
@@ -101,6 +104,8 @@ export class DialogueHost {
    * have loaded. The view starts the waiting ones with `talk(npc, request)`.
    */
   requests: DialogRequests | null = null;
+  /** the player asked to trade with the NPC talked to (the view opens its trade panel) */
+  onTrade: ((npc: TalkTarget) => void) | null = null;
   /** the request the running conversation answers */
   private answering = 0;
 
@@ -155,6 +160,11 @@ export class DialogueHost {
     return (await this.load()).quests;
   }
 
+  /** Diet mode over that quest state (its shop grants). */
+  async dietMode(): Promise<DietMode> {
+    return (await this.load()).diet;
+  }
+
   /** Start loading the dialogue tables (about 1.5 s, once). */
   preload(): void {
     void this.load();
@@ -166,7 +176,12 @@ export class DialogueHost {
       now: () => this.clock().seconds,
       call: neutralWorld(() => this.clock().hour, l.quests),
       hidden: (seq, topic) => l.diet.hidesSequence(seq, topic),
-      played: (seq, holds) => l.quests.runSequence(seq, holds),
+      played: (seq, holds) => {
+        l.quests.runSequence(seq, holds);
+        // ASSUMPTION: a sequence of type 9 opens the trade screen with the NPC (the four of them
+        // are the "Let's talk trade" lines, without a script; the notes name types up to 26 but not 9)
+        if (l.db.sequence(seq)?.type === TYPE_TRADE && this.with) this.onTrade?.(this.with);
+      },
       runScript: this.lua ? luaScripts(this.lua, entityOf) : undefined,
       report: (w) => console.debug("dialogue:", w),
     };

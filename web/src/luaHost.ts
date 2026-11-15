@@ -127,6 +127,16 @@ for _, name in ipairs({ "ActivateQuest", "DeactivateQuest", "StartQuest", "Compl
     "IsObjectiveStarted", "IsObjectiveCompleted", "IsObjectiveCanceled", "IsObjectiveFailed", "IsObjectiveUnchanged", "IsObjectiveTrackedCompleted" }) do
   rawset(QuestSystem, name, function(quest, objective) return __kcd_quest(name, quest, objective) end)
 end
+-- shops (shops.ts, through LuaHost.shops): opening and closing by script, the keeper's shop, its money
+Shops = mkstub("Shops")
+for _, name in ipairs({ "OpenShop", "CloseShop", "IsShopOpened", "GetShopDBIdByKeeper", "GetShopMoney", "OpenInventory" }) do
+  rawset(Shops, name, function(a, b) return __kcd_shop(name, a, b) end)
+end
+-- the calendar (through LuaHost.calendar): world time in seconds, the hour of the day, pausing
+Calendar = mkstub("Calendar")
+for _, name in ipairs({ "GetWorldTime", "SetWorldTime", "GetWorldHourOfDay", "GetWorldDay", "GetGameTime", "IsWorldTimePaused", "SetWorldTimePaused", "GetWorldTimeRatio" }) do
+  rawset(Calendar, name, function(a) return __kcd_calendar(name, a) end)
+end
 Script = mkstub("Script")
 rawset(Script, "ReloadScript", function(p) return __kcd_reload(p) end)
 rawset(Script, "LoadScript", function(p) return __kcd_reload(p) end)
@@ -357,6 +367,17 @@ export class LuaHost {
   private vfs: Vfs;
   /** what Lua's QuestSystem table reads and changes; until it is set, every call answers false */
   quests: Pick<QuestSystem, "apply" | "call"> | null = null;
+  /**
+   * The Shops script functions (OpenShop, CloseShop, IsShopOpened by shop id; GetShopDBIdByKeeper
+   * and GetShopMoney by the keeper's entity id); without it they return nil, as stubs do.
+   */
+  shops: ((fn: string, a?: number, b?: number) => number | boolean | null | undefined) | null = null;
+  /**
+   * The Calendar script functions (calendar.ts `script`): GetWorldTime / SetWorldTime in seconds,
+   * GetWorldHourOfDay, GetWorldDay, GetGameTime, IsWorldTimePaused / SetWorldTimePaused,
+   * GetWorldTimeRatio. Without it they return nil, as stubs do.
+   */
+  calendar: ((fn: string, a?: number | boolean) => number | boolean | null | undefined) | null = null;
 
   private constructor(lua: Lua, vfs: Vfs) {
     this.lua = lua;
@@ -376,6 +397,8 @@ export class LuaHost {
       if (!q) return false;
       return fn.startsWith("Is") ? !!q.call(fn, [quest, objective ?? ""]) : q.apply(fn, quest, objective);
     });
+    g.set("__kcd_shop", (fn: string, a?: number, b?: number) => host.shops?.(fn, a, b) ?? null);
+    g.set("__kcd_calendar", (fn: string, a?: number | boolean) => host.calendar?.(fn, a) ?? null);
     g.set("__kcd_read", (path: string) => host.readScript(path));
     g.set("__kcd_db", (what: string, table: string, i?: number) => host.db(what, table, i));
     g.set("__kcd_entname", (id: number) => host.entityName(Number(id)));

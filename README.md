@@ -122,6 +122,7 @@ node scripts/sim-daycycle.ts --clock 18:27 --minutes 15   # the market across an
 node scripts/test-diet.ts                        # diet mode: the overlay (a cut quest reads as cancelled, off restores it), the five reachability checks, grants
 node scripts/test-quest-opening.ts               # a new game up to the opening quest's errands, with every quest tree and diet mode on: the master quest, the cutscene automaton, the NPCs' quest patches, the conversation Henry's mother asks for, the talk with his father, tracked items
 node scripts/test-quests.ts                      # the quest state's automatic completion on a made-up quest: tracked items, deaths, places and statistics, objective timers (no game files needed)
+node scripts/test-shops.ts                       # shops and the inventory: prices, buying and selling on a made-up shop, then the collier's charcoal, the tailor's stock and diet mode's grants from the game's tables
 node scripts/cat-file.ts libs/ai/quests/q_skalitz.xml   # print one file from the game's paks (or --grep REGEX to list paths)
 node scripts/test-messaging.ts                   # NPC messaging: a garrison hands out its post, a shop's merchant and customer
 node scripts/test-dialogue-flow.ts               # conversations: the tailor walkthrough (greeting, menu order, trade ends it, farewell), timed topic 6807, every condition parses

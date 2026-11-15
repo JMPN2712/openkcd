@@ -11,6 +11,11 @@ import type { LevelObjects } from "./levelObjects.ts";
 import type { Cover } from "./cover.ts";
 import type { QuestSystem } from "./quests.ts";
 import { QuestBrains } from "./questTrees.ts";
+import { Inventory, ItemDb } from "./inventory.ts";
+import { ShopDb, Shops } from "./shops.ts";
+import { attachInventory } from "./playerState.ts";
+import { TradePanel } from "./tradeView.ts";
+import { Calendar } from "./calendar.ts";
 import type { LayerContents } from "./profiles.ts";
 import { MergedMeshes } from "./mergedMeshes.ts";
 import { Roads } from "./roads.ts";
@@ -480,6 +485,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let npcAi: NpcAi | null = null;
   let viewLua: LuaHost | null = null;
   let viewQuests: QuestSystem | null = null;
+  let trade: TradePanel | null = null;
+  // the calendar the scripts see: its world time follows the view's clock (`minute`), which a
+  // script can set; while a script holds world time the clock stands still
+  const calendar = new Calendar();
+  calendar.onSet = (w) => { minute = (w % 86400) / 60; };
   let questsCheckedAt = 0;
   // ---- the story (a new game): quest trees, the layers' NPCs of the profiles they switch on ----
   let story: { brains: QuestBrains; layers: LayerContents; added: Set<number>; tickedAt: number } | null = null;
@@ -537,6 +547,22 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const quests = await dialogue.questSystem();
     if (stopped) return null;
     lua.quests = quests;
+    // Henry's inventory behind the quests' tracked items and rewards; shops and the trade panel
+    const [itemDb, shopDb] = await Promise.all([ItemDb.load(vfs), ShopDb.load(vfs)]);
+    if (stopped) return null;
+    const bag = new Inventory();
+    attachInventory(quests, bag, itemDb);
+    const shops = new Shops(shopDb, itemDb);
+    // diet mode stocks what its cut quests unlocked (the agility book, a saddle, …) in shops
+    const diet = await dialogue.dietMode();
+    shops.grants = (shop) => diet.shopGrants(shop);
+    trade = new TradePanel(shops, bag, itemDb, (k) => text.get(k));
+    stage.append(trade.el);
+    dialogue.onTrade = (npc) => { const shop = shopDb.shopOf(npc.soul); if (shop !== undefined) trade?.open(shop); };
+    // scripts open and close shops, ask for a keeper's shop and open the trade screen with them
+    lua.shops = shops.script((entity) => npcs.find((n) => n.entity.id === entity)?.soul, (shop) => trade?.open(shop));
+    // and read and set the calendar (the prologue's script sets 10:00 and holds world time)
+    lua.calendar = calendar.script();
     // objective timers run on the calendar's clocks: play time, and world time at 15× (quests.ts)
     quests.world.clock = (which) => simSeconds * 1000 * (which === "world" ? 15 : 1);
     viewQuests = quests;
@@ -952,11 +978,15 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (!canvas.width) return;
     if (!streamedAt || Math.hypot(cam.pos[0] - streamedAt[0], cam.pos[1] - streamedAt[1]) > STREAM_STEP) void stream();
     if (!grass || Math.hypot(cam.pos[0] - grass.at[0], cam.pos[1] - grass.at[1]) > q.grass / 4) void streamGrass();
-    minute = (minute + (dt * Number(speedSel.value)) / 60) % 1440;
+    if (!calendar.paused) minute = (minute + (dt * Number(speedSel.value)) / 60) % 1440;
+    // (a new day when the clock wraps by itself; the slider and scripts move it within the day)
+    const day = Math.floor(calendar.world / 86400) + (minute * 60 < (calendar.world % 86400) - 43200 ? 1 : 0);
+    calendar.world = day * 86400 + minute * 60;
     // one simulation clock for behaviour trees and NPC animation, scaled like the game clock
     // (×15 = real time): legs keep pace with movement at every speed, and pausing freezes both
     const simDt = (dt * Number(speedSel.value)) / 15;
     simSeconds += simDt;
+    calendar.game = simSeconds;
     if (!worldLoading) npcAi?.tick(simDt);
     if (viewQuests && simSeconds - questsCheckedAt >= 0.5) { questsCheckedAt = simSeconds; viewQuests.update(); }
     if (story && !worldLoading) {

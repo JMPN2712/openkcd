@@ -700,9 +700,28 @@ game's data.
   takes a waiting request when its NPC is within 12 m (ours) and plays it
   from the requested topic. Health conditions read as unhurt
   (`get_health` 100, `GetBleeding` 0).
+- **Inventory, rewards, shops** (`inventory.ts`, `playerState.ts`,
+  `shops.ts`, `tradeView.ts`; the research note on the economy).
+  - Henry's inventory counts items by id; money is the item named `money`,
+    in tenths of a groschen. Tracked items are counted there, and a change
+    re-checks the quests. Money and item rewards are paid into it;
+    experience and perk rewards are kept for the RPG layer.
+  - A shop's stock is its type's item list (`shop_type2item`) times the
+    shop's amount multiplier; its money is the money in that stock. Prices:
+    value = price ÷ 10 × the item-health factor; buying ×`max(1.5 − f, f)`,
+    selling ×`min(f, 1.5 − f)` with `f = 1.5 − 0.5 r` (r 0.5 until
+    reputation exists), × 0.875 (barter 0), × the shop's multiplier, cut to
+    whole tenths. The guesses are listed in `shops.ts` and the handoff.
+  - Scripts reach shops through `Shops.OpenShop`, `CloseShop`,
+    `IsShopOpened`, `GetShopDBIdByKeeper`, `GetShopMoney`, `OpenInventory`
+    (the opening quest's tree opens the collier's shop). A dialogue
+    sequence of type 9 ("Let's talk trade") opens the trade panel
+    (ASSUMPTION).
+  - Diet mode's grants are stocked in their shops while it is on.
+  - The calendar (`calendar.ts`): scripts read and set world time
+    (`forwardTime`) and pause it; in the view the clock follows.
 - **Not yet:**
-  a real inventory; combat and perception nodes; the calendar functions the
-  scripts call (`forwardTime`).
+  picking things up; combat and perception nodes.
 
 ### Diet mode (`web/src/diet.ts`, `web/src/dietConfig.ts`)
 

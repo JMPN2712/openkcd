@@ -310,6 +310,9 @@ details.part p { margin: 4px 0; }
 .level-chest ul { margin: 0; padding-left: 16px; }
 .level-chest .maybe { color: #aaa; }
 .level-chest .note { margin: 6px 0 0; color: #aaa; font-size: 12px; }
+/* the trade panel (tradeView.ts): a chest-like list with Buy and Sell buttons */
+.level-trade { pointer-events: auto; max-width: min(420px, 80%); }
+.level-trade button { margin-left: 4px; font-size: 12px; }
 
 @media (max-width: 900px) {
   main { grid-template-columns: 1fr; grid-auto-rows: minmax(240px, auto); overflow: auto; }

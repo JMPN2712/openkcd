@@ -7,8 +7,8 @@
 // through it, so an overlay (diet.ts) can stand between them and the stored state: it can make a
 // quest read as cancelled and refuse every change to it without writing anything.
 //
-// Tracked assets and timers read the game through QuestSystem.world. Not yet: paying rewards
-// (they are announced as events), saving on objectives.
+// Tracked assets and timers read the game through QuestSystem.world. Rewards are announced as
+// events with what they give (playerState.ts pays money and items). Not yet: saving on objectives.
 
 import { readTable, groupBy, type Row } from "./tables.ts";
 import { holds, type CondValue } from "./dialogueCondition.ts";
@@ -73,6 +73,17 @@ export interface Tracked {
 }
 
 /**
+ * What an objective's reward row gives (quest_reward_money / _item / _exp / _perk): money in
+ * groschen (money_change), items, experience for a stat or skill (exp_change), a perk.
+ */
+export type Reward =
+  | { kind: "money"; groschen: number }
+  | { kind: "item"; item: string; count: number }
+  | { kind: "exp"; attr: string; amount: number }
+  | { kind: "perk"; perk: string; soul: string }
+  | { kind: "other" };
+
+/**
  * The game around the quests, for tracked assets (quest-system.md, "Automatic completion").
  * A count nobody can give is 0, so its objective waits.
  */
@@ -120,7 +131,7 @@ export class QuestDb {
   private writes = new Map<number, SequenceWrite[]>();
   private topics = new Map<string, number[]>();
   private places = new Map<string, QuestMarker[]>();
-  private rewardRows = new Map<string, boolean[]>();
+  private rewardRows = new Map<string, { immediate: boolean; reward: Reward }[]>();
   private tracking = new Map<string, Tracked[]>();
 
   private constructor() {}
@@ -132,14 +143,23 @@ export class QuestDb {
 
   static async load(vfs: Vfs): Promise<QuestDb> {
     const t = (n: string) => readTable(vfs, n);
-    const [quests, objectives, transitions, s2q, subchapters, topics, skald, places, tracked, exp, money, item, perk, assetItems, assetNpcs, assetStats] = await Promise.all([
+    const [quests, objectives, transitions, s2q, subchapters, topics, skald, places, tracked, exp, moneyRows, item, perk, assetItems, assetNpcs, assetStats] = await Promise.all([
       t("quest/quest"), t("quest/quest_objective"), t("quest/quest_transition"), t("text/sequence2quest_objective"),
       t("quest/quest2skald_subchapter"), t("text/v_topic2subchapter_id"), t("skald/skald_objective"),
       t("quest/quest_place"), t("quest/quest_tracked_asset"),
       t("quest/quest_reward_exp"), t("quest/quest_reward_money"), t("quest/quest_reward_item"), t("quest/quest_reward_perk"),
       t("quest/quest_item"), t("quest/quest_npc"), t("quest/quest_statistic"),
     ]);
-    return QuestDb.from({ quests, objectives, transitions, s2q, subchapters, topics, skald, places, tracked, rewards: [...exp, ...money, ...item, ...perk], assetItems, assetNpcs, assetStats });
+    const [moneyChange, expChange] = await Promise.all([t("quest/money_change").catch(() => []), t("quest/exp_change").catch(() => [])]);
+    const money = new Map(moneyChange.map((r) => [r.money_change_id, Number(r.change || 0)])), xp = new Map(expChange.map((r) => [r.exp_change_id, Number(r.change || 0)]));
+    // each reward row as what it gives (amounts from money_change / exp_change)
+    const rewards: Row[] = [
+      ...money.size ? moneyRows.map((r) => ({ ...r, reward_kind: "money", reward_amount: String(money.get(r.money_change_id) ?? 0) })) : [],
+      ...item.map((r) => ({ ...r, reward_kind: "item" })),
+      ...exp.map((r) => ({ ...r, reward_kind: "exp", reward_amount: String(xp.get(r.exp_change_id) ?? 0) })),
+      ...perk.map((r) => ({ ...r, reward_kind: "perk" })),
+    ];
+    return QuestDb.from({ quests, objectives, transitions, s2q, subchapters, topics, skald, places, tracked, rewards, assetItems, assetNpcs, assetStats });
   }
 
   /** Build from table rows (tests build small ones by hand). */
@@ -209,7 +229,18 @@ export class QuestDb {
       const k = `${q}/${int(r.objective_id)}`;
       db.tracking.set(k, [...(db.tracking.get(k) ?? []), { ...a, count: int(r.count) }]);
     }
-    for (const r of t.rewards ?? []) { const q = name(r.quest_id); if (q) { const k = `${q}/${r.objective_id}`; db.rewardRows.set(k, [...(db.rewardRows.get(k) ?? []), yes(r.is_immediate)]); } }
+    for (const r of t.rewards ?? []) {
+      const q = name(r.quest_id);
+      if (!q) continue;
+      const amount = Number(r.reward_amount || 0);
+      const reward: Reward = r.reward_kind === "money" ? { kind: "money", groschen: amount }
+        : r.reward_kind === "item" ? { kind: "item", item: r.item_id, count: Number(r.count || 1) }
+        : r.reward_kind === "exp" ? { kind: "exp", attr: r.rpg_attr ?? "", amount }
+        : r.reward_kind === "perk" ? { kind: "perk", perk: r.perk_id, soul: r.soul_id ?? "" }
+        : { kind: "other" };
+      const k = `${q}/${r.objective_id}`;
+      db.rewardRows.set(k, [...(db.rewardRows.get(k) ?? []), { immediate: yes(r.is_immediate), reward }]);
+    }
     return db;
   }
 
@@ -257,7 +288,7 @@ export class QuestDb {
   markers(quest: string): QuestMarker[] { return this.places.get(quest) ?? []; }
 
   /** Rewards on an objective: immediate (true) or paid when the quest completes (false). */
-  rewards(quest: string, id: number): boolean[] { return this.rewardRows.get(`${quest}/${id}`) ?? []; }
+  rewards(quest: string, id: number): { immediate: boolean; reward: Reward }[] { return this.rewardRows.get(`${quest}/${id}`) ?? []; }
 }
 
 /** What a save keeps per quest it touched. */
@@ -283,7 +314,7 @@ export type QuestEvent =
   | { kind: "quest"; quest: string; state: number; banner: boolean }
   /** objective message states: 0 started, 1 completed, 2 canceled, 3 expired; `journal` when it has a journal entry */
   | { kind: "objective"; quest: string; objective: number; state: number; journal: boolean }
-  | { kind: "reward"; quest: string; objective: number; immediate: boolean };
+  | { kind: "reward"; quest: string; objective: number; immediate: boolean; reward: Reward };
 
 /** Something that stands between the stored state and everyone who reads or changes it. */
 export interface QuestOverlay {
@@ -555,7 +586,7 @@ export class QuestSystem {
     if (!isActive(r.objectives[id] ?? UNCHANGED)) return false;
     const o = this.db.objective(q, id);
     r.objectives[id] = COMPLETED;
-    for (const immediate of this.db.rewards(q, id)) if (immediate) this.emit({ kind: "reward", quest: q, objective: id, immediate });
+    for (const w of this.db.rewards(q, id)) if (w.immediate) this.emit({ kind: "reward", quest: q, objective: id, ...w });
     if (o?.exclusive) {
       for (const succ of this.db.successorsAll(q, id)) {
         for (const p of this.db.predecessorsAll(q, succ)) {
@@ -603,7 +634,7 @@ export class QuestSystem {
     this.emit({ kind: "quest", quest: q, state: 1, banner: this.db.quests.get(q)!.visible });
     for (const [id, s] of Object.entries(r.objectives)) {
       if (s !== COMPLETED) continue;
-      for (const immediate of this.db.rewards(q, Number(id))) if (!immediate) this.emit({ kind: "reward", quest: q, objective: Number(id), immediate });
+      for (const w of this.db.rewards(q, Number(id))) if (!w.immediate) this.emit({ kind: "reward", quest: q, objective: Number(id), ...w });
     }
     this.finish(r);
     return true;
