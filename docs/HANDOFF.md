@@ -422,6 +422,15 @@ follows them):
   shops with a trade panel (the tailor's "Let's talk trade" opens it), the
   shop and calendar script functions, diet mode's shop grants.
   `test-shops.ts`; `test-quest-opening.ts` now buys the charcoal.
+- #50 (2026-11-15): bug hunt by screenshot tours
+  (`profile-browser.ts --tour=PREFIX --tour-keys=KeyW --tour-view=third`).
+  - Henry put down anywhere (`?at=`, "Go to Rataje market", a new game,
+    the debug talk and the forced talk) landed at the terrain's height,
+    inside raised pavements, stuck; or, with the "highest surface" rule,
+    on a roof. `PlayerController.place` takes the walkable surface nearest
+    the ground (up to 1.6 m above the terrain), and Henry is put down again
+    once the first scene has loaded.
+  - Henry ran on the spot against walls: after 0.25 s blocked he stands.
 - #49 (2026-11-15): a sweep after the user's bug report from play.
   - A black box in the middle of the view: the empty benchmark report
     (its `display: flex` beat `hidden`). Hidden panels now stay hidden.

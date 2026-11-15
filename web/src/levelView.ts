@@ -291,8 +291,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   marketBtn.addEventListener("click", () => {
     // Rataje's market under the town wall, looking south at a guard by the stalls
     if (player && mode === "player") {
-      player.controller.pos = [SPAWN[0], SPAWN[1], heightAt(terrain, SPAWN[0], SPAWN[1])];
-      player.controller.vel = [0, 0, 0];
+      player.controller.place(SPAWN[0], SPAWN[1], undefined, SPAWN_YAW);
     } else {
       cam.pos = [2577.8, 574, 83.8];
       cam.yaw = -Math.PI / 2;
@@ -474,8 +473,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       if (player && mode === "player") {
         const c = player.controller, dx = c.pos[0] - np[0], dy = c.pos[1] - np[1], d = Math.hypot(dx, dy);
         if (d > 2.5) {
-          c.pos = [np[0] + (dx / d) * 1.3, np[1] + (dy / d) * 1.3, np[2] + 0.1];
-          c.vel = [0, 0, 0];
+          c.place(np[0] + (dx / d) * 1.3, np[1] + (dy / d) * 1.3, np[2] + 1);
         }
       }
       loadRig(), void dialogue.talk({ soul: n.soul, name: n.entity.name, entity: n.entity.id }).then(() => { dialogueInfo = `Talking to ${who}`; }).catch((err) => { dialogueInfo = `Dialogue: ${(err as Error).message}`; });
@@ -540,9 +538,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     // "spawnStart", by his home in Skalitz)
     const spawn = [...ents.values()].find((e) => e.cls === "SpawnPoint" && !e.layer);
     if (spawn && player) {
-      player.controller.pos = [spawn.pos[0], spawn.pos[1], spawn.pos[2]];
-      player.controller.vel = [0, 0, 0];
-      player.controller.yaw = 2 * Math.atan2(spawn.rot[3], spawn.rot[0]);
+      player.controller.place(spawn.pos[0], spawn.pos[1], spawn.pos[2] + 1.5, 2 * Math.atan2(spawn.rot[3], spawn.rot[0]));
       mode = "player";
     }
   };
@@ -614,6 +610,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   // NPCs (loading them, their behaviour trees, crowd and animation) wait until the first streamed
   // scene is complete: running them meanwhile took about half the main thread while the market loaded
   let worldLoading = true;
+  let placedOnWorld = false;
   /** the first NPCs have been assembled (until then frames stay capped too, see LOADING_FRAME) */
   let npcsLoaded = false;
   let npcInfo = `NPCs: ${npcEntities.length} in level`;
@@ -699,7 +696,17 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         // whose released geometry the renderer just let go
         trimWorldCaches(caches!, 4, (m) => models.holds(m));
         sceneInfo = `${next.models.length} models, ${next.instances.toLocaleString()} instances within ${STREAM_RADIUS} m${next.modelsSkipped ? ` (loading ${next.modelsSkipped} more…)` : ""}`;
-        if (!next.modelsSkipped) { worldLoading = false; break; }
+        if (!next.modelsSkipped) {
+          // Henry was put down before the objects around him had loaded, on the terrain: if he
+          // hasn't moved since, put him on what is there now (a pavement, a floor)
+          if (worldLoading && player && !placedOnWorld) {
+            placedOnWorld = true;
+            const c = player.controller;
+            if (Math.hypot(c.pos[0] - SPAWN[0], c.pos[1] - SPAWN[1]) < 0.5) c.place(c.pos[0], c.pos[1]);
+          }
+          worldLoading = false;
+          break;
+        }
       }
     } catch (err) {
       sceneInfo = `objects: ${(err as Error).message}`;
@@ -1053,9 +1060,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
               if (floor === undefined) continue;
               p[2] = floor;
               if (!clear(p)) continue;
-              pc.pos = [p[0], p[1], p[2] + 0.05];
-              pc.vel = [0, 0, 0];
-              pc.yaw = a + Math.PI;
+              pc.place(p[0], p[1], p[2] + 1, a + Math.PI);
               ready = true;
             }
           }

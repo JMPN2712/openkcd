@@ -8,6 +8,9 @@
 export type Vec3 = [number, number, number];
 
 /** What the controller collides with (terrain plus static objects, see collision.ts). */
+/** place(): a surface up to this high over the terrain counts as the ground (pavements, ground floors, not roofs). */
+const PLACE_ABOVE_TERRAIN = 1.6;
+
 export interface Surroundings {
   /**
    * Highest walkable surface under (x, y) between zTop and zBottom: its height and normal, or
@@ -116,6 +119,23 @@ export class PlayerController {
     const g = world.ground(pos[0], pos[1], pos[2] || 1e5, -1e5);
     this.pos = [pos[0], pos[1], g ? g.z : pos[2]];
     this.viewZ = this.pos[2];
+    this.yaw = yaw;
+  }
+
+  /**
+   * Put the controller down at (x, y) on the highest walkable surface below `above`, at rest.
+   * Without `above`: the surface nearest the terrain, up to PLACE_ABOVE_TERRAIN over it (a
+   * pavement, a ground floor; the highest surface was often a roof). Teleports use it: the
+   * terrain's height alone left Henry inside raised pavements and floors.
+   */
+  place(x: number, y: number, above?: number, yaw = this.yaw): void {
+    const t = this.world.floor?.(x, y);
+    const top = above ?? (t !== undefined ? t + PLACE_ABOVE_TERRAIN : 1e5);
+    const g = this.world.ground(x, y, top, -1e5);
+    this.pos = [x, y, g ? g.z : this.pos[2]];
+    this.viewZ = this.pos[2];
+    this.vel = [0, 0, 0];
+    this.grounded = !!g;
     this.yaw = yaw;
   }
 

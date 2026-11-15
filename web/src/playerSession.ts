@@ -73,6 +73,9 @@ export class PlayerSession {
     return Math.max(sprint ? PITCH.sprintMin : PITCH.min, Math.min(sprint ? PITCH.sprintMax : PITCH.max, p));
   }
 
+  /** seconds Henry has wanted to move without moving (blocked) */
+  private stuck = 0;
+
   /** Input from held keys (KeyboardEvent.code). */
   input(keys: Set<string>): MoveInput {
     const f = (keys.has("KeyW") || keys.has("ArrowUp") ? 1 : 0) - (keys.has("KeyS") || keys.has("ArrowDown") ? 1 : 0);
@@ -92,7 +95,11 @@ export class PlayerSession {
     this.lastPos = [...c.pos];
     const [lx, ly] = c.localVelocity();
     const travel = Math.hypot(lx, ly) > 0.1 ? Math.atan2(-lx, ly) : Math.atan2(-input.right, input.forward || (input.right ? 0 : 1));
-    this.loco.update(dt, { speed: c.speed(), travelAngle: travel, turnSpeed: this.turnRate, wantSpeed: c.wantSpeed, gait: c.gait, moved });
+    // pushing against a wall: after a moment of wanting to move without moving, Henry stands
+    // (he ran on the spot against walls and crates)
+    this.stuck = c.wantSpeed > 0.05 && c.speed() < 0.2 ? this.stuck + dt : 0;
+    const wantSpeed = this.stuck > 0.25 ? 0 : c.wantSpeed;
+    this.loco.update(dt, { speed: c.speed(), travelAngle: travel, turnSpeed: this.turnRate, wantSpeed, gait: c.gait, moved });
     this.avatar.animator.evaluateLayers(this.loco.layers(), true);
     // sprinting narrows the pitch range: ease into it rather than snapping the view
     const want = this.clampPitch(this.pitch);

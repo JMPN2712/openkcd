@@ -202,6 +202,24 @@ await sleep(settle * 1000);
 const readings: string[] = [];
 for (let k = 0; k < 3; k++) { readings.push((await hud()).replace(/ · .*?x /, " · x ").replace(/ · (terrain|textures)[^·]*/g, "").slice(0, 300)); await sleep(1000); }
 console.log(readings.join("\n"));
+// --tour=PREFIX [--tour-shots=6] [--tour-every=4]: screenshots of the view over time (never commit
+// them: game content); --tour-keys=KeyW holds those keys meanwhile (Henry walks), --tour-view=third
+const tour = arg("tour", "");
+if (tour) {
+  await evaluate(`document.querySelector(".level-canvas").focus()`);
+  const tk = async (code: string, type: "keyDown" | "keyUp") => page("Input.dispatchKeyEvent", { type, code, key: code.replace(/^Key/, "").toLowerCase(), windowsVirtualKeyCode: code.replace(/^Key/, "").charCodeAt(0) });
+  if (arg("tour-view", "") === "third") { await tk("KeyV", "keyDown"); await tk("KeyV", "keyUp"); }
+  const held = arg("tour-keys", "").split(",").filter(Boolean);
+  for (const k of held) await tk(k, "keyDown");
+  for (let i = 0; i < Number(arg("tour-shots", "6")); i++) {
+    await sleep(Number(arg("tour-every", "4")) * 1000);
+    for (const k of held) await tk(k, "keyDown");
+    const { data } = await page("Page.captureScreenshot", { format: "png" });
+    await writeFile(`${tour}-${i}.png`, Buffer.from(data, "base64"));
+    console.log(`tour ${i}: ${(await hud()).replace(/^.*?Henry/, "Henry").slice(0, 160)} · focus ${await evaluate<string>(`document.activeElement?.className ?? "none"`)}, document focused ${await evaluate<boolean>(`document.hasFocus()`)}`);
+  }
+  for (const k of held) await tk(k, "keyUp");
+}
 // --shot=FILE.png: a screenshot of the view after the readings
 const shot = arg("shot", "");
 if (shot) {
