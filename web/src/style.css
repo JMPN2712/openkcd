@@ -260,6 +260,13 @@ details.part p { margin: 4px 0; }
 .level-stage.playing .level-clock, .level-stage.playing .level-full-btn { display: none; }
 .level-stage.full { position: fixed; inset: 0; z-index: 100; background: #000; }
 .level-stage.full .level-canvas { width: 100%; height: 100%; aspect-ratio: auto; max-height: none; border: 0; }
+/* what the game is doing that the player must see (levelView.ts statusLine) */
+.level-status {
+  position: absolute; left: 50%; top: 104px; transform: translateX(-50%); z-index: 3; pointer-events: none;
+  max-width: min(90%, 720px); padding: 5px 14px; border-radius: 5px; font-size: 14px; text-align: center;
+  background: rgba(0, 0, 0, 0.6); color: #f2ead8;
+}
+.level-stage.playing .level-status { top: 12px; }
 /* the readout: one line along the bottom of the view; a click shows all of it */
 .level-stage .level-hud {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; margin: 0; padding: 4px 12px; font-size: 12px;

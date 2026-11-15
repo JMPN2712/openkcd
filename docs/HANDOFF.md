@@ -422,6 +422,11 @@ follows them):
   shops with a trade panel (the tailor's "Let's talk trade" opens it), the
   shop and calendar script functions, diet mode's shop grants.
   `test-shops.ts`; `test-quest-opening.ts` now buys the charcoal.
+- #51 (2026-11-15): a status line under the controls for what the player
+  must see (a new game loading for 10–20 s, a failed talk): since #49 the
+  readout is one cut line, and those messages were lost at its end.
+  `profile-browser.ts --tour-clock=HH:MM`; `WARN=1` prints the page's
+  warnings (none during a whole new game).
 - #50 (2026-11-15): bug hunt by screenshot tours
   (`profile-browser.ts --tour=PREFIX --tour-keys=KeyW --tour-view=third`).
   - Henry put down anywhere (`?at=`, "Go to Rataje market", a new game,

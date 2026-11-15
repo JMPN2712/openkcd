@@ -75,7 +75,7 @@ ws.addEventListener("message", (m) => {
   if (msg.method === "Tracing.dataCollected") traceEvents.push(...msg.params.value);
   if (msg.method === "Tracing.tracingComplete") traceDone?.();
   if (msg.method === "Runtime.exceptionThrown") console.log("page exception:", msg.params.exceptionDetails.exception?.description ?? msg.params.exceptionDetails.text);
-  if (msg.method === "Runtime.consoleAPICalled" && msg.params.type === "error") console.log("page error:", msg.params.args.map((a: any) => a.value ?? a.description).join(" "));
+  if (msg.method === "Runtime.consoleAPICalled" && (msg.params.type === "error" || (process.env.WARN && msg.params.type === "warning"))) console.log(`page ${msg.params.type}:`, msg.params.args.map((a: any) => a.value ?? a.description).join(" "));
   const p = pending.get(msg.id);
   if (!p) return;
   pending.delete(msg.id);
@@ -206,6 +206,13 @@ console.log(readings.join("\n"));
 // them: game content); --tour-keys=KeyW holds those keys meanwhile (Henry walks), --tour-view=third
 const tour = arg("tour", "");
 if (tour) {
+  // --tour-clock=18:30: set the game clock first (the clock slider)
+  const clock = arg("tour-clock", "");
+  if (clock) {
+    const [h, m] = clock.split(":").map(Number);
+    await evaluate(`(() => { const r = document.querySelector(".level-clock input[type=range]"); r.value = ${h * 60 + (m || 0)}; r.dispatchEvent(new Event("input", { bubbles: true })); r.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    await sleep(3000);
+  }
   await evaluate(`document.querySelector(".level-canvas").focus()`);
   const tk = async (code: string, type: "keyDown" | "keyUp") => page("Input.dispatchKeyEvent", { type, code, key: code.replace(/^Key/, "").toLowerCase(), windowsVirtualKeyCode: code.replace(/^Key/, "").charCodeAt(0) });
   if (arg("tour-view", "") === "third") { await tk("KeyV", "keyDown"); await tk("KeyV", "keyUp"); }
@@ -447,7 +454,11 @@ if (talkTo || newGame) {
   const press = async (code: string, key: string) => {
     for (const type of ["keyDown", "keyUp"] as const) await page("Input.dispatchKeyEvent", { type, code, key, windowsVirtualKeyCode: key.charCodeAt(0) });
   };
-  if (newGame) await evaluate(`[...document.querySelectorAll("button")].find((b) => /New game/.test(b.textContent)).click()`);
+  if (newGame) {
+    await evaluate(`[...document.querySelectorAll("button")].find((b) => /New game/.test(b.textContent)).click()`);
+    // (with --screenshot: the view while the new game loads)
+    if (arg("screenshot", "")) { await sleep(3000); const { data } = await page("Page.captureScreenshot", { format: "png" }); await writeFile(`${arg("screenshot", "")}-loading.png`, Buffer.from(data, "base64")); }
+  }
   else await evaluate(`(() => { const i = document.querySelector(".level-dialogue-id"); i.value = ${JSON.stringify(talkTo)}; [...document.querySelectorAll("button")].find((b) => /Dialogue/.test(b.textContent)).click(); })()`);
   const td = Date.now();
   let lastSub = "", lastMenu = "", quietFor = 0, k = 0, lastStory = "", lastTrade = "", talked = false, snaps = 0;

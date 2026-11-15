@@ -274,7 +274,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let promptText = "";
   const dialogue = new DialogueHost(vfs, paks);
   let dialogueInfo = "";
-  stage.append(canvas, fullBtn, marketBtn, clockBar, hud, chestPanel, benchPanel, prompt, dialogue.subtitle, dialogue.menu, fade);
+  // what the game is doing that the player must see (a new game loading, a failed talk): a line
+  // under the controls, gone a few seconds after it last changed (the readout is one cut line)
+  const statusLine = el("div", "level-status");
+  statusLine.hidden = true;
+  let statusText = "", statusAt = 0;
+  stage.append(canvas, fullBtn, marketBtn, clockBar, statusLine, hud, chestPanel, benchPanel, prompt, dialogue.subtitle, dialogue.menu, fade);
   host.replaceChildren(
     el("p", "scene-title", `${level}: ${terrain.size} × ${terrain.size} m terrain, ${objects.brushName.length.toLocaleString()} brushes, ${objects.vegGroup.length.toLocaleString()} vegetation instances`),
     stage,
@@ -1198,6 +1203,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     }
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
     const benchInfo = bench ? `⏱ benchmark ${q.label}: ${bench.phase === "settle" ? "loading…" : `${bench.segment} ${Math.round((now - bench.start) / 1000)}/${Math.round(PATH_SECONDS)} s`} · ` : "";
+    // the status line: the story's and the dialogue's messages, and "loading" while they last
+    const status = [storyInfo, dialogueInfo.startsWith("Dialogue:") || dialogueInfo.startsWith("Loading") ? dialogueInfo : ""].filter(Boolean).join(" · ");
+    if (status !== statusText) { statusText = status; statusAt = now; statusLine.textContent = status; }
+    statusLine.hidden = !statusText || (now - statusAt > 6000 && !/…$/.test(statusText));
     hud.textContent = `${benchInfo}${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms${timer.available ? `, gpu ${timer.total.toFixed(1)} ms (${timer.summary()}${splitPasses ? "" : "; G splits"})` : ""} (${q.label}, ${canvas.width}×${canvas.height}${q.upscale ? `, scene ×${scale.toFixed(2)}` : ""}) · memory: JS ${(jsHeap() / 2 ** 20).toFixed(0)} MiB, GPU ${((gpuMem.buffers + gpuMem.textures + gpuMem.targets) / 2 ** 20).toFixed(0)} MiB · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}${storyInfo ? ` · ${storyInfo}` : ""}${dialogueInfo ? ` · ${dialogueInfo}` : ""}${cameraInfo ? ` · ${cameraInfo}` : ""}`;
   };
   raf = requestAnimationFrame(frame);
