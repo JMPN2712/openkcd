@@ -123,6 +123,8 @@ const press = async (code: string, key: string, type?: "keyDown" | "keyUp") => {
   for (const t of type ? [type] : ["keyDown", "keyUp"] as const) await page("Input.dispatchKeyEvent", { type: t, code, key, windowsVirtualKeyCode: code === "Backspace" ? 8 : key.toUpperCase().charCodeAt(0) });
 };
 const cameraOf = (h: string) => /camera (\S+) on ([^·(]+?)(?: \((\w+)\))?(?: ·|$)/.exec(h);
+/** how many times the trade window was seen open (and closed again by the test) */
+let trades = 0;
 const speed = (h: string) => Number(/Henry \([^)]*\)[^·]*?([\d.]+) m\/s/.exec(h)?.[1] ?? NaN);
 
 /**
@@ -154,6 +156,14 @@ async function converse(npc: string, atMenu: [string, string][]): Promise<{ line
       await press(...key);
     }
     lastSub = sub; lastMenu = menu; lastCam = cam;
+    // the trade window holds the conversation: note it, then close it with Esc
+    const tradeOpen = await evaluate<boolean>(`(() => { const p = document.querySelector(".level-trade"); return !!p && !p.hidden; })()`);
+    if (tradeOpen) {
+      trades++;
+      await sleep(500);
+      await evaluate(`document.dispatchEvent(new KeyboardEvent("keydown", { code: "Escape", key: "Escape", bubbles: true, cancelable: true }))`);
+      await sleep(300);
+    }
     const info = /Conversation [^·]*|Dialogue: [^·]*/.exec(h)?.[0];
     if (info) { end = info.trim(); console.log(`  ${end}`); break; }
     await sleep(250);
@@ -182,7 +192,10 @@ check(walking > 0.5, `S walks Henry again (${walking} m/s)`);
 await sleep(1500);
 // 3. a choice that ends the conversation: trade (flag 1), picked with its number
 const two = await converse("rat_tailor", [["Digit1", "1"]]);
-check(/said goodbye/.test(two.end) && two.menus.length === 1, `trade ends the conversation: no menu after it (${two.end || "never ended"}, ${two.menus.length} menus)`);
+check(trades === 1, `"Let's talk trade" opens the trade window, which Esc closes (${trades})`);
+check(/said goodbye/.test(two.end) && two.menus.length === 1, `after it the conversation ends: no menu again (${two.end || "never ended"}, ${two.menus.length} menus)`);
+const boxes = await evaluate<string[]>(`[...document.querySelectorAll(".level-stage > *")].filter((e) => e.hidden && getComputedStyle(e).display !== "none").map((e) => e.className)`);
+check(boxes.length === 0, `no hidden panel is drawn (${boxes.join(", ") || "none"})`);
 await sleep(1500);
 // 4. Henry speaks too: the bailiff's first topic; its follow-up menu has no way out but its
 // choices (as in the game), so "I can't help you now", then Backspace at the menu

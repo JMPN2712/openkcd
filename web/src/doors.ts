@@ -61,6 +61,9 @@ interface Placed {
 
 const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
+/** An NPC this near a shut door opens it; the door shuts again this long after everyone is this far. */
+const NPC_DOOR_OPEN = 1.4, NPC_DOOR_CLEAR = 2.2, NPC_DOOR_CLOSE_AFTER = 1.5;
+
 export class Doors {
   private vfs: Vfs;
   readonly doors = new Map<number, Door>();
@@ -189,6 +192,35 @@ export class Doors {
     this.moving.add(d.entity.id);
     return true;
   }
+
+  /**
+   * NPCs use doors (OURS: in the game their trees open, close and lock doors on the way; here a
+   * door in an NPC's way opens for it, locked or not, and closes again once nobody is near).
+   * `walkers`: the positions of NPCs on the move; `others`: anyone else who keeps a door open
+   * (Henry). Call once a frame with the play time in seconds.
+   */
+  serveNpcs(walkers: Vec3[], others: Vec3[], now: number): void {
+    const nearDoor = (p: Vec3, d: Door, r: number) => Math.hypot(p[0] - d.entity.pos[0], p[1] - d.entity.pos[1]) < r && Math.abs(p[2] - d.entity.pos[2]) < 2;
+    for (const id of this.placed.keys()) {
+      const d = this.doors.get(id)!;
+      if (d.clip) continue;
+      const user = walkers.find((p) => nearDoor(p, d, NPC_DOOR_OPEN));
+      if (!d.open) {
+        if (!user) continue;
+        const locked = d.locked;
+        d.locked = false;
+        if (this.use(d, user)) this.npcOpened.set(id, { at: now, locked });
+        else d.locked = locked;
+      } else if (this.npcOpened.has(id)) {
+        const o = this.npcOpened.get(id)!;
+        if (user || others.some((p) => nearDoor(p, d, NPC_DOOR_CLEAR)) || walkers.some((p) => nearDoor(p, d, NPC_DOOR_CLEAR))) { o.at = now; continue; }
+        if (now - o.at < NPC_DOOR_CLOSE_AFTER) continue;
+        if (this.use(d, d.entity.pos)) { d.locked = o.locked; this.npcOpened.delete(id); }
+      }
+    }
+  }
+  /** doors an NPC opened: when someone was last near, and whether it was locked before */
+  private npcOpened = new Map<number, { at: number; locked: boolean }>();
 
   /** Whether a door is swinging now. */
   isMoving(id: number): boolean {

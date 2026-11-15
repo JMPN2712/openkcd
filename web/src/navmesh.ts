@@ -203,6 +203,29 @@ export class NavMesh {
   }
 
   /**
+   * Whether a point stands on the mesh: a polygon within `slack` m of it horizontally and
+   * `maxDz` of its height. For per-frame checks: the polygon found last time (`hint`) is tried
+   * first, then the point's own tile, and neighbouring tiles only near the tile's edge.
+   */
+  onMesh(p: Vec3, slack: number, maxDz: number, hint?: PolyRef | null): PolyRef | null {
+    const ok = (tile: NavTile, k: number): PolyRef | null => {
+      if (tile.polyN[k] < 3) return null;
+      const d = polyDistance(tile, k, p);
+      return d.h <= slack && Math.abs(d.point[2] - p[2]) < maxDz ? { tile, poly: k, point: d.point } : null;
+    };
+    if (hint) { const h = ok(hint.tile, hint.poly); if (h) return h; }
+    const s = this.tileSize;
+    const fx = p[0] / s, fy = p[1] / s, tx = Math.floor(fx), ty = Math.floor(fy);
+    const edge = slack / s;
+    const xs = [tx, ...(fx - tx < edge ? [tx - 1] : fx - tx > 1 - edge ? [tx + 1] : [])];
+    const ys = [ty, ...(fy - ty < edge ? [ty - 1] : fy - ty > 1 - edge ? [ty + 1] : [])];
+    for (const x of xs) for (const y of ys) for (const tile of this.tilesAt(x, y)) {
+      for (let k = 0; k < tile.polyCount; k++) { const h = ok(tile, k); if (h) return h; }
+    }
+    return null;
+  }
+
+  /**
    * Attach the off-mesh connections stored in tile cell (x, y) to the polygons at their ends (each
    * end on a polygon within its radius and 1 m of its height, as Detour links them).
    */

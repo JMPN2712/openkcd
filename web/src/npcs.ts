@@ -3,6 +3,7 @@
 // them at the given time (src/schedule.ts, including walks between places) and
 // plays a relaxed idle, the walk cycle in place, or the sleeping clip in bed.
 
+import type { PolyRef } from "./navmesh.ts";
 import { CharacterDb, loadCharacter, poseMatrix, type LoadedCharacter, type ScheduleItem } from "./character.ts";
 import { parseSkeleton, skeletonKey, type Skeleton } from "./skeleton.ts";
 import { Dba } from "./dba.ts";
@@ -42,11 +43,15 @@ interface Mover {
   shown?: Placement;
   yaw: number;
   goalZ?: number;
+  /** the navmesh polygon the agent stood on at the last step (stepCrowd's on-mesh check) */
+  poly?: PolyRef | null;
 }
 
 /** Body (physics capsule) radius for NPC-NPC contact: the avoidance radius less a little give. */
 const BODY_RADIUS = 0.3;
 
+/** How far off the navmesh (m) a step may land and still count as on it (stepCrowd). */
+const NAV_STEP_SLACK = 0.15;
 /** Plans further than this (m) from where an NPC is restart it there instead of walking. */
 const SNAP_DISTANCE = 8;
 
@@ -368,10 +373,25 @@ export class NpcWorld {
       agents.push(a);
     });
     avoid(agents, dt);
+    const nav = this.schedules?.navMesh ?? null;
     for (const n of npcs) {
       const m = this.movers.get(n.entity.id)!;
-      m.agent.pos[0] += m.agent.vel[0] * dt;
-      m.agent.pos[1] += m.agent.vel[1] * dt;
+      const a = m.agent;
+      const nx = a.pos[0] + a.vel[0] * dt, ny = a.pos[1] + a.vel[1] * dt;
+      // steering (avoidance, catching up with the plan) must not carry an NPC off the walkable
+      // floor, through a fence or a wall: a step that leaves the navmesh from a spot on it is
+      // tried along each axis alone, else not taken. An NPC already off the mesh (a seat, a bed,
+      // a spot beside it) moves freely.
+      if (nav && (a.vel[0] !== 0 || a.vel[1] !== 0) && m.ref.pose !== "sleep") {
+        const on = (x: number, y: number) => nav.onMesh([x, y, a.pos[2]], NAV_STEP_SLACK, 1.2, m.poly);
+        const here = on(a.pos[0], a.pos[1]);
+        m.poly = here;
+        if (here && !on(nx, ny)) {
+          if (on(nx, a.pos[1])) { a.pos[0] = nx; a.vel[1] = 0; }
+          else if (on(a.pos[0], ny)) { a.pos[1] = ny; a.vel[0] = 0; }
+          else a.vel = [0, 0];
+        } else { a.pos[0] = nx; a.pos[1] = ny; }
+      } else { a.pos[0] = nx; a.pos[1] = ny; }
       const z = m.goalZ ?? m.agent.pos[2];
       // sleepers keep the bed helper's height (the bench's top lifted them 0.45 m)
       m.agent.pos[2] = m.ref.pose === "sleep" ? z : this.surface?.(m.agent.pos[0], m.agent.pos[1], z) ?? z;

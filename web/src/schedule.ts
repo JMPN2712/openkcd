@@ -153,6 +153,9 @@ function route(pts: Vec3[]): Route {
   return { pts, cum };
 }
 
+/** Without a navmesh path, places nearer than this (m) are walked to in a straight line. */
+const NO_PATH_STRAIGHT = 3;
+
 export class Schedules {
   private ents: Map<number, EntityInfo>;
   private nav: NavMesh | null = null;
@@ -263,8 +266,11 @@ export class Schedules {
     let r = this.routes.get(key);
     if (!r) {
       const path = this.nav?.findPath(from, to);
-      // bridge from the exact places to the mesh (beds, area points just off it)
-      r = route(path ? [from, ...path, to] : [from, to]);
+      // bridge from the exact places to the mesh (beds, area points just off it). With a navmesh
+      // but no way between the two places, a straight line would lead through walls and fences:
+      // the NPC is at its new place at once instead (only short hops go straight)
+      const hop = Math.hypot(to[0] - from[0], to[1] - from[1]) < NO_PATH_STRAIGHT;
+      r = route(path ? [from, ...path, to] : !this.nav || hop ? [from, to] : [to, to]);
       if (this.routes.size > 5000) this.routes.clear();
       this.routes.set(key, r);
     }
@@ -335,9 +341,19 @@ export class Schedules {
       // navmesh, only points with walkable floor near that height, standing on it: an area can reach
       // past its floor (the tailor's home, upstairs, spans the ground-floor shop below, where he stood
       // 3.4 m up in the air)
+      // OURS: someone standing at a spot in an area looks into it (towards its middle), not at
+      // a random bearing, which as often as not was a wall or a fence; near the middle the
+      // bearing is the NPC's own
+      const facing = (x: number, y: number) => {
+        let cx = 0, cy = 0;
+        for (let i = 0; i < poly.length; i += 2) { cx += poly[i]; cy += poly[i + 1]; }
+        cx /= poly.length / 2 || 1; cy /= poly.length / 2 || 1;
+        const d = Math.hypot(cx - x, cy - y);
+        return yawQuat(d > 0.75 ? Math.atan2(cy - y, cx - x) - Math.PI / 2 : rng(hash(npc.name + activity))() * 2 * Math.PI);
+      };
       const key = `${npc.id}/${area.id}`;
       const cached = this.spots.get(key);
-      if (cached) return { activity, where, pos: cached, rot: yawQuat(rng(hash(npc.name + activity))() * 2 * Math.PI), pose: "stand" };
+      if (cached) return { activity, where, pos: cached, rot: facing(cached[0], cached[1]), pose: "stand" };
       const nav = this.nav;
       const floor = (x: number, y: number) => {
         const ref = Math.max(area.pos[2], groundAt(x, y));
@@ -349,7 +365,7 @@ export class Schedules {
       const [x, y] = nav ? pointInArea(area, seed, (x, y) => floor(x, y) !== null) : pointInArea(area, seed);
       const z = floor(x, y) ?? Math.max(area.pos[2], groundAt(x, y));
       this.spots.set(key, [x, y, z]);
-      return { activity, where, pos: [x, y, z], rot: yawQuat(rng(hash(npc.name + activity))() * 2 * Math.PI), pose: "stand" };
+      return { activity, where, pos: [x, y, z], rot: facing(x, y), pose: "stand" };
     };
     const atHome = () => (home ? inArea(home, "home") : spawn);
     if (target) {

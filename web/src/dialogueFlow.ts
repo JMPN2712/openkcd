@@ -448,7 +448,13 @@ export class Conversation {
       }
       if (this.stack.length) continue; // ASSUMPTION: resume from the stack (the note leaves this untraced)
       const ended = last ? (last.flags & (FLAG_ENDS | FLAG_ENDS_ENDING)) !== 0 : true;
-      if (this.interactive && !ended) return this.choice(this.narrow(this.collectStarts(NORMAL), true));
+      if (this.interactive && !ended) {
+        // back at the top level. ASSUMPTION: a topic a tree asked for counts as requested only
+        // until its chain has played, so the menu that follows is an ordinary one with "end
+        // topic" (Henry's mother's menu had no way out but Backspace)
+        this.requestedTopic = 0;
+        return this.choice(this.narrow(this.collectStarts(NORMAL), true));
+      }
       return this.toFarewell();
     }
   }

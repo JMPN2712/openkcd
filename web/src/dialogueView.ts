@@ -106,6 +106,10 @@ export class DialogueHost {
   requests: DialogRequests | null = null;
   /** the player asked to trade with the NPC talked to (the view opens its trade panel) */
   onTrade: ((npc: TalkTarget) => void) | null = null;
+  /** whether something holds the conversation (the trade window is open): it goes on afterwards */
+  hold: (() => boolean) | null = null;
+  private pendingTrade: TalkTarget | null = null;
+  private resume: (() => void) | null = null;
   /** the request the running conversation answers */
   private answering = 0;
 
@@ -180,7 +184,8 @@ export class DialogueHost {
         l.quests.runSequence(seq, holds);
         // ASSUMPTION: a sequence of type 9 opens the trade screen with the NPC (the four of them
         // are the "Let's talk trade" lines, without a script; the notes name types up to 26 but not 9)
-        if (l.db.sequence(seq)?.type === TYPE_TRADE && this.with) this.onTrade?.(this.with);
+        // (the screen opens when the line has been said; the conversation goes on once it is closed)
+        if (l.db.sequence(seq)?.type === TYPE_TRADE && this.with) this.pendingTrade = this.with;
       },
       runScript: this.lua ? luaScripts(this.lua, entityOf) : undefined,
       report: (w) => console.debug("dialogue:", w),
@@ -269,7 +274,12 @@ export class DialogueHost {
     switch (s.kind) {
       case "play":
         await this.playTimeline(l, s.candidate.sequence, this.castOf(l, s.candidate.sequence, s.cast));
-        this.afterLine = () => { if (this.conv === conv) void this.go(() => conv.played()); };
+        this.afterLine = () => {
+          const go = () => { if (this.conv === conv) void this.go(() => conv.played()); };
+          const npc = this.pendingTrade;
+          this.pendingTrade = null;
+          if (npc && this.onTrade) { this.onTrade(npc); this.resume = go; } else go();
+        };
         return;
       case "menu": {
         const henry = conv.participants.findIndex((p) => p.player);
@@ -449,6 +459,8 @@ export class DialogueHost {
 
   stop(): void {
     this.answered(!!this.conv);
+    this.resume = null;
+    this.pendingTrade = null;
     this.playing?.stop();
     this.playing = null;
     this.player = null;
@@ -467,6 +479,12 @@ export class DialogueHost {
    * choice down by `playDt`, seconds of play time (stopped while the game is paused; dialogue.md).
    */
   update(dt: number, playDt = dt): void {
+    if (this.resume) {
+      if (this.hold?.()) return;
+      const r = this.resume;
+      this.resume = null;
+      r();
+    }
     if (this.timer) {
       this.timer.left -= playDt;
       this.timer.bar.style.width = `${Math.max(0, (100 * this.timer.left) / this.timer.total)}%`;

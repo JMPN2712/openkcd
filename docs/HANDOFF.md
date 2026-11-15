@@ -27,7 +27,12 @@ numbers.
 2. **Combat** from `notes/combat-melee.md`, `combat-damage.md`,
    `combat-ai.md`. Target: a fight with a bandit that feels like the
    original. **State (2026-11-15):** the rules run headless
-   (`combat.ts`, `test-combat.ts`). **Next:** the fight in the world view:
+   (`combat.ts`, `test-combat.ts`). A first fist fight in the world view
+   is on the unmerged branch `feat/combat-view` (debug "⚔ Fight" control,
+   `combatView.ts`, combat fragments by tag on Henry and the NPC,
+   `profile-browser.ts --fight=NPC`): it ran in headless Chrome but was
+   never looked at; rebase it on main (the toolbar changed in #49) and
+   check the animations before merging. **Next:** the fight in the world view:
    a target (lock on the NPC faced), input (attack light / heavy, zone
    from the mouse, block, perfect block, dodge), the attack rows'
    fragments (`CombatAttack` with the row's tags) on Henry and the NPC,
@@ -417,6 +422,27 @@ follows them):
   shops with a trade panel (the tailor's "Let's talk trade" opens it), the
   shop and calendar script functions, diet mode's shop grants.
   `test-shops.ts`; `test-quest-opening.ts` now buys the charcoal.
+- #49 (2026-11-15): a sweep after the user's bug report from play.
+  - A black box in the middle of the view: the empty benchmark report
+    (its `display: flex` beat `hidden`). Hidden panels now stay hidden.
+  - The controls are a bar over the top of the view (debug and benchmark
+    folded away), hidden while the pointer is captured; the readout is one
+    line along the bottom, a click opens it.
+  - The trade window frees the pointer when it opens, sits in the middle
+    with its Close button always in view, closes with Esc, E or
+    Backspace, and holds the conversation until it is closed.
+  - A conversation a tree asked for gets "(End dialog)" once its own
+    topic has played (ASSUMPTION in `dialogueFlow.ts`).
+  - Dialogue camera: a shot blocked by a wall is pulled in until it sees
+    its subject; a talk an NPC forces on Henry first brings him face to
+    face with the NPC (it started 10 m away through a wall).
+  - NPCs: doors open for them and shut behind them (`Doors.serveNpcs`);
+    steering can't carry them off the navmesh (through fences and walls);
+    with no path between two places they appear at the new one instead of
+    walking a straight line; someone standing in an area faces into it.
+  - **Not fixed, to look at next:** NPCs still pass through fences where
+    the navmesh itself does (not checked); facing while working at a
+    smart object was not examined; nothing was checked on the Vega 7.
 - #48 (2026-11-15): combat rules (`combat.ts`): attack and defence
   vectors, block outcomes, DmgR, stamina and health damage, the answer
   windows, the NPC's defence weights and attack delay, a `Fight` stepping

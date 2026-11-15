@@ -207,7 +207,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     void systemInfo(adapterInfo).then((lines) => { if (benchRun) benchRun.system = lines; });
     nextBenchPreset();
   });
-  clockBar.append(benchBtn);
+  // debug and measuring controls sit folded under the main ones
+  const debugFold = el("details");
+  const debugRow = el("div", "level-debug");
+  debugFold.append(el("summary", undefined, "Debug and benchmark"), debugRow);
+  debugRow.append(benchBtn);
   // debug: play a dialogue sequence by id with the NPCs around Henry (how conversations start
   // waits for a research note); 46319 is the tailor's gossip about the baths
   const dlgId = el("input", "level-dialogue-id");
@@ -222,13 +226,13 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const shotSel = el("select", "level-dialogue-shot");
   shotSel.title = "Dialogue camera shot (debug)";
   for (const s of ["auto", "off", ...SHOTS]) shotSel.append(new Option(s === "auto" ? "Camera: dialogue" : s === "off" ? "Camera: normal" : `Camera: ${s}`, s));
-  clockBar.append(dlgId, dlgBtn, shotSel);
+  debugRow.append(dlgId, dlgBtn, shotSel);
   // a new game: the quests' own trees start and the story begins in Skalitz (work in progress)
   const newGameBtn = el("button", undefined, "New game");
   newGameBtn.type = "button";
   newGameBtn.title = "Start the story: the quests' own trees run, the opening quest begins and Henry is taken to Skalitz (work in progress)";
   newGameBtn.addEventListener("click", () => { void startStory().catch((err) => { storyInfo = `New game: ${(err as Error).message}`; }); canvas.focus(); });
-  clockBar.append(newGameBtn);
+  clockBar.append(newGameBtn, debugFold);
   let cameraRig: Promise<DialogueCameraRig | null> | null = null;
   let rig: DialogueCameraRig | null = null;
   const loadRig = () => {
@@ -297,6 +301,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     canvas.focus();
   });
   canvas.addEventListener("keydown", (e) => { if (e.code === "Escape") setFull(false); });
+  // while the pointer is captured (playing) the controls are out of the way; Esc frees it and
+  // shows them. The readout is one line; a click opens all of it
+  const onPointerLock = () => stage.classList.toggle("playing", document.pointerLockElement === canvas);
+  document.addEventListener("pointerlockchange", onPointerLock);
+  hud.title = "Click to show or hide the full readout";
+  hud.addEventListener("click", () => hud.classList.toggle("open"));
   const ctx = canvas.getContext("webgpu")!;
   const format = navigator.gpu.getPreferredCanvasFormat();
   ctx.configure({ device, format, alphaMode: "opaque" });
@@ -557,7 +567,10 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const diet = await dialogue.dietMode();
     shops.grants = (shop) => diet.shopGrants(shop);
     trade = new TradePanel(shops, bag, itemDb, (k) => text.get(k));
+    // closing it gives the view back (the click or key that closed it may capture the pointer again)
+    trade.onClose = () => { canvas.focus(); if (mode === "player") void canvas.requestPointerLock?.(); };
     stage.append(trade.el);
+    dialogue.hold = () => !!trade?.isOpen;
     dialogue.onTrade = (npc) => { const shop = shopDb.shopOf(npc.soul); if (shop !== undefined) trade?.open(shop); };
     // scripts open and close shops, ask for a keeper's shop and open the trade screen with them
     lua.shops = shops.script((entity) => npcs.find((n) => n.entity.id === entity)?.soul, (shop) => trade?.open(shop));
@@ -863,6 +876,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
     if (last) fpsAvg += ((now - last) - fpsAvg) * 0.05;
     last = now;
+    // doors open for NPCs walking up to them and shut behind them
+    if (npcs.length) {
+      const walkers: [number, number, number][] = [];
+      for (const n of npcs) { const p = npcWorld.drawn(n.entity.id); if (p && p.pose === "walk") walkers.push(p.pos); }
+      doors.serveNpcs(walkers, player ? [player.controller.pos] : [], simSeconds);
+    }
     const doorsMoved = doors.step(dt);
     for (const id of doorsMoved) showDoor(id);
     for (const id of chests.step(dt)) showChest(id);
@@ -871,7 +890,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (dialogue.info) { dialogueInfo = dialogue.info; dialogue.info = ""; }
     if (mode === "player" && player) {
       // Henry stands still while he talks
-      player.update(dt, player.input(dialogue.talkingTo ? new Set<string>() : keys));
+      player.update(dt, player.input(dialogue.talkingTo || trade?.isOpen ? new Set<string>() : keys));
       if (stepAside) {
         // eased; collision still applies on his next update
         stepAside.t = Math.min(STEP_ASIDE, stepAside.t + dt);
@@ -917,6 +936,14 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       if (pose && !viewBeforeShot) { viewBeforeShot = player.viewMode; player.setView("third"); }
       if (!pose && viewBeforeShot) { player.setView(viewBeforeShot); viewBeforeShot = null; }
       if (pose) {
+        // a shot whose camera would stand behind a wall or inside a post is pulled in along its
+        // line of sight until it sees its subject (OURS: the game's shots avoid obstacles too, but
+        // how is not in the notes)
+        const blocked = surroundings.raycast?.(pose.target, pose.eye) ?? null;
+        if (blocked !== null) {
+          const k = Math.max(0.12, blocked - 0.08);
+          pose = { target: pose.target, eye: [pose.target[0] + (pose.eye[0] - pose.target[0]) * k, pose.target[1] + (pose.eye[1] - pose.target[1]) * k, pose.target[2] + (pose.eye[2] - pose.target[2]) * k] };
+        }
         const d = [pose.target[0] - pose.eye[0], pose.target[1] - pose.eye[1], pose.target[2] - pose.eye[2]];
         cam.pos = [...pose.eye];
         cam.yaw = Math.atan2(d[1], d[0]);
@@ -1003,7 +1030,37 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       if (asked && player && !dialogue.talkingTo) {
         const other = asked.initiator === -1 ? asked.souls.find((x) => x !== -1) : asked.initiator;
         const n = npcs.find((x) => x.entity.id === other);
-        if (n && Math.hypot(n.placement.pos[0] - player.controller.pos[0], n.placement.pos[1] - player.controller.pos[1]) < 12) {
+        const at = n ? (npcWorld.drawn(n.entity.id) ?? n.placement) : null;
+        // the two must stand face to face with nothing between them. OURS: the game's opening
+        // cutscene leaves Henry beside his mother; here a talk an NPC forces on the player from
+        // up to 15 m brings Henry to a free spot 1.3 m in front of the NPC, and others wait
+        // until he is within 2.5 m and in sight
+        let ready = false;
+        if (n && at && !worldLoading) {
+          const pc = player.controller;
+          const chest = (p: readonly number[]): [number, number, number] => [p[0], p[1], p[2] + 1.3];
+          const clear = (p: readonly number[]) => (surroundings.raycast?.(chest(at.pos), chest(p)) ?? null) === null;
+          const d = Math.hypot(at.pos[0] - pc.pos[0], at.pos[1] - pc.pos[1]);
+          if (d < 2.5 && Math.abs(at.pos[2] - pc.pos[2]) < 1 && clear(pc.pos)) ready = true;
+          else if (d < 15) {
+            const nav = schedules.navMesh;
+            const facing = 2 * Math.atan2(at.rot[3], at.rot[0]) + Math.PI / 2;
+            for (let k = 0; k < 12 && !ready; k++) {
+              // in front of the NPC first, then round it
+              const a = facing + (k % 2 ? -1 : 1) * Math.ceil(k / 2) * (Math.PI / 6);
+              const p: [number, number, number] = [at.pos[0] + Math.cos(a) * 1.3, at.pos[1] + Math.sin(a) * 1.3, at.pos[2]];
+              const floor = nav ? nav.onMesh(p, 0.1, 0.8)?.point?.[2] : p[2];
+              if (floor === undefined) continue;
+              p[2] = floor;
+              if (!clear(p)) continue;
+              pc.pos = [p[0], p[1], p[2] + 0.05];
+              pc.vel = [0, 0, 0];
+              pc.yaw = a + Math.PI;
+              ready = true;
+            }
+          }
+        }
+        if (n && ready) {
           storyInfo = `New game: ${n.entity.name} starts a conversation`;
           loadRig();
           void dialogue.talk({ soul: n.soul, name: n.entity.name, entity: n.entity.id }, asked).catch((err) => { storyInfo = `New game: ${(err as Error).message}`; });
@@ -1156,6 +1213,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     viewLua?.close();
     worldCaches.clear();
     gpuDevice.removeEventListener("uncapturederror", onGpuError);
+    document.removeEventListener("pointerlockchange", onPointerLock);
+    trade?.close();
     cancelAnimationFrame(raf);
     models.destroy();
     grassR.destroy();
