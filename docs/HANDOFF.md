@@ -26,7 +26,14 @@ numbers.
    plays through with diet mode on.
 2. **Combat** from `notes/combat-melee.md`, `combat-damage.md`,
    `combat-ai.md`. Target: a fight with a bandit that feels like the
-   original.
+   original. **State (2026-11-15):** the rules run headless
+   (`combat.ts`, `test-combat.ts`). **Next:** the fight in the world view:
+   a target (lock on the NPC faced), input (attack light / heavy, zone
+   from the mouse, block, perfect block, dodge), the attack rows'
+   fragments (`CombatAttack` with the row's tags) on Henry and the NPC,
+   hit reactions, health and stamina bars, death and knock-out; then
+   armour from clothing, combos, the clinch; then the fight trees
+   (`final/sb_combat.xml`) deciding who fights.
 3. **Streaming stalls** (the 1% lows), if still open.
 4. **Open dialogue bugs** (camera framing, Henry's shots, leaving
    conversations, facial animation).
@@ -212,6 +219,20 @@ follows them):
      count the player being at the place's entity. What is the real test
      (inside the area, a distance), and when is it checked?
   4. Assets given by item category, soul class or faction: what counts?
+- **Combat** (`combat.ts`; the three combat notes leave these open):
+  1. Maximum stamina: how `soul_archetype.base_stamina` (110) and
+     `relative_vitality_to_stamina` (100) combine with vitality.
+  2. The swing's energy x (relative stamina, or a charge?) and the hit's
+     "strength" factor.
+  3. What a full block costs the defender (the block's cost, or
+     cost(DmgR), which are the same number when DmgR = attack / block).
+  4. A master strike's counter: its attack value and whether it can be
+     answered.
+  5. How often the offence automation checks its attack chance.
+  6. Where NPCs' armour and weapons come from at spawn (so a bandit can
+     be built from the tables: `initial_weapon_preset_id`,
+     `initial_clothing_preset_id`), and body-part hit selection for free
+     swings.
 - **Shops** (economy.md leaves these open; `shops.ts` lists its guesses):
   1. `shop_type2item.default_on`: the collier's charcoal and every shop's
      money row are "off", yet both are there in the game. What does it
@@ -396,6 +417,11 @@ follows them):
   shops with a trade panel (the tailor's "Let's talk trade" opens it), the
   shop and calendar script functions, diet mode's shop grants.
   `test-shops.ts`; `test-quest-opening.ts` now buys the charcoal.
+- #48 (2026-11-15): combat rules (`combat.ts`): attack and defence
+  vectors, block outcomes, DmgR, stamina and health damage, the answer
+  windows, the NPC's defence weights and attack delay, a `Fight` stepping
+  two fighters. `test-combat.ts` (the notes' numbers; Henry against
+  Kunesh with fists; swords against a bandit). No animation or view yet.
 
 ## Findings not yet acted on
 

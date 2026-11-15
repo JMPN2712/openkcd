@@ -988,3 +988,56 @@ planned height, then 1 m up. The walk cycle advances with the distance each
 NPC actually walks (the clip's own speed, 1.40 m/s male and 1.29 m/s female,
 matches the walking speed, but NPCs catch up at up to 1.3× and slow down
 around others), so the feet don't slide.
+
+## Combat (`web/src/combat.ts`)
+
+From the research notes on melee combat, damage and the NPCs' combat
+choices. Rules only, no animation yet: a `Fight` advances two fighters
+through the attack rows' timings and reports attacks, hits, counters and
+who is out; `scripts/test-combat.ts` checks the formulas against the notes'
+worked numbers and runs fights from the game's tables.
+
+- **Data.** `CombatDb` reads the 113 regular attack rows on foot
+  (`combat_action_attack`: input, type, zone, the times to live, contact,
+  withdraw and end, the perfect-block, dodge and riposte windows), weapons
+  (`item/weapon`, `melee_weapon`), and souls as fighters (stats, the
+  fencing, defence and weapon-class skills, the archetype's unarmed base,
+  body armour and stamina).
+- **A swing.** Attack vector = weapon attack × weapon-health factor × stat
+  multiplier (0.5 … 1.1) × skill multiplier × the stab / slash / smash
+  modifier; unarmed = the archetype's base × the type's factor. It is
+  multiplied by the swing's energy, `1 − (1 − stamina)²`, floored at 0.5.
+  It costs `12 × type factor × stat factor` stamina.
+- **A hit**, per damage type: a full block when the attack is at most the
+  block defence (weapon defence × (1 + defence skill × 0.02857); unarmed 3)
+  and the stamina pays `8 ln(1 + 10 × attack / block)`; a partial block
+  (the block counts a third) with at least a third of that stamina; else a
+  broken block. `DmgR = attack / defence`, capped at 4, ×1.2 from behind.
+  Stamina damage `8 ln(1 + 10 DmgR)`; health damage is the stamina
+  overflow × (0.25 … 0.75) plus `1.6 DmgR³` when DmgR > 1, × the body
+  part's coefficient. Attacks that cannot kill (fists, kicks) knock out.
+- **Answers.** A perfect block and a dodge take no damage; a master strike
+  turns the block into a counter hit. Their windows before contact are the
+  row's window × 0.85 / 0.6 / 0.65 × (slot + (1 − slot) × 0.5), the slot
+  from the defence skill (or agility and load for the dodge).
+- **NPCs** answer an attack by five weights (perfect block, master strike,
+  dodge, block, nothing) and attack after a delay
+  `6 × (1 − aggression) × (1 − (1 − target stamina)² × fencing)` with the
+  note's normal-CDF chance.
+- **Stamina** regenerates at 22 a second (±15 % with vitality) after
+  1.5 s, ×0.6 while blocking or swinging.
+- **What the fights show** (200 seeded fights each, M3 Pro, no armour on
+  NPCs): Henry of the first day loses the fist fight with Kunesh when he
+  only punches (23 wins of 200, 41 s on average); two equal bandits with
+  short swords kill each other within seconds, since one unblocked slash
+  on an unarmoured body is DmgR 4. Feel against the original is unchecked.
+- **Not yet:** body parts and armour pieces, injuries and bleeding, wear,
+  combos, feints, the clinch, knock-out rolls, several attackers, perks
+  and buffs, the fight in the world view (targeting, input, animations).
+- **ASSUMPTIONs** (in the code; research questions in the handoff):
+  maximum stamina is the archetype's `base_stamina`; the energy's x is
+  relative stamina; a full block costs the block's own stamina cost; a
+  master strike's counter is an ordinary heavy swing of the defender; the
+  NPC's attack chance is per second; "low skill" for zone choice is
+  fencing under 10.
+
