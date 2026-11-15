@@ -210,6 +210,11 @@ export class NpcWorld {
   readonly running = new Map<number, string>();
   /** actual movement with collision avoidance, per NPC id (stepCrowd) */
   private movers = new Map<number, Mover>();
+  /**
+   * NPCs whose pose something else plays (a fight's attack, block and hit clips): the clip from
+   * `since` (play seconds), held on its last frame unless it loops; a null clip is the stand pose
+   */
+  readonly overrides = new Map<number, { clip: Clip | null; since: number; loop: boolean }>();
   /** NPCs held in place, facing a point (the one Henry talks to faces him) */
   readonly held = new Map<number, Vec3>();
   /** NPCs' planned spots moved off one another (key: planned spot), see stepCrowd */
@@ -688,7 +693,15 @@ export function animateNpcs(npcs: WorldNpc[], world: NpcWorld, minute: number, s
       const f = (world.ai.now - st.since) * c.fps;
       frame = c.start + (st.clip.loop ? f % Math.max(1, c.end - c.start) : Math.min(f, c.end - c.start));
     }
-    n.animator.evaluate(c, frame, p.pose === "walk");
+    const over = world.overrides.get(n.entity.id);
+    if (over) {
+      c = over.clip ?? n.clips.stand;
+      if (over.clip) {
+        const f = (seconds - over.since) * over.clip.fps, len = Math.max(1, over.clip.end - over.clip.start);
+        frame = over.clip.start + (over.loop ? f % len : Math.min(f, len));
+      }
+    }
+    n.animator.evaluate(c, frame, p.pose === "walk" || !!over);
     n.character.parts.forEach(({ model }, k) => {
       if (model.skeleton && r.paletteSize(n.items[k]) && !r.paletteShared?.(n.items[k])) r.setPalette(n.items[k], n.animator.palette(model.skeleton));
     });
