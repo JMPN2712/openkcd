@@ -16,7 +16,7 @@ import { parseTerrain, type Terrain } from "../src/terrain.ts";
 import { parseLevelObjects, type LevelObjects } from "../src/levelObjects.ts";
 import { parseCover, type Cover } from "../src/cover.ts";
 import { parseEntityIndex, propEntities, type EntityInfo } from "../src/levelEntities.ts";
-import { parseLayerNames, defaultHiddenLayers, layerProps } from "../src/levelLayers.ts";
+import { parseLayerNames, defaultHiddenLayers, layerProps, detailLayers, applyDetailLayers } from "../src/levelLayers.ts";
 import { setGpuBlockCompression } from "../src/model.ts";
 import { parseTimeOfDay, type TimeOfDay } from "../src/tod.ts";
 import { parseSurfaceTypes } from "../src/terrainDetail.ts";
@@ -87,7 +87,7 @@ export async function openRataje(root: string, opts: { cover?: boolean; hd?: boo
   const ld = await read("leveldata.xml");
   const ldText = ld ? new TextDecoder().decode(ld) : "";
   const layerNames = parseLayerNames(ldText);
-  const hiddenLayers = ld ? defaultHiddenLayers(layerNames) : new Set<number>();
+  const hiddenLayers = ld ? applyDetailLayers(defaultHiddenLayers(layerNames), detailLayers(ldText, objects, terrain.brushNames)) : new Set<number>();
   // as levelData.ts: the mission's entities plus the doors of the layers shown at game start
   const ents = mission ? parseEntityIndex(new TextDecoder().decode(mission)) : new Map<number, EntityInfo>();
   for (const d of await layerProps(entries, (e) => readEntry(lb, e), layerNames, hiddenLayers)) if (!ents.has(d.id)) ents.set(d.id, d);

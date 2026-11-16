@@ -430,6 +430,31 @@ follows them):
   shops with a trade panel (the tailor's "Let's talk trade" opens it), the
   shop and calendar script functions, diet mode's shop grants.
   `test-shops.ts`; `test-quest-opening.ts` now buys the charcoal.
+- #57 (2026-11-15): Kunesh can be talked to, NPCs don't walk through
+  walls, the burned Skalitz's debris gone.
+  - **Detail layers:** 44 layers with `Specs="1"` (PC-only detail, named
+    `pc`, `barracks_pc`, …) don't say whose detail they are. `detailLayers`
+    gives each the named layer whose brushes lie nearest most of its own
+    and shows it as that layer is; detail layers made mostly of burned
+    models stay hidden. The burned Skalitz's 1,247 debris and charred-beam
+    brushes were drawn in the intact village (also the burned Talmberk
+    fort's, Rovna's, Vranik's, the siege camps').
+  - **Talking to Kunesh:** the debt talk needs Henry in his yard
+    (`IsActorInside('q_skalitz_kunes_triggerArea2')`), which the dialogue
+    world always answered no. `DialogueView.actorInside` answers it from
+    the level's and the story layers' area shapes. `test-quest-opening`
+    plays the talk; `Conversation.explainStarts` lists every start branch
+    and why it is or isn't offered (debugging).
+  - **Walls:** a behaviour-tree move with no navmesh path walked straight
+    through walls. It now waits as long as the walk would take and then
+    jumps (`NpcAi.noPath` counts them).
+  - **Kunesh's look:** his preset is a sleeveless red jerkin
+    (`waffenrock_004_k`, alpha-cut sleeves and hood) with no shirt: bare
+    arms are the data, not a bug.
+  - **Merchants standing:** without call or bench points the shop's
+    `merchant` behaviour stands at its point and waits for customers
+    (`sa_shop2.xml`); standing still is the behaviour.
+  - Harness steps: `--then=npcs:NAME;NAME`, `shot:NAME`, `press:KeyE`.
 - #56 (2026-11-15): the opening quest's fight with Kunesh, a main menu,
   the loading screen waits for everything, no charred Skalitz.
   - **Kunesh fight:** when `kunesIsUpset` starts, the quest's tree sends

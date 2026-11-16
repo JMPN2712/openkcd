@@ -297,6 +297,30 @@ export class Conversation {
     return l;
   }
 
+  /**
+   * For debugging: the start branches whose roles fit these participants (loosely), each with why
+   * it does or doesn't offer something (no fitting sequence, unavailable, its entry condition).
+   */
+  explainStarts(): string[] {
+    const out: string[] = [];
+    const now = this.host.now();
+    for (const b of this.db.branches) {
+      if (b.test || !SOMETHING.has(b.type) || !this.matchRoles(b.startTopic, false)) continue;
+      const strict = this.matchRoles(b.startTopic, true) ? "" : " (roles fit loosely only)";
+      const seqs = this.db.topicSequences(b.startTopic).map((e) => {
+        const q = this.db.sequence(e.sequence);
+        if (!q) return `seq ${e.sequence}: missing`;
+        if (!this.state.available(q, now)) return `seq ${q.id}: not available`;
+        if (!e.entryCondition.trim()) return `seq ${q.id}: no entry condition`;
+        let holds = false, why = "";
+        try { holds = this.holds(e.entryCondition, true); } catch (err) { why = ` (${(err as Error).message})`; }
+        return `seq ${q.id}: ${holds ? "yes" : "no"} [${e.entryCondition.replace(/\s+/g, " ").trim().slice(0, 400)}]${why}`;
+      });
+      out.push(`branch type ${b.type} topic ${b.startTopic}${strict}: ${seqs.join("; ") || "no sequences"}`);
+    }
+    return out;
+  }
+
   /** Whether the NPC has something to say (types 0, 1, 5; refusals not counted). */
   hasSomethingToSay(): boolean {
     return this.collectStarts(SOMETHING).length > 0;

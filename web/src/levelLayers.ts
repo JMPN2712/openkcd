@@ -48,6 +48,60 @@ export function defaultHiddenLayers(names: Map<number, string>): Set<number> {
 }
 
 /**
+ * Detail layers: leveldata.xml lists 44 layers with Specs="1" (PC-only detail, named "pc",
+ * "barracks_pc", "stable_lightshafts", …) without saying whose detail they are. Each belongs to
+ * one place's layer: found here as the named layer whose brushes lie nearest to most of its
+ * brushes (within 6 m). Rataje: the burned Skalitz's debris and charred beams (1,247 brushes)
+ * are sv_state1's detail; the burned Talmberk fort's, Rovna's and Vranik's likewise.
+ * Returns detail layer → its parent layer, and the detail layers made mostly of burned models.
+ */
+export function detailLayers(levelDataXml: string, objects: { brushName: Uint32Array; brushLayer: Uint32Array; brushMatrix: Float32Array }, brushNames: string[]): { parent: Map<number, number>; burned: Set<number> } {
+  const detail = new Set<number>();
+  for (const m of levelDataXml.matchAll(/<Layer\s[^>]*?\sId="(\d+)"[^>]*?\sSpecs="1"/g)) detail.add(Number(m[1]));
+  const parent = new Map<number, number>(), burned = new Set<number>();
+  if (!detail.size) return { parent, burned };
+  // the named layers' brushes on a 6 m grid
+  const CELL = 6, grid = new Map<string, number[]>();
+  const n = objects.brushLayer.length, M = objects.brushMatrix;
+  for (let i = 0; i < n; i++) {
+    const l = objects.brushLayer[i];
+    if (!l || detail.has(l)) continue;
+    const k = `${Math.floor(M[i * 16 + 12] / CELL)},${Math.floor(M[i * 16 + 13] / CELL)}`;
+    (grid.get(k) ?? grid.set(k, []).get(k)!).push(i);
+  }
+  const votes = new Map<number, Map<number, number>>(), counts = new Map<number, [number, number]>();
+  for (let i = 0; i < n; i++) {
+    const l = objects.brushLayer[i];
+    if (!detail.has(l)) continue;
+    const c = counts.get(l) ?? [0, 0];
+    c[0]++;
+    if (/burn|charred/i.test(brushNames[objects.brushName[i]] ?? "")) c[1]++;
+    counts.set(l, c);
+    const x = M[i * 16 + 12], y = M[i * 16 + 13], gx = Math.floor(x / CELL), gy = Math.floor(y / CELL);
+    let best = 0, bd = CELL;
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (const j of grid.get(`${gx + dx},${gy + dy}`) ?? []) {
+      const d = Math.hypot(M[j * 16 + 12] - x, M[j * 16 + 13] - y);
+      if (d < bd) { bd = d; best = objects.brushLayer[j]; }
+    }
+    if (!best) continue;
+    const v = votes.get(l) ?? new Map<number, number>();
+    v.set(best, (v.get(best) ?? 0) + 1);
+    votes.set(l, v);
+  }
+  for (const [l, v] of votes) parent.set(l, [...v].sort((a, b) => b[1] - a[1])[0][0]);
+  for (const [l, [all, burnt]] of counts) if (burnt > all * 0.25) burned.add(l);
+  return { parent, burned };
+}
+
+/** Detail layers (detailLayers) shown as their parent is; those made mostly of burned models hidden. */
+export function applyDetailLayers(hidden: Set<number>, detail: { parent: Map<number, number>; burned: Set<number> }): Set<number> {
+  const out = new Set(hidden);
+  for (const [l, p] of detail.parent) if (out.has(p)) out.add(l); else out.delete(l);
+  for (const l of detail.burned) out.add(l);
+  return out;
+}
+
+/**
  * Doors and props (levelEntities.ts propEntities) in the layer files (layers/<name>{guid}.xml) of
  * layers shown at game start. The mission file holds 866 of Rataje's doors; 160 more live in 46
  * layer files, among them Skalitz's around Henry's home (sv_state0_prefabs) and Rattay castle's

@@ -447,6 +447,12 @@ Decoded by `web/src/navmesh.ts` and `tools/navmesh.py`.
   items on them). Without them its houses looked looted. The world build
   skips props and decals of hidden layers. Layered NPCs come with the quest
   profiles (`profiles.ts`).
+- **Detail layers.** 44 layers have `Specs="1"` (PC-only detail: `pc`,
+  `barracks_pc`, `stable_lightshafts`, …); `leveldata.xml` doesn't name
+  their parents. Each is placed with the named layer whose brushes lie
+  nearest to most of its brushes (`detailLayers` in `levelLayers.ts`):
+  layer 1928 (1,247 brushes: debris, burned castle pieces) is the burned
+  Skalitz's (`sv_state1`).
 - **Decals** carry the layer id at +28 as brushes do. 588 belong to the
   burned Skalitz (`sv_state1`), 163 to its dead (`q_returntoskalitz_deadbodies`).
 - **States coexist in the file:**

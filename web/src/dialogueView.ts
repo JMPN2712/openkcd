@@ -66,6 +66,8 @@ export class DialogueHost {
   lua: LuaHost | null = null;
   /** play time in seconds (1× real time, stopped while paused: sequence cooldowns), and the hour of day */
   clock: () => { seconds: number; hour: number } = () => ({ seconds: 0, hour: 12 });
+  /** whether an entity (HENRY_ENTITY: Henry) stands inside the named area (IsActorInside); unset: never */
+  actorInside: ((area: string, entity: number) => boolean | undefined) | null = null;
   /** what happened, for the HUD */
   info = "";
   private state = new DialogueState();
@@ -175,10 +177,20 @@ export class DialogueHost {
   }
 
   private flowHost(l: Loaded): FlowHost {
+    const base = neutralWorld(() => this.clock().hour, l.quests);
     const entityOf = (name: string) => (name === HENRY_SOUL ? HENRY_ENTITY : name === this.with?.name ? this.with.entity : undefined);
     return {
       now: () => this.clock().seconds,
-      call: neutralWorld(() => this.clock().hour, l.quests),
+      call: (name, args, who, named) => {
+        // IsActorInside('area')[n]: the participant n stands inside the area entity of that name
+        // (Kunesh's yard for the debt talk: IsActorInside('q_skalitz_kunes_triggerArea2')[1])
+        if (name === "IsActorInside" && this.actorInside && who) {
+          const entity = who.player ? HENRY_ENTITY : who.name === this.with?.name ? this.with.entity : undefined;
+          const v = entity === undefined ? undefined : this.actorInside(String(args[0] ?? ""), entity);
+          if (v !== undefined) return v ? 1 : 0;
+        }
+        return base(name, args, who, named);
+      },
       hidden: (seq, topic) => l.diet.hidesSequence(seq, topic),
       played: (seq, holds) => {
         l.quests.runSequence(seq, holds);

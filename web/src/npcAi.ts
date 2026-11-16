@@ -30,6 +30,8 @@ export interface AiState {
   route?: { pts: Vec3[]; cum: number[] };
   duration?: number;
   endRot?: Quat;
+  /** a move without a navmesh path: the NPC waits, then is at `to` (no walk through walls) */
+  jump?: { at: number; to: Vec3 };
 }
 
 interface Driven {
@@ -68,6 +70,8 @@ export class NpcAi {
   now = 0;
   /** level navmesh: moves longer than 1.5 m follow it (else straight lines) */
   nav: NavMesh | null = null;
+  /** moves that found no navmesh path (they jump instead of walking through walls) */
+  noPath = 0;
   private pending = new Set<Promise<unknown>>();
   /** smart-area brains running (AiWorld.startAreaBrain), with their next tick and who is inside */
   private brains = new Map<number, { task: Task; due: number; done: boolean; inside: Set<number> }>();
@@ -83,6 +87,7 @@ export class NpcAi {
     const d = this.driven.get(a.npc);
     if (!d) return 1;
     const st = d.state;
+    st.jump = undefined;
     if (a.kind === "teleport" && typeof a.target !== "string") {
       Object.assign(st, { mode: "idle", pos: [...a.target], route: undefined, clip: null, fragment: "", since: this.now });
       return 0;
@@ -97,7 +102,16 @@ export class NpcAi {
       const to = a.target;
       const straight = Math.hypot(to[0] - st.pos[0], to[1] - st.pos[1]);
       // around counters, walls and furniture: the navmesh path, bridged to the exact ends
-      const path = straight > 1.5 ? this.nav?.findPath(st.pos, to, 20000) : null;
+      const path = straight > 1.5 ? this.nav?.findPath(st.pos, to, straight > 60 ? 60000 : 20000) : null;
+      // no path on the navmesh: never a straight line through walls and fences (it walked NPCs
+      // through houses). The NPC stays where it is for as long as the walk would take, then is
+      // at the target (a rare jump instead of a walk through a wall)
+      if (straight > 1.5 && this.nav && !path) {
+        const duration = straight / WALK_SPEED;
+        this.noPath++;
+        Object.assign(st, { mode: "idle", route: undefined, since: this.now, duration, endRot: a.rot, clip: null, fragment: "", jump: { at: this.now + duration, to: [...to] as Vec3 } });
+        return duration;
+      }
       const pts: Vec3[] = path ? [[...st.pos] as Vec3, ...path, [...to] as Vec3] : [[...st.pos] as Vec3, [...to] as Vec3];
       const cum = [0];
       for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
@@ -254,6 +268,7 @@ export class NpcAi {
       // paused: the clock moves on around it (walks, clips and a wind-down deadline hold)
       if (this.paused.has(id)) { d.due = this.now + TICK; d.state.since += dt; if (d.deadline !== undefined) d.deadline += dt; continue; }
       const st = d.state;
+      if (st.jump && this.now >= st.jump.at) { st.pos = [...st.jump.to]; if (st.endRot) st.rot = [...st.endRot]; st.jump = undefined; }
       if (st.mode === "walk" && st.route && st.duration !== undefined) {
         const { pts, cum } = st.route;
         const total = cum[cum.length - 1];

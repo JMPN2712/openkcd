@@ -21,7 +21,7 @@ import { Calendar } from "./calendar.ts";
 import { CombatDb } from "./combat.ts";
 import { FightBars, FightView, REACH } from "./combatView.ts";
 import type { LayerContents } from "./profiles.ts";
-import { storyHiddenLayers } from "./levelLayers.ts";
+import { storyHiddenLayers, applyDetailLayers } from "./levelLayers.ts";
 import { MergedMeshes } from "./mergedMeshes.ts";
 import { Roads } from "./roads.ts";
 import { Decals } from "./decals.ts";
@@ -33,7 +33,7 @@ import { WaterRenderer } from "./waterRenderer.ts";
 import { buildGrassScene, buildWorldScene, isUberLod, lodItems, newWorldCaches, sceneMatrices, selectLods, trimWorldCaches, type WorldScene } from "./world.ts";
 import { Vfs } from "./vfs.ts";
 import type { EntityInfo, NpcEntity } from "./levelEntities.ts";
-import { Schedules } from "./schedule.ts";
+import { Schedules, areaHolds } from "./schedule.ts";
 import { NpcWorld, npcItems, animateNpcs, updateAi, type WorldNpc } from "./npcs.ts";
 import { createAiWorld } from "./btWorld.ts";
 import { cycleData } from "./daycycle.ts";
@@ -116,6 +116,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let readLayerFiles: () => Promise<LayerContents>;
   let hiddenLayers: Set<number>;
   let layerNames: Map<number, string>;
+  let detailLayerInfo: { parent: Map<number, number>; burned: Set<number> };
   let tod: TimeOfDay | null;
   let surfaceTypes: Map<number, string>;
   let merged: MergedMeshes;
@@ -126,7 +127,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let device: GPUDevice;
   let adapterInfo: GPUAdapterInfo | null = null;
   try {
-    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, layerNames, tod, surfaceTypes, merged, roads, decals, occluders, layers: readLayerFiles } = await levelData(paks, level, (m) => { status.textContent = m; }));
+    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, layerNames, detailLayers: detailLayerInfo, tod, surfaceTypes, merged, roads, decals, occluders, layers: readLayerFiles } = await levelData(paks, level, (m) => { status.textContent = m; }));
     vfs = await levelVfs(paks, level, (m) => { status.textContent = m; });
     if (!navigator.gpu) throw new Error("WebGPU is not available in this browser (chrome://flags/#enable-unsafe-webgpu).");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
@@ -509,6 +510,23 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   // dialogue cooldowns run on the play clock, not world time (dialogue.md: timeout 300 is about
   // 5 real minutes); simSeconds is that clock: real time at game speed, stopped while paused
   dialogue.clock = () => ({ seconds: simSeconds, hour: minute / 60 });
+  // IsActorInside in dialogue conditions: area entities by name (the mission's, and a story's
+  // layers' once read: Kunesh's yard is in q_skalitz_questItems)
+  const areasByName = new Map<string, EntityInfo>();
+  let areasFrom: unknown = null;
+  dialogue.actorInside = (name, entity) => {
+    const layerEnts = story?.layers.entities ?? null;
+    if (areasFrom !== layerEnts || !areasByName.size) {
+      areasByName.clear();
+      for (const e of [...ents.values(), ...(layerEnts ?? [])]) if (e.points) areasByName.set(e.name.toLowerCase(), e);
+      areasFrom = layerEnts;
+    }
+    const area = areasByName.get(name.toLowerCase());
+    if (!area) return undefined;
+    const n = entity === -1 ? null : npcs.find((x) => x.entity.id === entity);
+    const pos = entity === -1 ? player?.controller.pos : n ? (npcWorld.drawn(n.entity.id) ?? n.placement).pos : undefined;
+    return pos ? areaHolds(area, [pos[0], pos[1], pos[2]]) : undefined;
+  };
   let sleeping = false;
   const sleepIn = (bed: Bed) => {
     if (!player || sleeping) return;
@@ -675,7 +693,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     profilesChanged = false;
     // the scene shows what the quests' profiles switch on (looted houses, the dead, a burned
     // village only once their quest says so): rebuilt around Henry when that changes
-    const next = storyHiddenLayers(layerNames, baseHiddenLayers, story.layers.profiles, w.profiles);
+    const next = applyDetailLayers(storyHiddenLayers(layerNames, baseHiddenLayers, story.layers.profiles, w.profiles), detailLayerInfo);
     if (next.size !== hiddenLayers.size || [...next].some((id) => !hiddenLayers.has(id))) {
       hiddenLayers = next;
       streamedAt = null;

@@ -532,7 +532,19 @@ for (const stepArg of arg("then", "").split(",").filter(Boolean)) {
   const [kind, ...rest] = stepArg.split(":");
   const r = kind === "goto" ? await evaluate<string>(`globalThis.__openkcdGoto?.(${JSON.stringify(rest[0])}) ?? "no hook"`)
     : kind === "quest" ? await evaluate<boolean>(`globalThis.__openkcdQuest?.(${JSON.stringify(rest[0])}, ${JSON.stringify(rest[1])}, ${JSON.stringify(rest[2])}) ?? false`)
-    : kind === "wait" ? (await sleep(Number(rest[0]) * 1000), "waited") : "unknown step";
+    : kind === "wait" ? (await sleep(Number(rest[0]) * 1000), "waited")
+    // npcs:NAME[;NAME]: where those NPCs are and what their trees do ("*": every shown NPC)
+    : kind === "npcs" ? await evaluate<string>(`globalThis.__openkcdNpcs?.(${JSON.stringify(rest.join(":").split(";"))}) ?? "no hook"`)
+    // shot:NAME: a screenshot to PREFIX-NAME.png (--screenshot=PREFIX; never commit: game content)
+    : kind === "shot" ? (await writeFile(`${arg("screenshot", "shot")}-${rest[0]}.png`, Buffer.from((await page("Page.captureScreenshot", { format: "png" })).data, "base64")), "saved")
+    // press:KEY: a key press on the canvas (e.g. press:KeyE), then the status and subtitle lines
+    : kind === "press" ? await (async () => {
+      await evaluate(`document.querySelector(".level-canvas").focus()`);
+      const key = rest[0].replace(/^Key/, "").toLowerCase();
+      for (const type of ["keyDown", "keyUp"] as const) { await page("Input.dispatchKeyEvent", { type, code: rest[0], key, windowsVirtualKeyCode: key.toUpperCase().charCodeAt(0) }); await sleep(120); }
+      await sleep(1500);
+      return evaluate<string>(`[document.querySelector(".level-status")?.textContent ?? "", document.querySelector(".level-subtitle")?.textContent ?? ""].join(" / ")`);
+    })() : "unknown step";
   console.log(`  then ${stepArg}: ${r}`);
 }
 const fightWatch = Number(arg("fight-watch", "0"));

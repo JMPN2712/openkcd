@@ -16,7 +16,7 @@ import { parseNpcEntities, parseEntityIndex, propEntities, type EntityInfo, type
 import { Schedules } from "./schedule.ts";
 import { NavMesh } from "./navmesh.ts";
 import { readLayers, type LayerContents } from "./profiles.ts";
-import { parseLayerNames, defaultHiddenLayers, layerProps } from "./levelLayers.ts";
+import { parseLayerNames, defaultHiddenLayers, layerProps, detailLayers, applyDetailLayers } from "./levelLayers.ts";
 import { ASSET_RE } from "./assets.ts";
 import { parseTimeOfDay, type TimeOfDay } from "./tod.ts";
 import { parseSurfaceTypes } from "./terrainDetail.ts";
@@ -27,6 +27,8 @@ export interface LevelData {
   objects: LevelObjects;
   cover?: Cover;
   npcEntities: NpcEntity[];
+  /** PC detail layers: their parent layers, and those made mostly of burned models (levelLayers.ts) */
+  detailLayers: { parent: Map<number, number>; burned: Set<number> };
   /** editor layers by id (leveldata.xml names, without their guid) */
   layerNames: Map<number, string>;
   /** the layer files' entities and the level's profiles (profiles.ts), read on first use */
@@ -86,7 +88,9 @@ export function levelData(paks: PakSource[], level: string, status: (s: string) 
       const ld = entries.find((e) => e.name.toLowerCase() === "leveldata.xml");
       const ldText = ld ? new TextDecoder().decode(await readEntry(blob, ld, undefined, false)) : "";
       const layerNames = parseLayerNames(ldText);
-      const hiddenLayers = ld ? defaultHiddenLayers(layerNames) : new Set<number>();
+      // PC detail layers follow the place they detail (the burned Skalitz's debris with sv_state1)
+      const detail = detailLayers(ldText, objects, terrain.brushNames);
+      const hiddenLayers = ld ? applyDetailLayers(defaultHiddenLayers(layerNames), detail) : new Set<number>();
       const surfaceTypes = parseSurfaceTypes(ldText);
       const npcEntities = parseNpcEntities(xml);
       const ents = parseEntityIndex(xml);
@@ -122,7 +126,7 @@ export function levelData(paks: PakSource[], level: string, status: (s: string) 
       // the editor layers' entities and the level's profiles, read when a new game asks for them
       let layers: Promise<LayerContents> | null = null;
       const readLayerFiles = () => (layers ??= readLayers(entries, (e) => readEntry(blob, e, undefined, false)));
-      return { layerNames, layers: readLayerFiles, occluders, terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(blob, entries), roads: new Roads(blob, dataStart(blob, entry), objects.roads), decals: new Decals(objects.decalIndex, terrain) };
+      return { layerNames, detailLayers: detail, layers: readLayerFiles, occluders, terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(blob, entries), roads: new Roads(blob, dataStart(blob, entry), objects.roads), decals: new Decals(objects.decalIndex, terrain) };
     })();
     p.catch(() => dataCache.delete(pakPath));
     dataCache.set(pakPath, p);

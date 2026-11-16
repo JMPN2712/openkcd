@@ -22,7 +22,8 @@ import { DIET } from "../src/dietConfig.ts";
 import { QuestBrains } from "../src/questTrees.ts";
 import { layerEntities, parseProfiles } from "../src/profiles.ts";
 import { DialogRequests } from "../src/dialogRequests.ts";
-import { Conversation, DialogueState, luaScripts, neutralWorld, participant, type Step } from "../src/dialogueFlow.ts";
+import { Conversation, DialogueState, luaScripts, neutralWorld, participant, type Step, type Participant } from "../src/dialogueFlow.ts";
+import type { CondValue } from "../src/dialogueCondition.ts";
 import { readTable } from "../src/tables.ts";
 import { Inventory, ItemDb } from "../src/inventory.ts";
 import { ShopDb, Shops } from "../src/shops.ts";
@@ -197,10 +198,10 @@ const entityOf = (name: string) => (name === "dude" ? -1 : [...ents.values()].fi
 const dstate = new DialogueState();
 const flowHost = { now: () => clock.real, call: neutralWorld(() => 8, quests), runScript: luaScripts(lua, entityOf), played: (seq: number, holds: (c: string) => boolean) => quests.runSequence(seq, holds), report: (w: string) => { if (debug) console.log(`  dialogue: ${w}`); } };
 /** Play a conversation through the flow, Henry taking `pick`'s option at each menu; time passes while lines play. */
-function play(names: string[], o: { topic?: number; greeting?: boolean; farewell?: boolean } = {}, pick: (labels: string[]) => number = () => 0): string[] {
+function play(names: string[], o: { topic?: number; greeting?: boolean; farewell?: boolean } = {}, pick: (labels: string[]) => number = () => 0, host: typeof flowHost = flowHost): string[] {
   // Henry first, as in a conversation the player starts
   names.sort((a, b) => Number(b === "dude") - Number(a === "dude"));
-  const conv = new Conversation(ddb, dstate, names.map((n) => participant(ddb, soulOf(n), n === "dude", lua.metaroleChanges(entityOf(n)!))), flowHost, o);
+  const conv = new Conversation(ddb, dstate, names.map((n) => participant(ddb, soulOf(n), n === "dude", lua.metaroleChanges(entityOf(n)!))), host, o);
   const log: string[] = [];
   let s: Step = conv.start();
   for (let guard = 0; guard < 80; guard++) {
@@ -266,6 +267,23 @@ if (asked) {
 check(Math.abs(calendar.hourOfDay - 10) < 1e-6 && calendar.paused, `the opening cutscene's script sets the clock to 10:00 and holds world time (${calendar.hourOfDay.toFixed(2)} h, paused ${calendar.paused})`);
 // (the quest trees' time per tick: run() only, not the talks' and the fight's steps)
 const ms = tickMs / ticks;
+// Henry can talk to Kunesh while the father's errand (the debt) runs
+{
+  const objectives = ["getDebtMoney", "kunesIsUpset"].map((o) => `${o} ${quests.call("IsObjectiveStarted", ["q_skalitz", o]) === 1 ? "active" : "not active"}`).join(", ");
+  // (the debt talk asks for Henry in Kunesh's yard, IsActorInside('q_skalitz_kunes_triggerArea2'))
+  const inYard = (yes: boolean) => ({ ...flowHost, call: (name: string, args: CondValue[], who: Participant | null, named?: string) => name === "IsActorInside" ? (yes ? 1 : 0) : flowHost.call(name, args, who, named) });
+  const talk = (yes: boolean) => new Conversation(ddb, dstate, ["dude", "ska_kunes"].map((n) => participant(ddb, soulOf(n), n === "dude", lua.metaroleChanges(entityOf(n)!))), inYard(yes), {});
+  check(!talk(false).hasSomethingToSay(), "away from Kunesh's yard he has nothing to say");
+  const conv = talk(true);
+  const says = conv.hasSomethingToSay();
+  check(says, `in his yard Kunesh has the debt to talk about (${objectives})`);
+  if (!says) console.log(`  ${conv.explainStarts().join("\n  ")}`);
+  const before = events.length;
+  const log = play(["dude", "ska_kunes"], {}, () => 0, inYard(true));
+  if (debug) console.log(`  ${log.join("\n  ")}`);
+  step(2);
+  console.log(`  after the debt talk: ${events.slice(before).join("; ") || "no quest events"}`);
+}
 // the fist fight with Kunesh: when kunesIsUpset starts, the quest's tree asks Kunesh for his
 // custom behaviour kunes_battle_fight against the player; its fight step runs the combat rules,
 // and the quest hears who won (his health below 50 or knocked out: kunesIsBeaten)
