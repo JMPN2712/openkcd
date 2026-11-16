@@ -31,7 +31,20 @@ export class Scope {
     return this.owner(name)?.vars.get(name);
   }
   set(name: string, v: Value): void {
-    (this.owner(name) ?? this).vars.set(name, v);
+    const s = this.owner(name) ?? this;
+    // a number written to an _int variable is a whole number (the engine's variables are typed:
+    // randRange into an _int index gave 2.37, and $houseworks[2.37] was nothing)
+    if (typeof v === "number" && Number.isFinite(v) && s.declaredType(name) === "_int") v = Math.trunc(v);
+    s.vars.set(name, v);
+  }
+  /** The declared type of a variable of this scope, if it declares it. */
+  declaredType(name: string): string | undefined {
+    return this.decls.get(name)?.type;
+  }
+  /** The declared type of a visible variable (the scope that holds it, else any that declares it). */
+  typeOf(name: string): string | undefined {
+    for (let s: Scope | null = this; s; s = s.parent) { const d = s.decls.get(name); if (d) return d.type; }
+    return undefined;
   }
   declare(v: BtVariable): void {
     this.decls.set(v.name, v);
@@ -220,7 +233,8 @@ export function evaluate(e: Expr, scope: Scope, host: Host): Value | undefined {
     case "index": {
       const o = evaluate(e.of, scope, host), at = evaluate(e.at, scope, host);
       if (o === null || o === undefined || typeof o !== "object") return undefined;
-      return Array.isArray(o) ? o[num(at)] : (o as Record<string, Value>)[String(at)];
+      // (an array index is a whole number in the engine: a fraction is cut)
+      return Array.isArray(o) ? o[Math.trunc(num(at))] : (o as Record<string, Value>)[String(at)];
     }
     case "call": {
       const name = e.fn.k === "name" ? e.fn.v : e.fn.k === "var" ? e.fn.path.join(".") : "?";
@@ -759,7 +773,13 @@ export class Runner {
         return leaf(() => {
           // In*VariableName: a variable name or a literal number
           const arg = (k: string): Value => { const t = n.props[k] ?? ""; if (t === "") return null; const x = Number(t); return Number.isFinite(x) ? x : (scope.get(t) ?? lookupPathValue(scope, t)); };
-          const out = numericalOperation(n.props.Operation ?? "", arg("In1VariableName"), arg("In2VariableName"), arg("In3VariableName"), () => this.host.random(), (id) => this.host.position?.(id) ?? null);
+          let out = numericalOperation(n.props.Operation ?? "", arg("In1VariableName"), arg("In2VariableName"), arg("In3VariableName"), () => this.host.random(), (id) => this.host.position?.(id) ?? null);
+          // randRange into an _int: a whole number from In1 to In2, both included (ASSUMPTION: the
+          // trees use it to pick an array index from 0 to size − 1)
+          if (n.props.Operation === "randRange" && n.props.OutVariableName && scope.typeOf(n.props.OutVariableName) === "_int") {
+            const lo = Math.ceil(Number(arg("In1VariableName")) || 0), hi = Math.floor(Number(arg("In2VariableName")) || 0);
+            out = hi < lo ? lo : lo + Math.min(hi - lo, Math.floor(this.host.random() * (hi - lo + 1)));
+          }
           if (out === undefined) { this.report(`NumericalOperation ${n.props.Operation}`); return "failure"; }
           if (n.props.OutVariableName) scope.set(n.props.OutVariableName, out);
           return "success";

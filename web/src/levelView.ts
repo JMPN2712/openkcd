@@ -12,7 +12,7 @@ import type { Cover } from "./cover.ts";
 import type { QuestSystem } from "./quests.ts";
 import { QuestBrains } from "./questTrees.ts";
 import { scenePlace, type ScenePlace } from "./sceneCameras.ts";
-import { GameMenu, applyGameUi, loadGameUi, lockPointer } from "./gameUi.ts";
+import { GameMenu, LoadingScreen, applyGameUi, loadGameUi, lockPointer } from "./gameUi.ts";
 import { Inventory, ItemDb } from "./inventory.ts";
 import { ShopDb, Shops } from "./shops.ts";
 import { attachInventory } from "./playerState.ts";
@@ -253,7 +253,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const newGameBtn = el("button", undefined, "New game");
   newGameBtn.type = "button";
   newGameBtn.title = "Start the story: the quests' own trees run, the opening quest begins and Henry is taken to Skalitz (work in progress)";
-  newGameBtn.addEventListener("click", () => { void startStory().catch((err) => { storyInfo = `New game: ${(err as Error).message}`; }); canvas.focus(); });
+  newGameBtn.addEventListener("click", () => { void startStory().catch((err) => { storyLoading = false; storyInfo = `New game failed: ${(err as Error).message}`; }); canvas.focus(); });
   // (New Game is in the menu's main page; the button stays for scripts and tests)
   newGameBtn.hidden = true;
   clockBar.append(newGameBtn);
@@ -331,6 +331,13 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   // ---- the in-game menu (gameUi.ts): Esc opens it, as in the game, and the game waits ----
   const menu = new GameMenu();
   stage.append(menu.el);
+  // the loading screen: the world's first load, and a new game until Henry is in his place
+  const loading = new LoadingScreen(vfs);
+  stage.append(loading.el);
+  loading.show("Loading the world…");
+  /** a new game is being set up (the layers, the move, the scene around Henry) */
+  let storyLoading = false;
+  let storyReadyAt = 0;
   void loadGameUi(vfs, paks).then((a) => { applyGameUi(stage, a); buildMenu(a.text); }).catch(() => buildMenu((_k, f) => f));
   /** the simulation's speed: the clock's setting, 0 while the menu is open */
   const gameSpeed = () => (menu.isOpen ? 0 : Number(speedSel.value));
@@ -536,6 +543,14 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     mode = "player";
     playerInfo = "";
   }).catch((err) => { playerInfo = `Henry: ${(err as Error).message}`; });
+  // debugging: where named NPCs are and what they do (the browser harness reads it)
+  (globalThis as { __openkcdNpcs?: (names: string[]) => string }).__openkcdNpcs = (names) => names.map((name) => {
+    const n = npcs.find((x) => x.entity.name === name);
+    if (!n) return `${name}: not shown`;
+    const p = npcWorld.drawn(n.entity.id) ?? n.placement;
+    const st = npcAi?.state(n.entity.id);
+    return `${name}: ${p.pos.map((v) => v.toFixed(1)).join(",")} ${p.pose} ${p.where}${st ? ` tree ${st.mode}${st.fragment ? ` ${st.fragment}` : ""}` : " (no tree)"}${npcWorld.running.get(n.entity.id) ? ` [${npcWorld.running.get(n.entity.id)}]` : ""}${npcWorld.pinned.has(n.entity.id) ? " pinned" : ""}`;
+  }).join(" | ");
   const npcWorld = new NpcWorld(vfs, npcEntities, schedules, (x, y) => heightAt(terrain, x, y));
   dlgBtn.addEventListener("click", () => {
     // the cast: NPCs within 30 m of Henry (or the camera), nearest first
@@ -653,6 +668,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const w = npcAi?.world, quests = viewQuests;
     if (story || !w || !quests) { storyInfo = story ? "New game: already started" : "New game: the behaviour trees are still loading"; return; }
     storyInfo = "New game: reading the editor layers…";
+    storyLoading = true;
+    storyReadyAt = 0;
     const layers = await readLayerFiles();
     if (stopped || story) return;
     w.addEntities(layers.entities);
@@ -703,7 +720,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     // objective timers run on the calendar's clocks: play time, and world time at 15× (quests.ts)
     quests.world.clock = (which) => simSeconds * 1000 * (which === "world" ? 15 : 1);
     viewQuests = quests;
+    // ?trace=NAME,…: the behaviour-tree trace of those entities in the console (debugging)
+    const traceNames = new URLSearchParams(location.search).get("trace")?.split(",").filter(Boolean) ?? [];
+    const traceIds = () => new Set(traceNames.map((nm) => [...ents.values()].find((e) => e.name === nm)?.id).filter((x): x is number => x !== undefined));
+    let traced: Set<number> | null = null, tracedAt = 0;
     const w = await createAiWorld(vfs, {
+      trace: traceNames.length ? (m) => { if (!traced || performance.now() - tracedAt > 2000) { traced = traceIds(); tracedAt = performance.now(); } const id = Number(/^npc (\d+)/.exec(m)?.[1]); if (traced.has(id) || traceNames.some((nm) => m.includes(nm))) console.warn(`[tree] ${m}`); } : undefined,
       quest: (fn, q, o) => quests.apply(fn, q, o),
       questCall: (fn, q, o) => !!quests.call(fn, o === undefined ? [q] : [q, o]),
       ents, lua, realTime: () => npcAi?.now ?? 0, worldTime: () => (npcAi?.now ?? 0) * 15, act: (a) => npcAi?.act(a) ?? 1,
@@ -1385,9 +1407,20 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const who = mode === "player" && pc ? `Henry (${player!.viewMode} person) ${pc.gait}${player!.walk ? " (walk)" : ""} ${pc.speed().toFixed(1)} m/s${pc.grounded ? "" : " (in the air)"} · ` : playerInfo ? `${playerInfo} · ` : "free-fly · ";
     const benchInfo = bench ? `⏱ benchmark ${q.label}: ${bench.phase === "settle" ? "loading…" : `${bench.segment} ${Math.round((now - bench.start) / 1000)}/${Math.round(PATH_SECONDS)} s`} · ` : "";
     // the status line: the story's and the dialogue's messages, and "loading" while they last
+    // the loading screen: until the world and Henry are there; in a new game until the scene
+    // around him has loaded and the first conversation has begun (or a few seconds after)
+    if (storyLoading && player) {
+      const pc = player.controller;
+      const ready = !pendingPlace && worldReadyNear(pc.pos[0], pc.pos[1]);
+      if (ready && !storyReadyAt) storyReadyAt = now;
+      if (dialogue.talkingTo || (storyReadyAt && now - storyReadyAt > 8000)) storyLoading = false;
+    }
+    const loadingText = worldLoading || !player ? (worldLoading ? `Loading the world… ${sceneInfo}` : "Loading Henry…") : storyLoading ? storyInfo || "Starting a new game…" : "";
+    if (loadingText) loading.show(loadingText.replace(/^New game: /, "")); else if (loading.shown) loading.hide();
     // (a fight's own messages: loading, nobody near; its progress is on the fight bars)
     const fightNote = fightInfo && !fightView && !/^Fight: Henry/.test(fightInfo) ? fightInfo : "";
-    const status = [storyInfo, dialogueInfo.startsWith("Dialogue:") || dialogueInfo.startsWith("Loading") ? dialogueInfo : "", fightNote].filter(Boolean).join(" · ");
+    // (the story's progress is the loading screen's text; afterwards it is readout material)
+    const status = [!storyLoading && /^New game: (already|the behaviour trees)|^New game failed/.test(storyInfo) ? storyInfo : "", dialogueInfo.startsWith("Dialogue:") || dialogueInfo.startsWith("Loading") ? dialogueInfo : "", fightNote].filter(Boolean).join(" · ");
     fightBars.update(fightView);
     if (status !== statusText) { statusText = status; statusAt = now; }
     // without the mouse captured (and nothing else up), how to play

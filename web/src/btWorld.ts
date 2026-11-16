@@ -303,6 +303,8 @@ function releaseLock(l: CountedLock, me: object): void {
 }
 
 export class AiWorld {
+  /** ids for items CreateItem makes (not entities: above every entity id) */
+  static nextItemId = 1e9;
   readonly o: WorldOptions;
   readonly runner: Runner;
   /** debugging (runner.debug): per NPC, the deepest chain of nodes running after its last tick */
@@ -424,6 +426,15 @@ export class AiWorld {
       for (const v of this.o.brainVars ?? []) g.declare(v);
       for (const v of this.o.trees("final/sb_daycycles.xml", "root")?.variables ?? []) g.declare(v);
       g.vars.set("this", { id: npc, name: this.o.ents.get(npc)?.name ?? "" });
+      // the soul the engine fills in (typedefinitions' "soul"): its class and gender, which trees
+      // branch on (sa_home.xml#housework gives women and men different chores). ASSUMPTION: the
+      // entity class says the gender (NPC_Female); faction and social class aren't filled yet
+      const e = this.o.ents.get(npc);
+      if (e && /^NPC/.test(e.cls)) {
+        const soul = g.get("b_soul");
+        const base = soul && typeof soul === "object" && !Array.isArray(soul) ? soul as Record<string, Value> : {};
+        g.set("b_soul", { ...base, entityClass: e.cls, gender: `humanGender.${e.cls === "NPC_Female" ? "female" : "male"}` });
+      }
       g.vars.set("__player", { id: -1 });
       this.brains.set(npc, g);
     }
@@ -1040,8 +1051,16 @@ export class AiWorld {
       }
       // nobody dies yet: every NPC (and the player) is alive
       case "SoulIsAliveFilter": ok = subject === -1 || /^NPC/.test(this.o.ents.get(subject)?.cls ?? ""); break;
-      // no inventories or item slots are modelled yet: item filters match nothing
-      case "SlotClassFilter": case "ItemClassFilter": ok = false; break;
+      // an item slot (an ItemSlot entity linked to a work object: where its tool lies) of that item
+      // class; an empty class: any slot. ASSUMPTION (from the data, no note): every slot holds its
+      // tool, since nobody takes tools away yet. Items themselves (ItemClassFilter) aren't modelled
+      case "SlotClassFilter": {
+        const e = this.o.ents.get(subject);
+        const want = String(evalIn("ClassId") ?? "").toLowerCase();
+        ok = e?.cls === "ItemSlot" && (!want || e.itemClass === want);
+        break;
+      }
+      case "ItemClassFilter": ok = false; break;
       case "HasBehaviorFilter": {
         // a smart object's type or a smart area's template (a shop's "customer"). Requestable:
         // enabled with an instance free (or this NPC reserved one); Available: not disabled;
@@ -1068,8 +1087,9 @@ export class AiWorld {
         ok = true;
     }
     const bindChild = this.prop(f, "Child"), bindParent = this.prop(f, "Parent");
-    if (ok && bindChild) c.scope.set(bindChild, child);
-    if (ok && bindParent) c.scope.set(bindParent, parent);
+    // (bindings can name a table's entry: Child="animationEventsTargets['slot_right']")
+    if (ok && bindChild) assignVar(c.scope, bindChild, child);
+    if (ok && bindParent) assignVar(c.scope, bindParent, parent);
     return ok;
   }
 
@@ -1805,7 +1825,16 @@ export class AiWorld {
           setVar("OutputHeleprs", h.id);
           return "success";
         });
-      case "CreateItem": case "RemoveItem": case "DetachObject": case "AbortAllAnimations": case "ForceIdleState": case "SetSpatialInfo":
+      // an item made for an NPC (a tool in hand for a work animation). Items aren't modelled: it is
+      // an id of its own, so the trees that store and hand it on (animationEventsTargets) find one
+      case "CreateItem":
+        return leaf(() => {
+          const out = this.prop(n, "CreatedItem");
+          if (out) assignVar(c.scope, out, AiWorld.nextItemId++);
+          this.trace(`npc ${this.current.npc}: CreateItem ${String(c.eval("ItemGUID", "") ?? "")}`);
+          return "success";
+        });
+      case "RemoveItem": case "DetachObject": case "AbortAllAnimations": case "ForceIdleState": case "SetSpatialInfo":
         return leaf(() => { this.trace(`npc ${this.current.npc}: ${n.tag}`); return "success"; });
       case "GraphSearch": return leaf(() => this.graphSearch(n, c));
       case "CallBehavior": return this.callBehaviour(n, c);

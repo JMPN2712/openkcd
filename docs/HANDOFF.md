@@ -422,6 +422,29 @@ follows them):
   shops with a trade panel (the tailor's "Let's talk trade" opens it), the
   shop and calendar script functions, diet mode's shop grants.
   `test-shops.ts`; `test-quest-opening.ts` now buys the charcoal.
+- #54 (2026-11-15): NPCs doing their work, a loading screen.
+  - **Work behaviours failed at once** for most work objects: the shared
+    template (`so_templates.xml#objectNewHelpers`) needs the tool's
+    `ItemSlot` (`SlotClassFilter`, which matched nothing), stores search
+    results in table entries (`Child="animationEventsTargets['slot_right']"`,
+    which went to a variable of that literal name) and items `CreateItem`
+    makes (a stub that stored nothing). All three fixed; at 10:00 in
+    Rataje's market 15 of 23 NPCs were idle, 9 now (merchants and shop
+    guards at their posts).
+  - **Typed integers:** `randRange` into an `_int` gave fractions
+    (`$houseworks[2.37]` was nothing): `_int` variables keep whole numbers
+    and fractional array indices are cut.
+  - **`b_soul`** (the soul the engine fills in) was empty: women took men's
+    chores. It now has the entity class and gender.
+  - Henry's mother sits down to embroider after the first talk; Martin works
+    at the forge.
+  - **Loading screen** (`gameUi.ts` `LoadingScreen`): the game's own
+    artwork (`Libs/UI/Textures/Video/artwork0–6`) while the world loads and
+    during a new game until Henry is in place, so he appears with the scene.
+  - Debugging: `?trace=NAME` in the view, `profile-browser.ts --trace`,
+    `--tour-npcs`, `sim-daycycle.ts FAILS=regex`.
+  - **Left:** `Cooking_main on nothing` (the fireplace's cooking target);
+    the remaining idle merchants and guards were not checked one by one.
 - #53 (2026-11-15): a fist fight in the world view (Debug → "⚔ Fight",
   `combatView.ts`): the rules of #48 stepped each frame, the game's combat
   fragments chosen by the attack rows' tags (`AnimLibrary.tagged`) on Henry

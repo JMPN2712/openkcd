@@ -72,6 +72,8 @@ let minute = 0;
 // TRACE_AI=regex prints the matching AI trace lines (messages, locks, calls, …)
 const traceRe = process.env.TRACE_AI ? new RegExp(process.env.TRACE_AI) : null;
 const world = await createAiWorld(vfs, { ents, lua, trace: traceRe ? (m) => { if (traceRe.test(m)) console.log(`    · ${m}`); } : undefined, realTime: () => ai?.now ?? 0, worldTime: () => (ai?.now ?? 0) * 15, act: (a) => ai?.act(a) ?? 1, daycycleChange: (npc, f) => { console.log(`  daycycle:change for ${ents.get(npc)?.name}: ${JSON.stringify(f)}`); schedules.cycleOf(npc)?.change(f, minute); } });
+// FAILS=regex: every distinct chain of failing nodes whose text matches (debugging)
+if (process.env.FAILS) { const re = new RegExp(process.env.FAILS); const seen = new Set<string>(); world.runner.debug = true; world.runner.onFail = (stack) => { const k = stack.slice(-8).join(" > "); if (re.test(k) && !seen.has(k)) { seen.add(k); console.log(`    fail: ${k}`); } }; }
 lua.boot();
 schedules.setCycleData(await cycleData(vfs, world));
 ai = new NpcAi(world, { male: new AnimLibrary(vfs, "male"), female: new AnimLibrary(vfs, "female") });

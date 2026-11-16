@@ -76,6 +76,8 @@ export interface EntityInfo {
   layer?: string;
   /** the raw <Properties …>…</Properties> element (see entityProperties) */
   propsXml?: string;
+  /** an ItemSlot's item class (guidItemClassId, lower case): the tool that lies there */
+  itemClass?: string;
 }
 
 /**
@@ -136,6 +138,8 @@ export function parseEntityIndex(xml: string): Map<number, EntityInfo> {
     if (category) info.category = category;
     if (soType) info.soType = soType;
     if (saTemplate) info.saTemplate = saTemplate;
+    const itemClass = pa("guidItemClassId");
+    if (itemClass) info.itemClass = itemClass.toLowerCase();
     const soHelpers = pa("soclasses_SmartObjectHelpers");
     if (soHelpers) info.soHelpers = soHelpers;
     const scale = attr(head, "Scale");

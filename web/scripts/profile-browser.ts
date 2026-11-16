@@ -100,10 +100,12 @@ await page("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceSc
 // --at=x,y[,yaw°]: Henry starts there (the page's ?at= option)
 const at = arg("at", "");
 // --query=gpu-mem&…: more of the address's debugging switches
-const query = [at ? `at=${at}` : "", arg("query", "")].filter(Boolean).join("&");
+let query = [at ? `at=${at}` : "", arg("query", "")].filter(Boolean).join("&");
 // --heap: a sampled JS heap profile from the start, its live allocations by function printed with the benchmark
 const heap = process.argv.includes("--heap");
 if (heap) { await page("HeapProfiler.enable"); await page("HeapProfiler.startSampling", { samplingInterval: 256 * 1024 }); }
+// --trace=NAME,…: the view's behaviour-tree trace of those entities (printed as page warnings)
+if (arg("trace", "")) query = `${query ? `${query}&` : ""}trace=${encodeURIComponent(arg("trace", ""))}`;
 await page("Page.navigate", { url: `http://localhost:${PORT}/${query ? `?${query}` : ""}` });
 await waitFor("the page", () => evaluate<boolean>(`document.readyState === "complete" && !!document.getElementById("open-input")`).then((v) => v || undefined));
 await evaluate(`localStorage.setItem("openkcd.quality", ${JSON.stringify(preset)})`);
@@ -224,6 +226,9 @@ async function runTour(tour: string): Promise<void> {
     for (const k of held) await tk(k, "keyDown");
     const { data } = await page("Page.captureScreenshot", { format: "png" });
     await writeFile(`${tour}-${i}.png`, Buffer.from(data, "base64"));
+    // --tour-npcs=a,b: those NPCs' place and pose (the view's debug hook)
+    const watch = arg("tour-npcs", "");
+    if (watch) console.log(`  npcs: ${await evaluate<string>(`(globalThis.__openkcdNpcs?.(${JSON.stringify(watch.split(","))}) ?? "no hook")`)}`);
     console.log(`tour ${i}: ${(await hud()).replace(/^.*?Henry/, "Henry").slice(0, 160)} · focus ${await evaluate<string>(`document.activeElement?.className ?? "none"`)}, document focused ${await evaluate<boolean>(`document.hasFocus()`)}`);
   }
   for (const k of held) await tk(k, "keyUp");

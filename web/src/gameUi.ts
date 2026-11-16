@@ -185,3 +185,59 @@ export function lockPointer(el: HTMLElement): void {
     if (r && typeof r.catch === "function") r.catch(() => {});
   } catch { /* not allowed now */ }
 }
+
+/** The game's loading artwork (Libs/UI/Textures/Video/artwork0–6), one at random per screen. */
+const ARTWORK = Array.from({ length: 7 }, (_, i) => `libs/ui/textures/video/artwork${i}.dds`);
+
+/**
+ * A loading screen with the game's own artwork and a line of what is loading; it covers the view
+ * while the world loads, and while a new game moves Henry and builds the scene around him.
+ */
+export class LoadingScreen {
+  readonly el: HTMLDivElement;
+  private text: HTMLParagraphElement;
+  private art: string | null = null;
+  private picking = false;
+  private readonly vfs: Vfs;
+
+  constructor(vfs: Vfs) {
+    this.vfs = vfs;
+    this.el = document.createElement("div");
+    this.el.className = "kcd-loading";
+    this.el.hidden = true;
+    this.text = document.createElement("p");
+    const gate = document.createElement("i");
+    gate.className = "kcd-loading-gate";
+    this.el.append(gate, this.text);
+  }
+
+  get shown(): boolean {
+    return !this.el.hidden;
+  }
+
+  /** Show it (a new artwork each time it appears) with `text` under it. */
+  show(text: string): void {
+    if (this.el.hidden) {
+      this.el.hidden = false;
+      this.pick();
+    }
+    if (this.text.textContent !== text) this.text.textContent = text;
+  }
+
+  hide(): void {
+    this.el.hidden = true;
+  }
+
+  private pick(): void {
+    if (this.picking) return;
+    this.picking = true;
+    const path = ARTWORK[Math.floor(Math.random() * ARTWORK.length)];
+    void textureUrl(this.vfs, path, 2048).then((u) => {
+      this.picking = false;
+      if (!u) return;
+      if (this.art) URL.revokeObjectURL(this.art);
+      this.art = u;
+      this.el.style.backgroundImage = `url("${u}")`;
+    });
+  }
+}
