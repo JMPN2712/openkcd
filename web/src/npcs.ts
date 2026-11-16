@@ -215,6 +215,8 @@ export class NpcWorld {
   readonly running = new Map<number, string>();
   /** actual movement with collision avoidance, per NPC id (stepCrowd) */
   private movers = new Map<number, Mover>();
+  /** NPCs put at a spot by a scene (a conversation's place): they stand there, whatever their plan says */
+  readonly pinned = new Map<number, Vec3>();
   /** NPCs held in place, facing a point (the one Henry talks to faces him) */
   readonly held = new Map<number, Vec3>();
   /** NPCs' planned spots moved off one another (key: planned spot), see stepCrowd */
@@ -335,13 +337,16 @@ export class NpcWorld {
     const inView = new Set(npcs.map((n) => n.entity.id));
     for (const id of this.movers.keys()) if (!inView.has(id)) this.movers.delete(id);
     if (dt <= 0) return;
-    const planned = npcs.map((n) => this.placeAt(n.entity, n.schedule, minute));
+    const planned = npcs.map((n) => { const p = this.placeAt(n.entity, n.schedule, minute), pin = this.pinned.get(n.entity.id); return pin ? { ...p, pos: [...pin] as Vec3, pose: "stand" as Pose, where: "pinned" } : p; });
     const goals = this.separateSpots(npcs, planned);
+    npcs.forEach((n, i) => { const pin = this.pinned.get(n.entity.id); if (pin) goals[i] = [...pin]; });
     const agents: CrowdAgent[] = [];
     npcs.forEach((n, i) => {
       const ref = planned[i], goal = goals[i];
       let m = this.movers.get(n.entity.id);
-      const far = m && (Math.hypot(goal[0] - m.agent.pos[0], goal[1] - m.agent.pos[1]) > SNAP_DISTANCE || Math.abs(goal[2] - m.agent.pos[2]) > 2);
+      // (a pinned NPC is put at its spot: the scene fades in on it, as the game's dialogue fade-in does)
+      const snap = this.pinned.has(n.entity.id) ? 1 : SNAP_DISTANCE;
+      const far = m && (Math.hypot(goal[0] - m.agent.pos[0], goal[1] - m.agent.pos[1]) > snap || Math.abs(goal[2] - m.agent.pos[2]) > 2);
       if (!m || far) {
         // new, or the plan jumped (clock moved, activity elsewhere): start at the planned spot
         m = { agent: { radius: NPC_PATH_RADIUS + CA.agentExtraFat, pos: [...goal], vel: [0, 0], pref: [0, 0], maxSpeed: 0, avoids: false, shrink: m?.agent.shrink ?? 1 }, ref, yaw: yawOf(ref.rot) };

@@ -415,7 +415,8 @@ export class DialogueHost {
       if (e.code === "ArrowUp" || e.code === "KeyW") { this.mark(this.highlight - 1); return true; }
       if (e.code === "Enter" || e.code === "KeyE") { this.pick(this.highlight); return true; }
     }
-    if (e.code === "Space" && this.player) { this.player.skip(); return true; }
+    // (the voice stops with the line: it went on talking over the next one)
+    if (e.code === "Space" && this.player) { this.player.skip(); this.stopVoice(); return true; }
     return !!this.conv;
   }
 
@@ -451,6 +452,12 @@ export class DialogueHost {
     return `Dialogue ${id}: ${await this.playTimeline(l, seq, castFor(l.db, seq, named, henry))}`;
   }
 
+  /** Stop the voice line playing, if any. */
+  private stopVoice(): void {
+    try { this.playing?.stop(); } catch { /* already stopped */ }
+    this.playing = null;
+  }
+
   /** The conversation a tree asked for is over (`played`: it got to play). */
   private answered(played: boolean): void {
     if (this.answering) this.requests?.end(this.answering, played);
@@ -461,8 +468,7 @@ export class DialogueHost {
     this.answered(!!this.conv);
     this.resume = null;
     this.pendingTrade = null;
-    this.playing?.stop();
-    this.playing = null;
+    this.stopVoice();
     this.player = null;
     this.partner = null;
     this.shown = undefined;
@@ -502,8 +508,7 @@ export class DialogueHost {
         const speaker = this.roleOf.get(e.role) ?? conv.participants.findIndex((q) => (e.actor?.soul ? !q.player : q.player));
         if (speaker >= 0) this.shots.say(speaker, conv.participants.findIndex((_, i) => i !== speaker), e.line.camera ?? 0);
       }
-      this.playing?.stop();
-      this.playing = null;
+      this.stopVoice();
       const b = this.buffers.get(e);
       if (b && this.audio) {
         const src = this.audio.createBufferSource();
@@ -525,7 +530,7 @@ export class DialogueHost {
     }
     if (p.done) {
       this.player = null;
-      this.playing = null;
+      this.stopVoice();
       this.shown = undefined;
       this.subtitle.hidden = true;
       const next = this.afterLine;

@@ -11,6 +11,7 @@ import type { LevelObjects } from "./levelObjects.ts";
 import type { Cover } from "./cover.ts";
 import type { QuestSystem } from "./quests.ts";
 import { QuestBrains } from "./questTrees.ts";
+import { scenePlace, type ScenePlace } from "./sceneCameras.ts";
 import { Inventory, ItemDb } from "./inventory.ts";
 import { ShopDb, Shops } from "./shops.ts";
 import { attachInventory } from "./playerState.ts";
@@ -526,6 +527,20 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
    * every quest tree diet mode keeps, and tell them a new game began. The master quest activates
    * the opening quest, whose tree loads Skalitz's profile and hands its people their parts.
    */
+  /** the NPC a scene pinned (released when its conversation is over) */
+  let scenePinned: number | null = null;
+  /**
+   * The place of a conversation `npc` starts, from the cameras of the profiles switched on
+   * within 20 m of it (sceneCameras.ts), or null.
+   */
+  const sceneFor = (npc: number): ScenePlace | null => {
+    const w = npcAi?.world, e = ents.get(npc);
+    if (!story || !w || !e) return null;
+    const on = new Set<string>();
+    for (const name of w.profiles) for (const l of story.layers.profiles.get(name)?.layers ?? []) on.add(l);
+    const cams = story.layers.entities.filter((c) => c.cls === "CameraSource" && !!c.layer && on.has(c.layer) && Math.hypot(c.pos[0] - e.pos[0], c.pos[1] - e.pos[1]) < 20);
+    return scenePlace(cams);
+  };
   const startStory = async () => {
     const w = npcAi?.world, quests = viewQuests;
     if (story || !w || !quests) { storyInfo = story ? "New game: already started" : "New game: the behaviour trees are still loading"; return; }
@@ -543,7 +558,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     // "spawnStart", by his home in Skalitz)
     const spawn = [...ents.values()].find((e) => e.cls === "SpawnPoint" && !e.layer);
     if (spawn && player) {
-      player.controller.place(spawn.pos[0], spawn.pos[1], spawn.pos[2] + 1.5, 2 * Math.atan2(spawn.rot[3], spawn.rot[0]));
+      teleportHenry(spawn.pos[0], spawn.pos[1], spawn.pos[2] + 1.5, 2 * Math.atan2(spawn.rot[3], spawn.rot[0]));
       mode = "player";
     }
   };
@@ -659,6 +674,18 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let scaleCheckedAt = 0;
   let msaa: GPUTexture | null = null;
   let streamedAt: [number, number] | null = null;
+  /** where the last complete scene was built (everything in range loaded) */
+  let settledAt: [number, number] | null = null;
+  /** Whether the world around a point has loaded completely (floors and walls are there). */
+  const worldReadyNear = (x: number, y: number) => !!settledAt && Math.hypot(x - settledAt[0], y - settledAt[1]) < STREAM_STEP * 0.5;
+  /** a place Henry was moved to before its objects loaded: put down again once they have */
+  let pendingPlace: { x: number; y: number; above?: number; yaw: number } | null = null;
+  /** Move Henry (a long move: the place is put right once the world there has loaded). */
+  const teleportHenry = (x: number, y: number, above: number | undefined, yaw: number) => {
+    if (!player) return;
+    player.controller.place(x, y, above, yaw);
+    if (!worldReadyNear(x, y)) pendingPlace = { x, y, above, yaw };
+  };
   let streaming = false;
   let sceneInfo = "objects: loading…";
   let scene: WorldScene | null = null;
@@ -709,6 +736,13 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
             const c = player.controller;
             if (Math.hypot(c.pos[0] - SPAWN[0], c.pos[1] - SPAWN[1]) < 0.5) c.place(c.pos[0], c.pos[1]);
           }
+          // the same after a long move (a new game takes Henry 3 km): put him down again on what
+          // has loaded around him, if he is still where he was put
+          if (pendingPlace && player) {
+            const c = player.controller, pp = pendingPlace;
+            if (Math.hypot(c.pos[0] - pp.x, c.pos[1] - pp.y) < 0.5 && Math.hypot(at[0] - pp.x, at[1] - pp.y) < STREAM_STEP) { c.place(pp.x, pp.y, pp.above, pp.yaw); pendingPlace = null; }
+          }
+          settledAt = at;
           worldLoading = false;
           break;
         }
@@ -1028,6 +1062,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     calendar.game = simSeconds;
     if (!worldLoading) npcAi?.tick(simDt);
     if (viewQuests && simSeconds - questsCheckedAt >= 0.5) { questsCheckedAt = simSeconds; viewQuests.update(); }
+    if (scenePinned !== null && !dialogue.talkingTo && !dialogue.requests?.next(true)) { npcWorld.pinned.delete(scenePinned); scenePinned = null; }
     if (story && !worldLoading) {
       // the quests' trees, ten times a second of play time
       if (simSeconds - story.tickedAt >= 0.1) { story.tickedAt = simSeconds; story.brains.tick(); }
@@ -1048,7 +1083,21 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         // up to 15 m brings Henry to a free spot 1.3 m in front of the NPC, and others wait
         // until he is within 2.5 m and in sight
         let ready = false;
-        if (n && at && !worldLoading) {
+        // a scene with cameras of its own (the level's, switched on with the quest's profile):
+        // the two stand where those cameras look, the NPC pinned there for the talk
+        const place = n && npcAi ? sceneFor(n.entity.id) : null;
+        if (n && at && place && !worldLoading && worldReadyNear(place.npc[0], place.npc[1]) && !pendingPlace) {
+          const pc = player.controller;
+          const floorAt = (xy: [number, number]) => surroundings.ground(xy[0], xy[1], place.z - 0.3, place.z - 3)?.z ?? at.pos[2];
+          const npcSpot: [number, number, number] = [place.npc[0], place.npc[1], floorAt(place.npc)];
+          if (!npcWorld.pinned.has(n.entity.id)) {
+            npcWorld.pinned.set(n.entity.id, npcSpot);
+            scenePinned = n.entity.id;
+            pc.place(place.henry[0], place.henry[1], place.z - 0.3, Math.atan2(npcSpot[1] - place.henry[1], npcSpot[0] - place.henry[0]));
+          }
+          // the NPC is there (it jumps when far, else walks the last metres)
+          ready = Math.hypot(at.pos[0] - npcSpot[0], at.pos[1] - npcSpot[1]) < 0.4;
+        } else if (n && at && !place && !worldLoading && worldReadyNear(at.pos[0], at.pos[1]) && !pendingPlace) {
           const pc = player.controller;
           const chest = (p: readonly number[]): [number, number, number] => [p[0], p[1], p[2] + 1.3];
           const clear = (p: readonly number[]) => (surroundings.raycast?.(chest(at.pos), chest(p)) ?? null) === null;
