@@ -22,6 +22,7 @@ import { CombatDb } from "./combat.ts";
 import { FightBars, FightView, REACH } from "./combatView.ts";
 import type { LayerContents } from "./profiles.ts";
 import { storyHiddenLayers, applyDetailLayers } from "./levelLayers.ts";
+import { wallBlockers, Blockers } from "./navBlockers.ts";
 import { MergedMeshes } from "./mergedMeshes.ts";
 import { Roads } from "./roads.ts";
 import { Decals } from "./decals.ts";
@@ -687,6 +688,19 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const baseHiddenLayers = hiddenLayers;
   let storyShownAt = 0;
   /** The NPCs of the layers of the profiles switched on join the level's NPCs; the others' leave. */
+  // walls the navmesh doesn't know (Skalitz's palisade beside its gates): NPC routes and the crowd
+  // keep out of the shown ones (navBlockers.ts); rebuilt when the shown layers change
+  const wallBounds = new Map<string, { lo: number[]; hi: number[] } | null>();
+  let wallsFor: Set<number> | null = null;
+  const updateWalls = () => {
+    const nav = schedules.navMesh, layers = hiddenLayers;
+    if (!nav || wallsFor === layers) return;
+    wallsFor = layers;
+    void wallBlockers(vfs, objects, terrain.brushNames, layers, wallBounds).then((list) => {
+      if (wallsFor === layers) nav.blockers = new Blockers(list);
+    }).catch((err) => console.warn("walls:", err));
+  };
+  updateWalls();
   const syncProfileNpcs = () => {
     const w = npcAi?.world;
     if (!story || !w) return;
@@ -698,6 +712,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       hiddenLayers = next;
       streamedAt = null;
       settledAt = null;
+      updateWalls();
     }
     const on = new Set<string>();
     for (const name of w.profiles) for (const l of story.layers.profiles.get(name)?.layers ?? []) on.add(l);
@@ -859,6 +874,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     try {
       const key = NpcWorld.key(await npcWorld.select(at, NPC_RADIUS, NPC_MAX, m));
       updateAi(npcs, npcWorld, m);
+      // (the same set as before: loaded; with nobody near, the empty set never differed from the
+      // start's, and the loading screen waited for "people" forever)
+      if (key === npcKey) npcsLoaded = true;
       if (key === npcKey || stopped) return;
       const next = await npcWorld.near(at, NPC_RADIUS, NPC_MAX, m, (s) => { npcInfo = s; });
       if (stopped) return;
@@ -1502,12 +1520,14 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     // its textures, the grass, the first NPCs; at most LOADING_MAX seconds)
     // (the people too: their behaviour trees load in the background, 10–30 s, and until then
     // everyone stands; and the forest beyond the streamed scene)
-    const busyNow = streaming || grassBusy || npcBusy || !npcsLoaded || !pool.idle || (q.grass > 0 && !grass) || !npcAi || !farTreesReady || !farFieldReady || !detailReady;
+    // (npcBusy is left out: the NPC set is refreshed every few seconds, and each refresh restarted
+    // the quiet time, so where nobody was near the loading screen never lifted)
+    const busyNow = streaming || grassBusy || !npcsLoaded || !pool.idle || (q.grass > 0 && !grass) || !npcAi || !farTreesReady || !farFieldReady || !detailReady;
     if (busyNow) quietSince = now; else quietSince ||= now;
     const settling = !!player && !worldLoading && now - quietSince < 1500 && now - loadingSince < LOADING_MAX * 1000;
     const loadingText = worldLoading || !player ? (worldLoading ? `Loading the world… ${sceneInfo}` : "Loading Henry…")
       : storyLoading ? storyInfo || "Starting a new game…"
-      : settling && loading.shown ? `Loading… ${!pool.idle ? "textures" : !npcAi ? "what people do" : npcBusy || !npcsLoaded ? "people" : grassBusy || (q.grass > 0 && !grass) ? "grass" : !farTreesReady || !farFieldReady ? "the distance" : !detailReady ? "the ground" : "the surroundings"}` : "";
+      : settling && loading.shown ? `Loading… ${!pool.idle ? "textures" : !npcAi ? "what people do" : !npcsLoaded ? "people" : grassBusy || (q.grass > 0 && !grass) ? "grass" : !farTreesReady || !farFieldReady ? "the distance" : !detailReady ? "the ground" : streaming ? "the buildings" : "the surroundings"}` : "";
     if (loadingText && !loading.shown) loadingSince = now;
     if (loadingText) loading.show(loadingText.replace(/^New game: /, ""));
     else if (loading.shown) {

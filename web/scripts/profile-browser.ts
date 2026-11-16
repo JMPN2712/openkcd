@@ -535,6 +535,8 @@ for (const stepArg of arg("then", "").split(",").filter(Boolean)) {
     : kind === "wait" ? (await sleep(Number(rest[0]) * 1000), "waited")
     // npcs:NAME[;NAME]: where those NPCs are and what their trees do ("*": every shown NPC)
     : kind === "npcs" ? await evaluate<string>(`globalThis.__openkcdNpcs?.(${JSON.stringify(rest.join(":").split(";"))}) ?? "no hook"`)
+    // hud: the view's status line (scene, textures, NPCs)
+    : kind === "hud" ? await evaluate<string>(`[...document.querySelectorAll("*")].find((e) => e.children.length === 0 && /fps, cpu/.test(e.textContent ?? ""))?.textContent ?? "no hud"`)
     // shot:NAME: a screenshot to PREFIX-NAME.png (--screenshot=PREFIX; never commit: game content)
     : kind === "shot" ? (await writeFile(`${arg("screenshot", "shot")}-${rest[0]}.png`, Buffer.from((await page("Page.captureScreenshot", { format: "png" })).data, "base64")), "saved")
     // press:KEY: a key press on the canvas (e.g. press:KeyE), then the status and subtitle lines

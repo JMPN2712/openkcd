@@ -430,6 +430,31 @@ follows them):
   shops with a trade panel (the tailor's "Let's talk trade" opens it), the
   shop and calendar script functions, diet mode's shop grants.
   `test-shops.ts`; `test-quest-opening.ts` now buys the charcoal.
+- #59 (2026-11-15): NPCs don't walk through Skalitz's palisade; the loading
+  screen lifts where nobody is near.
+  - **Walls for the crowd** (`navBlockers.ts`): the shown palisade pieces
+    (`wall_wooden`, `palisade_vranik`, `ironworks` walls and spikes) as
+    oriented boxes from their models' bounds, each joined to its two
+    nearest pieces within 6.5 m by a thin wall unless the join crosses a
+    gate (gateways stay open). Models whose bounds are a whole ring
+    (thicker than 3 m or longer than 30 m) are skipped. The navmesh's
+    routes already keep off them (0 of 287 random routes around Skalitz
+    cross one): it was the crowd's steering (avoidance, catching up, the
+    last steps to a spot) that walked NPCs through the wall. The crowd now
+    refuses steps through them (an NPC inside one may step out), and
+    `NavMesh.findPath` plans a route that would cross one again on a
+    0.5 m grid of the mesh's floor (`blockers`).
+  - Left out: fences (the mesh crosses garden fences in many places, their
+    gaps not modelled) and the level's invisible collision boxes
+    (`%level%/brush/designer_*.cgf`, 24 vertices, no triangles): the mesh
+    crosses many on roads and in gateways, so they look like barriers
+    switched per story state. Research question: which collision boxes are
+    live in which state, and do NPCs collide with them?
+  - **Loading screen:** where nobody was near (free roam in Skalitz) it
+    waited for "people" forever (an unchanged empty NPC set never counted
+    as loaded), and the NPC refresh every few seconds restarted its quiet
+    time. Both fixed; the label names streaming ("the buildings").
+  - `test-walls.ts`; harness step `hud` (the status line).
 - #58 (2026-11-15): women work, NPCs sit on benches, no NPC stuck short of
   its spot.
   - **Women's animations:** the fragment database for women is

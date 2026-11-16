@@ -135,6 +135,7 @@ node scripts/test-player.ts                      # player controller on Rataje: 
 node scripts/test-collision.ts                   # collision sources by object type around the market, random runs: no penetration, no falling through
 node scripts/test-chests.ts                      # chest lids open with their .anm (10–20°), and a chest near the tailor's lists its contents by name
 node scripts/test-doors.ts                       # doors near the tailor's house swing on their hinges; E opens and closes his door; the leaf blocks only when shut
+node scripts/test-walls.ts                       # Skalitz's palisade as walls for the crowd: routes agree with the navmesh, a step through the wall is refused, the gateway open
 node scripts/test-dialogue.ts                    # dialogue tables → sequences; the tailor and a townsman cast in a recorded gossip, every line with its subtitle and recording, played to the end
 node scripts/test-dialogue-camera.ts             # dialogue camera rig: the blendspace grid, every shot looks towards the partner at any angle, distance and height, smooth between; each line's shot frames its speaker (Henry too), camera cuts and modes win
 node scripts/test-dialogue-browser.ts --screenshot=/tmp/d/s   # headless Chrome: talks to the tailor and the bailiff; the camera frames whoever speaks, Backspace ends at the menu, trade ends it, then Henry walks again (screenshots: never commit)

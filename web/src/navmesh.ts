@@ -10,6 +10,8 @@
 // connections (the short hops through doorways into houses), then the funnel
 // algorithm ("simple stupid funnel") over the portals for the final corner path.
 
+import type { Blockers } from "./navBlockers.ts";
+
 export type Vec3 = [number, number, number];
 
 /** Detour's tile magic, 'DNAV' */
@@ -319,7 +321,126 @@ export class NavMesh {
    * Path from `start` to `end` over the navmesh: corner points (start and end included),
    * or null when either end is off the mesh or no route is found within `maxNodes` expansions.
    */
+  /** walls the mesh doesn't know (navBlockers.ts): paths go around them */
+  blockers: Blockers | null = null;
+
+  /**
+   * Path from `from` to `to` (corner points), around the walls in `blockers`: the mesh's path
+   * when it crosses none, else a search on a 0.5 m grid of the mesh's floor without the walls
+   * (Skalitz's palisade lies across the mesh beside its gates). Null when there is no way.
+   */
   findPath(from: Vec3, to: Vec3, maxNodes = 20000): Vec3[] | null {
+    const path = this.findMeshPath(from, to, maxNodes);
+    const b = this.blockers;
+    if (!path || !b) return path;
+    let crossing = false;
+    for (let i = 1; i < path.length && !crossing; i++) crossing = b.crosses(path[i - 1], path[i], WALL_PAD);
+    if (!crossing) return path;
+    return this.gridPath(path[0], path[path.length - 1], path) ?? path;
+  }
+
+  /** A path on a grid over the mesh's floor that keeps WALL_PAD from the walls (findPath). */
+  private gridPath(from: Vec3, to: Vec3, hint: Vec3[]): Vec3[] | null {
+    const b = this.blockers!;
+    const G = 0.5, MARGIN = 60, MAX = 640;
+    let x0 = Math.min(from[0], to[0]), x1 = Math.max(from[0], to[0]), y0 = Math.min(from[1], to[1]), y1 = Math.max(from[1], to[1]);
+    for (const p of hint) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); }
+    x0 -= MARGIN; y0 -= MARGIN; x1 += MARGIN; y1 += MARGIN;
+    const W = Math.ceil((x1 - x0) / G), H = Math.ceil((y1 - y0) / G);
+    if (W > MAX || H > MAX) return null;
+    // a cell's floor: the mesh under it near the height of the hint path's closest point
+    const zNear = (x: number, y: number) => {
+      let best = hint[0][2], bd = Infinity;
+      for (const p of hint) { const d = Math.hypot(p[0] - x, p[1] - y); if (d < bd) { bd = d; best = p[2]; } }
+      return best;
+    };
+    const floor = new Map<number, number | null>();
+    const cellZ = (cx: number, cy: number): number | null => {
+      const k = cy * W + cx;
+      if (floor.has(k)) return floor.get(k)!;
+      const x = x0 + (cx + 0.5) * G, y = y0 + (cy + 0.5) * G;
+      const on = this.onMesh([x, y, zNear(x, y)], 0.25, 3);
+      const z = on?.point && !b.inside([x, y, on.point[2]], WALL_PAD) ? on.point[2] : null;
+      floor.set(k, z);
+      return z;
+    };
+    const cellOf = (p: Vec3) => [Math.max(0, Math.min(W - 1, Math.floor((p[0] - x0) / G))), Math.max(0, Math.min(H - 1, Math.floor((p[1] - y0) / G)))];
+    const [sx, sy] = cellOf(from), [ex, ey] = cellOf(to);
+    // the ends may stand in a wall's pad (a doorway, a post): they count as free
+    floor.set(sy * W + sx, from[2]);
+    floor.set(ey * W + ex, to[2]);
+    const g = new Map<number, number>(), parent = new Map<number, number>();
+    const open: [number, number][] = [];
+    const push = (k: number, f: number) => {
+      open.push([f, k]);
+      let i = open.length - 1;
+      while (i > 0) { const q = (i - 1) >> 1; if (open[q][0] <= open[i][0]) break; [open[q], open[i]] = [open[i], open[q]]; i = q; }
+    };
+    const pop = () => {
+      const top = open[0], last = open.pop()!;
+      if (open.length) {
+        open[0] = last;
+        let i = 0;
+        for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < open.length && open[l][0] < open[m][0]) m = l; if (r < open.length && open[r][0] < open[m][0]) m = r; if (m === i) break; [open[m], open[i]] = [open[i], open[m]]; i = m; }
+      }
+      return top[1];
+    };
+    const start = sy * W + sx, goal = ey * W + ex;
+    g.set(start, 0);
+    push(start, Math.hypot(ex - sx, ey - sy));
+    let found = false;
+    for (let it = 0; open.length && it < 120000; it++) {
+      const k = pop();
+      if (k === goal) { found = true; break; }
+      const cx = k % W, cy = (k - cx) / W, zc = cellZ(cx, cy)!;
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+        if (!dx && !dy) continue;
+        const nx = cx + dx, ny = cy + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const z = cellZ(nx, ny);
+        if (z === null || Math.abs(z - zc) > 0.6) continue;
+        // diagonal steps don't cut a blocked corner
+        if (dx && dy && (cellZ(cx + dx, cy) === null || cellZ(cx, cy + dy) === null)) continue;
+        const nk = ny * W + nx, ng = g.get(k)! + Math.hypot(dx, dy);
+        if (ng >= (g.get(nk) ?? Infinity)) continue;
+        g.set(nk, ng);
+        parent.set(nk, k);
+        push(nk, ng + Math.hypot(ex - nx, ey - ny));
+      }
+    }
+    if (!found) return null;
+    const cells: Vec3[] = [];
+    for (let k: number | undefined = goal; k !== undefined; k = parent.get(k)) {
+      const cx = k % W, cy = (k - cx) / W;
+      cells.push([x0 + (cx + 0.5) * G, y0 + (cy + 0.5) * G, floor.get(k)!]);
+    }
+    cells.reverse();
+    cells[0] = [...from];
+    cells[cells.length - 1] = [...to];
+    // string pulling: from each corner, the farthest cell in sight (no wall, floor all the way)
+    const clear = (a: Vec3, c: Vec3) => {
+      if (b.crosses(a, c, WALL_PAD * 0.8)) return false;
+      const n = Math.ceil(Math.hypot(c[0] - a[0], c[1] - a[1]) / G);
+      for (let i = 1; i < n; i++) {
+        const t = i / n, x = a[0] + (c[0] - a[0]) * t, y = a[1] + (c[1] - a[1]) * t;
+        if (!this.onMesh([x, y, a[2] + (c[2] - a[2]) * t], 0.3, 1.2)) return false;
+      }
+      return true;
+    };
+    const out: Vec3[] = [cells[0]];
+    let i = 0;
+    while (i < cells.length - 1) {
+      let j = cells.length - 1;
+      while (j > i + 1 && !clear(cells[i], cells[j])) j--;
+      out.push(cells[j]);
+      i = j;
+    }
+    return out;
+  }
+
+  /** The mesh's own path (corner points, start and end included); see findPath. */
+  private findMeshPath(from: Vec3, to: Vec3, maxNodes = 20000): Vec3[] | null {
+
     const s = this.findPoly(from), e = this.findPoly(to);
     if (!s || !e) return null;
     // the path runs between the closest points on the mesh; callers bridge the last metres
@@ -398,6 +519,9 @@ export class NavMesh {
     return funnel(portals);
   }
 }
+
+/** Distance kept from walls the mesh doesn't know (a body's radius and a little). */
+const WALL_PAD = 0.25;
 
 function polyKey(r: PolyRef): string {
   return `${r.tile.x},${r.tile.y},${r.tile.layer},${r.poly}`;

@@ -406,9 +406,15 @@ export class NpcWorld {
         // the last steps to its own spot (a forge, a stool, a counter: authored, often just off the
         // mesh) are taken: refused, the NPC never arrived and stood beside its work in the stand pose
         const g = m.goal, last = !!g && m.ref.pose !== "walk" && Math.hypot(g[0] - a.pos[0], g[1] - a.pos[1]) < 1.5;
-        if (here && !last && !on(nx, ny)) {
-          if (on(nx, a.pos[1])) { a.pos[0] = nx; a.vel[1] = 0; }
-          else if (on(a.pos[0], ny)) { a.pos[1] = ny; a.vel[0] = 0; }
+        // and no step through a wall the mesh doesn't know (navBlockers.ts: Skalitz's palisade)
+        const walls = nav.blockers;
+        // (one already inside a wall's box, a doorway's collision, may step out)
+        const inWall = !!walls && walls.inside(a.pos);
+        const free = (x: number, y: number) => !walls || inWall || !walls.crosses(a.pos, [x, y, a.pos[2]]);
+        const ok = (x: number, y: number) => (last || !here || on(x, y)) && free(x, y);
+        if (!ok(nx, ny)) {
+          if (ok(nx, a.pos[1])) { a.pos[0] = nx; a.vel[1] = 0; }
+          else if (ok(a.pos[0], ny)) { a.pos[1] = ny; a.vel[0] = 0; }
           else a.vel = [0, 0];
         } else { a.pos[0] = nx; a.pos[1] = ny; }
       } else { a.pos[0] = nx; a.pos[1] = ny; }
