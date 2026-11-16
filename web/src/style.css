@@ -359,3 +359,58 @@ details.part p { margin: 4px 0; }
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
 }
 .level-bench pre { flex: 1 0 100%; margin: 0; font-size: 11px; white-space: pre; overflow-x: auto; }
+
+/* ---- the game's look (gameUi.ts): its font, menu background, selector banner and window frame,
+   read from the player's copy; without them the same layout in plain dark and serif ---- */
+.level-stage { --kcd-font: Georgia, "Times New Roman", serif; --kcd-ink: #e8dcc0; --kcd-gold: #d6b25e; }
+/* the controls live in the menu now; the readout is a debug option */
+.level-stage > .level-clock, .level-stage > .level-full-btn { display: none; }
+.level-stage .level-hud { display: none; }
+.level-stage.show-readout .level-hud { display: block; }
+.kcd-menu {
+  position: absolute; inset: 0; z-index: 8; display: flex; align-items: center; justify-content: flex-start; outline: none;
+  background: rgba(0, 0, 0, 0.55) var(--kcd-menu-bg, none) center / cover no-repeat; background-blend-mode: multiply;
+  font-family: var(--kcd-font); color: var(--kcd-ink);
+}
+.kcd-menu::before, .kcd-menu::after {
+  content: ""; position: absolute; top: 0; bottom: 0; width: min(18vw, 220px); pointer-events: none;
+  background: var(--kcd-ornament-left, none) center / contain no-repeat; opacity: 0.85;
+}
+.kcd-menu::before { left: 0; }
+.kcd-menu::after { right: 0; background-image: var(--kcd-ornament-right, var(--kcd-ornament-left, none)); transform: scaleX(-1); }
+.kcd-menu-panel { position: relative; margin-left: max(10%, min(20vw, 240px)); width: min(520px, 76%); max-height: 88%; overflow: auto; padding: 18px 8px; }
+.kcd-menu-panel::before, .kcd-menu-panel::after { content: ""; display: block; height: 22px; background: var(--kcd-deco-top, none) center / contain no-repeat; }
+.kcd-menu-panel::after { background-image: var(--kcd-deco-bottom, var(--kcd-deco-top, none)); }
+.kcd-menu h2 { margin: 6px 0 14px 18px; font-size: 34px; font-weight: normal; color: var(--kcd-gold); text-shadow: 0 2px 4px #000; }
+.kcd-menu-list { display: flex; flex-direction: column; gap: 2px; }
+.kcd-menu-button {
+  all: unset; box-sizing: border-box; cursor: pointer; padding: 7px 26px 7px 22px; font-size: 26px; line-height: 1.2;
+  color: var(--kcd-ink); text-shadow: 0 1px 3px #000; border-radius: 2px;
+}
+.kcd-menu-button.on { color: #2a1b0b; text-shadow: none; background: #d6b25e var(--kcd-selector, none) center / 100% 100% no-repeat; }
+.kcd-menu-block { margin: 4px 0 12px; padding: 10px 14px; font-family: system-ui, sans-serif; font-size: 13px; background: rgba(0, 0, 0, 0.45); border: 1px solid rgba(214, 178, 94, 0.35); }
+.kcd-menu-block .level-clock { position: static; inset: auto; margin: 0; padding: 0; background: none; }
+.kcd-menu-block .level-debug { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin: 8px 0; }
+.kcd-menu-block .level-full-btn { position: static; display: inline-block; margin: 4px 6px 0 0; }
+.kcd-menu-block label { display: block; margin: 4px 0; }
+.kcd-help div { margin: 3px 0; }
+.kcd-help kbd { display: inline-block; min-width: 7em; margin-right: 8px; padding: 1px 6px; color: #2a1b0b; background: #e8dcc0; border-radius: 2px; font: 12px system-ui, sans-serif; }
+/* conversations: the game's font, its selector banner on the highlighted reply */
+.kcd-ui .level-subtitle { font-family: var(--kcd-font); font-size: 22px; background: rgba(0, 0, 0, 0.45); }
+.kcd-ui .level-subtitle b { color: var(--kcd-gold); font-weight: normal; }
+.kcd-ui .level-dialogue-menu { font-family: var(--kcd-font); font-size: 21px; background: rgba(8, 6, 4, 0.72); border-top: 1px solid rgba(214, 178, 94, 0.4); border-bottom: 1px solid rgba(214, 178, 94, 0.4); }
+.kcd-ui .level-dialogue-menu li.sel { color: #2a1b0b; text-shadow: none; background: #d6b25e var(--kcd-selector, none) center / 100% 100% no-repeat; }
+.kcd-ui .level-prompt, .kcd-ui .level-status { font-family: var(--kcd-font); font-size: 18px; }
+/* the trade window in the game's stone frame */
+/* (the frame image fills the box; its stone border takes about 12 % on each side, more below) */
+.kcd-ui .level-trade {
+  font-family: var(--kcd-font); border: 0; outline: none; border-radius: 0;
+  width: min(820px, 94%); height: min(86%, 820px); max-height: none; padding: 9% 11% 12%;
+  background: var(--kcd-window, linear-gradient(#10161a, #10161a)) center / 100% 100% no-repeat;
+}
+.kcd-ui .level-trade:focus { outline: none; }
+.kcd-ui .level-trade .cols { flex: 1; }
+.kcd-ui .level-trade header, .kcd-ui .level-trade footer { border-color: rgba(214, 178, 94, 0.35); }
+.kcd-ui .level-trade header h3 { font-weight: normal; font-size: 20px; color: var(--kcd-gold); }
+.kcd-ui .level-trade li { font-size: 16px; }
+.kcd-ui .level-trade button { font-family: var(--kcd-font); font-size: 15px; color: #2a1b0b; background: #d6b25e var(--kcd-selector, none) center / 100% 100% no-repeat; border: 0; padding: 2px 14px; }

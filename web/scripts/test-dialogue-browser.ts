@@ -107,7 +107,7 @@ console.log(status);
 await evaluate(`document.getElementById("world").click()`);
 const hud = () => evaluate<string>(`document.querySelector(".level-hud")?.textContent ?? ""`);
 await waitFor("Henry", () => hud().then((s) => (/Henry \(/.test(s) ? s : undefined)), 180000);
-await evaluate(`[...document.querySelectorAll("button")].find((b) => /Full window/.test(b.textContent))?.click()`);
+await evaluate(`[...document.querySelectorAll("button")].find((b) => /^. Full window/.test(b.textContent))?.click()`);
 let quiet = 0;
 await waitFor("the world", () => hud().then((s) => {
   quiet = /instances within/.test(s) && !/oading|Assembling|start once/.test(s) ? quiet + 1 : 0;

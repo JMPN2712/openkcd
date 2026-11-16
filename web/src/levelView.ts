@@ -12,6 +12,7 @@ import type { Cover } from "./cover.ts";
 import type { QuestSystem } from "./quests.ts";
 import { QuestBrains } from "./questTrees.ts";
 import { scenePlace, type ScenePlace } from "./sceneCameras.ts";
+import { GameMenu, applyGameUi, loadGameUi, lockPointer } from "./gameUi.ts";
 import { Inventory, ItemDb } from "./inventory.ts";
 import { ShopDb, Shops } from "./shops.ts";
 import { attachInventory } from "./playerState.ts";
@@ -85,7 +86,8 @@ let benchRun: { queue: PresetName[]; original: PresetName; results: PresetResult
 /** the last benchmark's report, shown when the view reopens at the original preset */
 let benchReport: string | null = null;
 /** the view fills the window (kept when the view is rebuilt: a preset change, the benchmark) */
-let fullWindow = false;
+/** the world view fills the window (the game's view); Exit in its menu returns to the file browser */
+let fullWindow = true;
 /** Time between drawn frames while the world is loading (ms): about 15 fps. */
 const LOADING_FRAME = 66;
 
@@ -208,10 +210,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     void systemInfo(adapterInfo).then((lines) => { if (benchRun) benchRun.system = lines; });
     nextBenchPreset();
   });
-  // debug and measuring controls sit folded under the main ones
-  const debugFold = el("details");
+  // debug and measuring controls: the in-game menu's Debug page
   const debugRow = el("div", "level-debug");
-  debugFold.append(el("summary", undefined, "Debug and benchmark"), debugRow);
   debugRow.append(benchBtn);
   // debug: play a dialogue sequence by id with the NPCs around Henry (how conversations start
   // waits for a research note); 46319 is the tailor's gossip about the baths
@@ -233,7 +233,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   newGameBtn.type = "button";
   newGameBtn.title = "Start the story: the quests' own trees run, the opening quest begins and Henry is taken to Skalitz (work in progress)";
   newGameBtn.addEventListener("click", () => { void startStory().catch((err) => { storyInfo = `New game: ${(err as Error).message}`; }); canvas.focus(); });
-  clockBar.append(newGameBtn, debugFold);
+  // (New Game is in the menu's main page; the button stays for scripts and tests)
+  newGameBtn.hidden = true;
+  clockBar.append(newGameBtn);
   let cameraRig: Promise<DialogueCameraRig | null> | null = null;
   let rig: DialogueCameraRig | null = null;
   const loadRig = () => {
@@ -305,11 +307,64 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     }
     canvas.focus();
   });
-  canvas.addEventListener("keydown", (e) => { if (e.code === "Escape") setFull(false); });
-  // while the pointer is captured (playing) the controls are out of the way; Esc frees it and
-  // shows them. The readout is one line; a click opens all of it
-  const onPointerLock = () => stage.classList.toggle("playing", document.pointerLockElement === canvas);
+  // ---- the in-game menu (gameUi.ts): Esc opens it, as in the game, and the game waits ----
+  const menu = new GameMenu();
+  stage.append(menu.el);
+  void loadGameUi(vfs, paks).then((a) => { applyGameUi(stage, a); buildMenu(a.text); }).catch(() => buildMenu((_k, f) => f));
+  /** the simulation's speed: the clock's setting, 0 while the menu is open */
+  const gameSpeed = () => (menu.isOpen ? 0 : Number(speedSel.value));
+  /** the mouse is let go on purpose (free-fly, a trade window): no menu then */
+  let releasing = false;
+  const resume = () => {
+    menu.close();
+    if (!stage.classList.contains("full")) setFull(true);
+    canvas.focus();
+    if (mode === "player") lockPointer(canvas);
+  };
+  menu.onResume = resume;
+  const settings = el("div", "kcd-menu-block");
+  const debugPage = el("div", "kcd-menu-block");
+  const help = el("div", "kcd-menu-block kcd-help");
+  help.innerHTML = [
+    ["Mouse", "look"], ["W A S D", "move"], ["Shift", "sprint"], ["X", "walk / run"], ["Space", "jump; in a conversation, skip the line"],
+    ["E", "talk, open doors and chests, sleep"], ["V", "first / third person (the wheel zooms)"], ["1 … 9, mouse", "choose in a conversation"],
+    ["Backspace", "leave a conversation at its menu"], ["F", "free flight (debug)"], ["Esc", "this menu"],
+  ].map(([k, v]) => `<div><kbd>${k}</kbd> ${v}</div>`).join("");
+  const readoutBox = el("input");
+  readoutBox.type = "checkbox";
+  const readoutLabel = el("label", undefined);
+  readoutLabel.append(readoutBox, " Show the readout (frame rate, memory, position)");
+  const showReadout = (on: boolean) => { stage.classList.toggle("show-readout", on); readoutBox.checked = on; try { localStorage.setItem("openkcd.readout", on ? "1" : "0"); } catch { /* private window */ } };
+  readoutBox.addEventListener("change", () => showReadout(readoutBox.checked));
+  try { showReadout(localStorage.getItem("openkcd.readout") === "1"); } catch { showReadout(false); }
+  const buildMenu = (t: (key: string, fallback: string) => string) => {
+    settings.replaceChildren(clockBar);
+    debugPage.replaceChildren(readoutLabel, debugRow, fullBtn, marketBtn);
+    menu.setPages({
+      main: { title: "OpenKCD", items: [
+        { label: t("ui_Resume", "Resume"), act: resume },
+        { label: t("ui_NewGame", "New Game"), act: () => { newGameBtn.click(); resume(); } },
+        { label: t("ui_Settings", "Settings"), act: () => menu.show("settings") },
+        { label: t("ui_FAQ", "Help"), act: () => menu.show("help") },
+        { label: "Debug", act: () => menu.show("debug") },
+        { label: t("ui_Exit", "Exit"), act: () => { menu.close(); setFull(false); } },
+      ] },
+      settings: { title: t("ui_Settings", "Settings"), items: [{ node: settings }, { label: t("ui_Back", "Back"), act: () => menu.show("main") }] },
+      help: { title: t("ui_FAQ", "Help"), items: [{ node: help }, { label: t("ui_Back", "Back"), act: () => menu.show("main") }] },
+      debug: { title: "Debug", items: [{ node: debugPage }, { label: t("ui_Back", "Back"), act: () => menu.show("main") }] },
+    });
+  };
+  // losing the mouse (Esc) opens the menu, unless it was let go on purpose
+  const onPointerLock = () => {
+    const locked = document.pointerLockElement === canvas;
+    stage.classList.toggle("playing", locked);
+    if (locked) { menu.close(); releasing = false; return; }
+    if (releasing || trade?.isOpen) { releasing = false; return; }
+    menu.open();
+  };
   document.addEventListener("pointerlockchange", onPointerLock);
+  // Esc without the mouse captured (free flight, or before the first click) opens it too
+  canvas.addEventListener("keydown", (e) => { if (e.code === "Escape" && !menu.isOpen && !dialogue.talkingTo && !trade?.isOpen) { e.preventDefault(); menu.open(); } });
   hud.title = "Click to show or hide the full readout";
   hud.addEventListener("click", () => hud.classList.toggle("open"));
   const ctx = canvas.getContext("webgpu")!;
@@ -584,7 +639,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     shops.grants = (shop) => diet.shopGrants(shop);
     trade = new TradePanel(shops, bag, itemDb, (k) => text.get(k));
     // closing it gives the view back (the click or key that closed it may capture the pointer again)
-    trade.onClose = () => { canvas.focus(); if (mode === "player") void canvas.requestPointerLock?.(); };
+    trade.onClose = () => { canvas.focus(); if (mode === "player") lockPointer(canvas); };
     stage.append(trade.el);
     dialogue.hold = () => !!trade?.isOpen;
     dialogue.onTrade = (npc) => { const shop = shopDb.shopOf(npc.soul); if (shop !== undefined) trade?.open(shop); };
@@ -835,7 +890,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (!e.repeat) {
       if (e.code === "KeyF" && player) {
         mode = mode === "player" ? "fly" : "player";
-        if (mode === "fly") document.exitPointerLock?.();
+        if (mode === "fly") { releasing = true; document.exitPointerLock?.(); }
       }
       if ((e.code === "KeyX" || e.code === "CapsLock") && player) player.walk = !player.walk;
       if (e.code === "KeyG") { splitPasses = !splitPasses; timer.smoothed.clear(); }
@@ -871,7 +926,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   canvas.addEventListener("pointerdown", (e) => {
     canvas.focus();
     if (mode === "player") {
-      if (document.pointerLockElement !== canvas) void canvas.requestPointerLock?.();
+      if (document.pointerLockElement !== canvas) lockPointer(canvas);
       // in a conversation a click picks the highlighted choice
       else if (dialogue.talkingTo) dialogue.click();
       return;
@@ -932,7 +987,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     for (const id of doorsMoved) showDoor(id);
     for (const id of chests.step(dt)) showChest(id);
     // (timed choices count play time: the game clock's speed over its normal ×15, 0 when paused)
-    dialogue.update(dt, (dt * Number(speedSel.value)) / 15);
+    dialogue.update(dt, (dt * gameSpeed()) / 15);
     if (dialogue.info) { dialogueInfo = dialogue.info; dialogue.info = ""; }
     if (mode === "player" && player) {
       // Henry stands still while he talks
@@ -1051,13 +1106,13 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (!canvas.width) return;
     if (!streamedAt || Math.hypot(cam.pos[0] - streamedAt[0], cam.pos[1] - streamedAt[1]) > STREAM_STEP) void stream();
     if (!grass || Math.hypot(cam.pos[0] - grass.at[0], cam.pos[1] - grass.at[1]) > q.grass / 4) void streamGrass();
-    if (!calendar.paused) minute = (minute + (dt * Number(speedSel.value)) / 60) % 1440;
+    if (!calendar.paused) minute = (minute + (dt * gameSpeed()) / 60) % 1440;
     // (a new day when the clock wraps by itself; the slider and scripts move it within the day)
     const day = Math.floor(calendar.world / 86400) + (minute * 60 < (calendar.world % 86400) - 43200 ? 1 : 0);
     calendar.world = day * 86400 + minute * 60;
     // one simulation clock for behaviour trees and NPC animation, scaled like the game clock
     // (×15 = real time): legs keep pace with movement at every speed, and pausing freezes both
-    const simDt = (dt * Number(speedSel.value)) / 15;
+    const simDt = (dt * gameSpeed()) / 15;
     simSeconds += simDt;
     calendar.game = simSeconds;
     if (!worldLoading) npcAi?.tick(simDt);

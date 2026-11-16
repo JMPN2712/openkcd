@@ -159,7 +159,9 @@ await evaluate(`document.getElementById("world").click()`);
 const hud = () => evaluate<string>(`document.querySelector(".level-hud")?.textContent ?? ""`);
 await waitFor("Henry", () => hud().then((s) => (/Henry \(/.test(s) ? s : undefined)), 180000);
 // the view fills the window, as a player has it (--windowed: the page's own small canvas)
-if (!process.argv.includes("--windowed")) await evaluate(`[...document.querySelectorAll("button")].find((b) => /Full window/.test(b.textContent))?.click()`);
+// (the world view opens full window; --windowed puts it back in the page)
+if (process.argv.includes("--windowed")) await evaluate(`[...document.querySelectorAll("button")].find((b) => /Exit full window/.test(b.textContent))?.click()`);
+else await evaluate(`[...document.querySelectorAll("button")].find((b) => /^. Full window/.test(b.textContent))?.click()`);
 // until the models within the streaming radius have loaded, then `settle` more seconds (textures)
 // (ten quiet seconds in a row: the scene complete and the NPCs assembled; they start once it is)
 let quiet = 0, worldAt = 0;
@@ -226,6 +228,24 @@ if (tour) {
     console.log(`tour ${i}: ${(await hud()).replace(/^.*?Henry/, "Henry").slice(0, 160)} · focus ${await evaluate<string>(`document.activeElement?.className ?? "none"`)}, document focused ${await evaluate<boolean>(`document.hasFocus()`)}`);
   }
   for (const k of held) await tk(k, "keyUp");
+}
+// --menu=FILE.png: Esc's in-game menu, its settings page, then closed again (screenshots)
+const menuShot = arg("menu", "");
+if (menuShot) {
+  await evaluate(`document.querySelector(".level-canvas").focus()`);
+  await page("Input.dispatchKeyEvent", { type: "keyDown", code: "Escape", key: "Escape", windowsVirtualKeyCode: 27 });
+  await page("Input.dispatchKeyEvent", { type: "keyUp", code: "Escape", key: "Escape", windowsVirtualKeyCode: 27 });
+  await sleep(800);
+  const snap = async (f: string) => { const { data } = await page("Page.captureScreenshot", { format: "png" }); await writeFile(f, Buffer.from(data, "base64")); console.log(`menu screenshot: ${f}`); };
+  console.log(`menu open: ${await evaluate<boolean>(`!document.querySelector(".kcd-menu").hidden`)}, buttons: ${await evaluate<string>(`[...document.querySelectorAll(".kcd-menu-button")].map((b) => b.textContent).join(" | ")`)}`);
+  await snap(menuShot);
+  await evaluate(`[...document.querySelectorAll(".kcd-menu-button")].find((b) => /Settings/.test(b.textContent))?.click()`);
+  await sleep(400);
+  await snap(menuShot.replace(/\.png$/, "-settings.png"));
+  await evaluate(`[...document.querySelectorAll(".kcd-menu-button")].find((b) => /Back/.test(b.textContent))?.click()`);
+  await evaluate(`[...document.querySelectorAll(".kcd-menu-button")].find((b) => /Resume/.test(b.textContent))?.click()`);
+  await sleep(400);
+  console.log(`menu closed: ${await evaluate<boolean>(`document.querySelector(".kcd-menu").hidden`)}`);
 }
 // --shot=FILE.png: a screenshot of the view after the readings
 const shot = arg("shot", "");
