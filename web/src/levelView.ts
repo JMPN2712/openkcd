@@ -597,7 +597,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (!n) return `${name}: not shown`;
     const p = npcWorld.drawn(n.entity.id) ?? n.placement;
     const st = npcAi?.state(n.entity.id);
-    return `${name}: ${p.pos.map((v) => v.toFixed(1)).join(",")} ${p.pose} ${p.where}${st ? ` tree ${st.mode}${st.fragment ? ` ${st.fragment}` : ""}` : " (no tree)"}${npcWorld.running.get(n.entity.id) ? ` [${npcWorld.running.get(n.entity.id)}]` : ""}${npcWorld.pinned.has(n.entity.id) ? " pinned" : ""}`;
+    return `${name}: ${p.pos.map((v) => v.toFixed(1)).join(",")} ${p.pose} ${p.where}${st ? ` tree ${st.mode}${st.fragment ? ` ${st.fragment}` : ""}` : " (no tree)"}${npcWorld.running.get(n.entity.id) ? ` [${npcWorld.running.get(n.entity.id)}]` : ""}${npcWorld.pinned.has(n.entity.id) ? " pinned" : ""} {${npcWorld.moverInfo(n.entity.id)}}`;
   }).join(" | ");
   const npcWorld = new NpcWorld(vfs, npcEntities, schedules, (x, y) => heightAt(terrain, x, y));
   dlgBtn.addEventListener("click", () => {

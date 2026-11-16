@@ -1986,8 +1986,18 @@ export class AiWorld {
       }
       case "Move": case "MoveAndAct": case "ExactMove": case "PlayAnimation": {
         let until: number | null = null;
+        // MoveAndAct: after the move, its Action child (the sit-down on a bench, a chair's step-in);
+        // left out, NPCs stood on benches and chairs where they should have sat
+        const action = n.tag === "MoveAndAct" ? kids.find((k) => k.tag === "Action")?.children.find((k) => k.tag !== "OutputBreakpoints") : undefined;
+        let body: Task | null = null, arrived = false;
         return {
           tick: () => {
+            if (arrived && action) {
+              body ??= this.runner.make(action, c.scope);
+              const s = body.tick();
+              if (s !== "running") { body = null; arrived = false; }
+              return s;
+            }
             if (until === null) {
               const npc = this.current.npc;
               let a: Action;
@@ -2036,9 +2046,10 @@ export class AiWorld {
             }
             if (this.o.realTime() < until) return "running";
             until = null;
+            if (action) { arrived = true; return "running"; }
             return "success";
           },
-          abort: () => { until = null; },
+          abort: () => { until = null; body?.abort(); body = null; arrived = false; },
         };
       }
     }

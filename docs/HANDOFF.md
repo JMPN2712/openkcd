@@ -430,6 +430,28 @@ follows them):
   shops with a trade panel (the tailor's "Let's talk trade" opens it), the
   shop and calendar script functions, diet mode's shop grants.
   `test-shops.ts`; `test-quest-opening.ts` now buys the charcoal.
+- #58 (2026-11-15): women work, NPCs sit on benches, no NPC stuck short of
+  its spot.
+  - **Women's animations:** the fragment database for women is
+    `wh_female_database.adb`; `AnimLibrary` asked for
+    `kcd_female_database.adb`, which doesn't exist, so every woman's
+    work fragment failed and they stood at their work (Henry's mother).
+  - **MoveAndAct** ran as a leaf: the move, but never its `Action` child
+    (a bench's or a chair's sit-down), so NPCs stood on benches. It now
+    runs the child after the move.
+  - **Stuck short of the spot:** the crowd's navmesh rule (no step off the
+    mesh) kept NPCs from their own work spots just off it, and one whose
+    tree jumped a few metres walked into a wall and stayed there in the
+    stand pose (Martin, behind the house, not at his forge). The last
+    1.5 m to its spot may leave the mesh, and an NPC that wants to move
+    and hasn't for 1.5 s is put at its spot.
+  - `__openkcdNpcs` shows each NPC's crowd mover (goal, distance, speed).
+  - **Beds:** two straw beds (`bed_cottage_02`) in Skalitz's pre-raid layer
+    are marked "normal" and their sleepers floated 0.45 m above the straw
+    (test-beds failed since #56); that model lies as a ground bed
+    (ASSUMPTION).
+  - **Open:** "NPCs walking through the Skalitz gates": which gate, and
+    shut or open, wasn't clear yet.
 - #57 (2026-11-15): Kunesh can be talked to, NPCs don't walk through
   walls, the burned Skalitz's debris gone.
   - **Detail layers:** 44 layers with `Specs="1"` (PC-only detail, named

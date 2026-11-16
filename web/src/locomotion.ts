@@ -215,8 +215,9 @@ const FRAGMENTS = {
  * uses (with the "player" tag), resolved to .bspace/.comb files or plain clips.
  */
 export async function loadLocomotion(vfs: Vfs, clipOf: (name: string) => Clip | null, rootController: number, gender = "male"): Promise<LoadedLocomotion> {
+  // (the women's database is wh_female_database.adb)
   const adbPath = `animations/mannequin/adb/kcd_${gender}_database.adb`;
-  const hit = vfs.lookup(adbPath);
+  const hit = vfs.lookup(adbPath) ?? vfs.lookup(`animations/mannequin/adb/wh_${gender}_database.adb`);
   if (!hit) throw new Error(`${adbPath} not found`);
   const adb = parseAdb(new TextDecoder().decode(await vfs.read(hit)));
   const files = new Map<string, string>();

@@ -35,7 +35,11 @@ export interface Placement {
  * tent 41.
  */
 export function lyingTag(bed: EntityInfo): string {
-  const kind = /\besBedTypes="([^"]*)"/.exec(bed.propsXml ?? "")?.[1] ?? "normal";
+  let kind = /\besBedTypes="([^"]*)"/.exec(bed.propsXml ?? "")?.[1] ?? "normal";
+  // ASSUMPTION: bed_cottage_02 is a straw bed on the floor (131 of Rataje's are "ground"); the two
+  // in Skalitz's pre-raid layer marked "normal" lie as ground beds too (the normal helper left the
+  // sleeper 0.45 m above the straw)
+  if (kind === "normal" && /bed_cottage_02\.cgf$/i.test(bed.model ?? "")) kind = "ground";
   const side = /right$/i.test(bed.soHelpers ?? "") ? "Right" : "Left";
   switch (kind) {
     case "bench": return `lying${side}`;

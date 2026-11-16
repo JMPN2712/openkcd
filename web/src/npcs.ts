@@ -43,6 +43,10 @@ interface Mover {
   shown?: Placement;
   yaw: number;
   goalZ?: number;
+  /** the spot it heads for this step (x, y) */
+  goal?: [number, number];
+  /** seconds it has wanted to move without moving */
+  stuck?: number;
   /** the navmesh polygon the agent stood on at the last step (stepCrowd's on-mesh check) */
   poly?: PolyRef | null;
 }
@@ -53,6 +57,8 @@ const BODY_RADIUS = 0.3;
 /** How far off the navmesh (m) a step may land and still count as on it (stepCrowd). */
 const NAV_STEP_SLACK = 0.15;
 /** Plans further than this (m) from where an NPC is restart it there instead of walking. */
+/** seconds an NPC may want to move without moving before it is put at its spot */
+const STUCK_SECONDS = 1.5;
 const SNAP_DISTANCE = 8;
 
 const yawOf = (q: [number, number, number, number]) => 2 * Math.atan2(q[3], q[0]);
@@ -380,6 +386,7 @@ export class NpcWorld {
       }
       a.vel = a.avoids ? a.vel : a.pref;
       m.goalZ = goal[2];
+      m.goal = [goal[0], goal[1]];
       agents.push(a);
     });
     avoid(agents, dt);
@@ -396,7 +403,10 @@ export class NpcWorld {
         const on = (x: number, y: number) => nav.onMesh([x, y, a.pos[2]], NAV_STEP_SLACK, 1.2, m.poly);
         const here = on(a.pos[0], a.pos[1]);
         m.poly = here;
-        if (here && !on(nx, ny)) {
+        // the last steps to its own spot (a forge, a stool, a counter: authored, often just off the
+        // mesh) are taken: refused, the NPC never arrived and stood beside its work in the stand pose
+        const g = m.goal, last = !!g && m.ref.pose !== "walk" && Math.hypot(g[0] - a.pos[0], g[1] - a.pos[1]) < 1.5;
+        if (here && !last && !on(nx, ny)) {
           if (on(nx, a.pos[1])) { a.pos[0] = nx; a.vel[1] = 0; }
           else if (on(a.pos[0], ny)) { a.pos[1] = ny; a.vel[0] = 0; }
           else a.vel = [0, 0];
@@ -405,6 +415,20 @@ export class NpcWorld {
       const z = m.goalZ ?? m.agent.pos[2];
       // sleepers keep the bed helper's height (the bench's top lifted them 0.45 m)
       m.agent.pos[2] = m.ref.pose === "sleep" ? z : this.surface?.(m.agent.pos[0], m.agent.pos[1], z) ?? z;
+    }
+    // stuck: an NPC that wants to move and hasn't for STUCK_SECONDS (a wall or a fence between it
+    // and its spot that the navmesh rule won't let it cross) is put at its spot, not left standing
+    // there: Henry's father stood behind the house wall, away from his forge, in the stand pose
+    for (const n of npcs) {
+      const m = this.movers.get(n.entity.id)!, a = m.agent, g = m.goal;
+      const wants = Math.hypot(a.pref[0], a.pref[1]) > 0.05 && !this.held.has(n.entity.id) && !this.pinned.has(n.entity.id);
+      const moved = Math.hypot(a.vel[0], a.vel[1]) * dt > 0.002;
+      m.stuck = wants && !moved ? (m.stuck ?? 0) + dt : 0;
+      if (g && m.stuck > STUCK_SECONDS && m.ref.pose !== "walk") {
+        a.pos = [g[0], g[1], m.goalZ ?? a.pos[2]];
+        a.vel = [0, 0];
+        m.stuck = 0;
+      }
     }
     this.collideBodies(npcs);
     npcs.forEach((n) => {
@@ -420,6 +444,14 @@ export class NpcWorld {
       const pose: Pose = moving ? "walk" : settled && !face && m.ref.pose !== "walk" ? m.ref.pose : "stand";
       m.shown = { ...m.ref, pos: [...a.pos], rot: [Math.cos(m.yaw / 2), 0, 0, Math.sin(m.yaw / 2)], pose };
     });
+  }
+
+  /** For debugging: NPC `id`'s crowd mover (where it is, its goal, its wish to move). */
+  moverInfo(id: number): string {
+    const m = this.movers.get(id);
+    if (!m) return "no mover";
+    const a = m.agent, g = m.goal;
+    return `at ${a.pos.map((v) => v.toFixed(2)).join(",")} goal ${g ? `${g[0].toFixed(2)},${g[1].toFixed(2)} (${Math.hypot(g[0] - a.pos[0], g[1] - a.pos[1]).toFixed(2)} m)` : "-"} pref ${Math.hypot(a.pref[0], a.pref[1]).toFixed(2)} vel ${Math.hypot(a.vel[0], a.vel[1]).toFixed(2)} ref ${m.ref.pose}${this.held.has(id) ? " held" : ""}`;
   }
 
   /** NPC `id`'s current walking speed (m/s) from the crowd step, if it has moved. */

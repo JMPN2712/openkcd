@@ -70,6 +70,16 @@ export class AnimLibrary {
 
   private aliasClips = new Map<string, Promise<Clip | null>>();
 
+  /**
+   * The gender's fragment database: kcd_male_database.adb, wh_female_database.adb (there is no
+   * kcd_female_database: asking for it failed every woman's fragment, so women stood at their work)
+   */
+  private loadAdb(): Promise<Map<string, FragmentVariant[]>> {
+    const hit = [`kcd_${this.gender}_database.adb`, `wh_${this.gender}_database.adb`].map((f) => this.vfs.lookup(`animations/mannequin/adb/${f}`)).find(Boolean);
+    if (!hit) return Promise.reject(new Error(`no fragment database for ${this.gender}`));
+    return this.vfs.read(hit).then((b) => parseAdb(new TextDecoder().decode(b)));
+  }
+
   private loadDba(path: string): Promise<Dba> {
     // (decoded in the frame's shared work budget)
     return this.vfs.read(this.vfs.lookup(path)!).then(async (b) => { await workSlice(); return new Dba(b); });
@@ -129,7 +139,7 @@ export class AnimLibrary {
     let p = this.clips.get(key);
     if (!p) {
       p = (async () => {
-        this.adb ??= this.vfs.read(this.vfs.lookup(`animations/mannequin/adb/kcd_${this.gender}_database.adb`)!).then((b) => parseAdb(new TextDecoder().decode(b)));
+        this.adb ??= this.loadAdb();
         const has = new Set(state.map((t) => t.toLowerCase())), wanted = new Set(want.map((t) => t.toLowerCase()));
         let best: FragmentVariant | null = null, bestScore = -Infinity;
         for (const v of (await this.adb).get(id.toLowerCase()) ?? []) {
@@ -153,7 +163,7 @@ export class AnimLibrary {
     let p = this.clips.get(key);
     if (!p) {
       p = (async () => {
-        this.adb ??= this.vfs.read(this.vfs.lookup(`animations/mannequin/adb/kcd_${this.gender}_database.adb`)!).then((b) => parseAdb(new TextDecoder().decode(b)));
+        this.adb ??= this.loadAdb();
         const variants = (await this.adb).get(key) ?? [];
         const v = variants.find((x) => x.tags === "" && x.anims.length) ?? variants.find((x) => x.anims.length);
         const a = v?.anims[0];
