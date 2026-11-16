@@ -19,12 +19,15 @@ export interface DecalIndex {
   box: Float32Array;
   material: Int32Array;
   priority: Uint16Array;
+  /** the editor layer id (u32 @+28, as for brushes; 0 = none) */
+  layer: Uint32Array;
 }
 
 export function parseDecal(dv: DataView, p: number, out: DecalIndex, i: number): void {
   for (let k = 0; k < 12; k++) out.box[i * 12 + k] = dv.getFloat32(p + 44 + k * 4, true);
   out.material[i] = dv.getInt32(p + 108, true);
   out.priority[i] = dv.getUint32(p + 112, true);
+  out.layer[i] = dv.getUint32(p + 28, true);
 }
 
 /** Grid steps across a decal of this half-size: draped decals need enough vertices to follow the ground. */
@@ -56,6 +59,10 @@ export class Decals {
 
   material(i: number): number {
     return this.index.material[i];
+  }
+
+  layer(i: number): number {
+    return this.index.layer[i];
   }
 
   near(center: [number, number], radius: number): number[] {

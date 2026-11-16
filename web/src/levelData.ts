@@ -16,7 +16,7 @@ import { parseNpcEntities, parseEntityIndex, propEntities, type EntityInfo, type
 import { Schedules } from "./schedule.ts";
 import { NavMesh } from "./navmesh.ts";
 import { readLayers, type LayerContents } from "./profiles.ts";
-import { parseLayerNames, defaultHiddenLayers, layerDoors } from "./levelLayers.ts";
+import { parseLayerNames, defaultHiddenLayers, layerProps } from "./levelLayers.ts";
 import { ASSET_RE } from "./assets.ts";
 import { parseTimeOfDay, type TimeOfDay } from "./tod.ts";
 import { parseSurfaceTypes } from "./terrainDetail.ts";
@@ -27,6 +27,8 @@ export interface LevelData {
   objects: LevelObjects;
   cover?: Cover;
   npcEntities: NpcEntity[];
+  /** editor layers by id (leveldata.xml names, without their guid) */
+  layerNames: Map<number, string>;
   /** the layer files' entities and the level's profiles (profiles.ts), read on first use */
   layers: () => Promise<LayerContents>;
   schedules: Schedules;
@@ -88,9 +90,9 @@ export function levelData(paks: PakSource[], level: string, status: (s: string) 
       const surfaceTypes = parseSurfaceTypes(ldText);
       const npcEntities = parseNpcEntities(xml);
       const ents = parseEntityIndex(xml);
-      // the doors of the layers shown at game start (Skalitz's, Rattay castle hall's): drawn and usable
-      status("Reading doors from the editor layers…");
-      for (const d of await layerDoors(entries, (e) => readEntry(blob, e, undefined, false), layerNames, hiddenLayers)) if (!ents.has(d.id)) ents.set(d.id, d);
+      // the doors and props of the layers shown at game start (Skalitz's houses before the raid, Rattay castle hall's doors)
+      status("Reading furniture and doors from the editor layers…");
+      for (const d of await layerProps(entries, (e) => readEntry(blob, e, undefined, false), layerNames, hiddenLayers)) if (!ents.has(d.id)) ents.set(d.id, d);
       const schedules = new Schedules(npcEntities, ents);
       // the level's navmesh (recast.pak), for NPC walking routes
       const recast = paks.find((x) => x.path.toLowerCase() === `data/levels/${level}/recast.pak`);
@@ -120,7 +122,7 @@ export function levelData(paks: PakSource[], level: string, status: (s: string) 
       // the editor layers' entities and the level's profiles, read when a new game asks for them
       let layers: Promise<LayerContents> | null = null;
       const readLayerFiles = () => (layers ??= readLayers(entries, (e) => readEntry(blob, e, undefined, false)));
-      return { layers: readLayerFiles, occluders, terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(blob, entries), roads: new Roads(blob, dataStart(blob, entry), objects.roads), decals: new Decals(objects.decalIndex, terrain) };
+      return { layerNames, layers: readLayerFiles, occluders, terrain, objects, cover, npcEntities, schedules, props: propEntities(ents), ents, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(blob, entries), roads: new Roads(blob, dataStart(blob, entry), objects.roads), decals: new Decals(objects.decalIndex, terrain) };
     })();
     p.catch(() => dataCache.delete(pakPath));
     dataCache.set(pakPath, p);

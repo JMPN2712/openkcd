@@ -171,7 +171,7 @@ export function parseLevelObjects(bytes: Uint8Array, offset: number): LevelObjec
     vegAngle: new Float32Array(nVeg),
     water,
     roads: roadIndex(dv, roadAt),
-    decalIndex: { box: new Float32Array(decals * 12), material: new Int32Array(decals), priority: new Uint16Array(decals) },
+    decalIndex: { box: new Float32Array(decals * 12), material: new Int32Array(decals), priority: new Uint16Array(decals), layer: new Uint32Array(decals) },
     decals,
     nodes: 0,
     skippedTypes,

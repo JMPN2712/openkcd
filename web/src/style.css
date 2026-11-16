@@ -434,3 +434,8 @@ details.part p { margin: 4px 0; }
 .kcd-loading p { margin: 0 0 7%; font-size: 18px; text-shadow: 0 1px 3px #000; min-height: 1.2em; }
 .kcd-loading-gate { width: 28px; height: 28px; margin-bottom: 10px; border: 3px solid rgba(214, 178, 94, 0.25); border-top-color: var(--kcd-gold); border-radius: 50%; animation: kcd-spin 1.2s linear infinite; }
 @keyframes kcd-spin { to { transform: rotate(360deg); } }
+
+/* the main menu (gameUi.ts GameMenu, home "start"): the game's artwork, the buttons on its parchment */
+.kcd-menu.start { background: #000 var(--kcd-start-art, none) center / cover no-repeat; background-blend-mode: normal; }
+.kcd-menu.start .kcd-menu-panel { background: var(--kcd-menu-bg, rgba(10, 8, 6, 0.85)) center / cover no-repeat; box-shadow: 0 0 40px 20px rgba(0, 0, 0, 0.6); padding: 26px 18px; }
+.kcd-menu.start h2 { font-size: 42px; }

@@ -98,6 +98,8 @@ export class GameMenu {
   private page = "main";
   /** Esc (or Resume) closes it: the view takes the mouse back */
   onResume: (() => void) | null = null;
+  /** the page Back and Esc return to ("main" in play, "start" for the main menu) */
+  home = "main";
 
   constructor() {
     this.el = document.createElement("div");
@@ -141,6 +143,8 @@ export class GameMenu {
     const p = this.pages[page];
     if (!p) return;
     this.page = page;
+    // the main menu sits over the game's artwork
+    this.el.classList.toggle("start", this.home === "start");
     this.titleEl.textContent = p.title;
     this.buttons = [];
     for (const n of [...this.list.children]) if (n instanceof HTMLElement && !n.classList.contains("kcd-menu-button")) this.store.append(n);
@@ -171,7 +175,7 @@ export class GameMenu {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) { if (e.code !== "Escape") return; }
     if (e.code === "Escape" || e.code === "Backspace") {
       e.preventDefault();
-      if (this.page !== "main") this.show("main"); else this.onResume?.();
+      if (this.page !== this.home) this.show(this.home); else if (this.home === "main") this.onResume?.();
     } else if (e.code === "ArrowDown" || e.code === "KeyS") { e.preventDefault(); this.mark(this.sel + 1); }
     else if (e.code === "ArrowUp" || e.code === "KeyW") { e.preventDefault(); this.mark(this.sel - 1); }
     else if (e.code === "Enter" || e.code === "Space" || e.code === "KeyE") { e.preventDefault(); this.buttons[this.sel]?.click(); }
@@ -240,4 +244,9 @@ export class LoadingScreen {
       this.el.style.backgroundImage = `url("${u}")`;
     });
   }
+}
+
+/** One of the game's loading paintings as an image URL (the main menu's background). */
+export function artworkUrl(vfs: Vfs): Promise<string | null> {
+  return textureUrl(vfs, ARTWORK[Math.floor(Math.random() * ARTWORK.length)], 2048);
 }

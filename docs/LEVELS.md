@@ -153,7 +153,7 @@ The octree follows the terrain tree and runs exactly to the end of
   - Instances sit on the decoded terrain: height above ground has a median
     of −2 cm and p5–p95 of −6 to +1 cm. That's an independent check of the
     heightmap decoding.
-- **Decal (type 7):** a fixed 116 bytes. Skipped for now.
+- **Decal (type 7):** a fixed 116 bytes (`decals.ts`; the layer id at +28).
 - **Water volume (type 9):**
   - Fields: type, AABB, `u64 id` (+44), `i32 material` (+52; mostly
     `materials/terrain/river/river_sazava_02`, plus marshland and pond
@@ -438,12 +438,17 @@ Decoded by `web/src/navmesh.ts` and `tools/navmesh.py`.
 - **Layer names.** `leveldata.xml` lists 1,969 layers
   (`<Layer Name="re_executioner_state0{guid}" Id="1269" Specs="-1"/>`).
   Layered entities live in `layers/<name>{guid}.xml` (1,831 files, 87 MiB);
-  mission entities have no layer. Of them, only the **doors** of layers
-  shown at game start are loaded so far (`layerDoors` in
-  `web/src/levelLayers.ts`): 121 beyond the mission's 866, among them every
+  mission entities have no layer. The **doors and props** of layers shown
+  at game start are loaded (`layerProps` in `web/src/levelLayers.ts`, each
+  with its `layerId`): 119 doors beyond the mission's 866, among them every
   door of Skalitz (`sv_state0_prefabs`) and Rattay castle's hall door
-  (`hall_door_state0`). Other layered entities (NPCs, furniture, items)
-  are still left out.
+  (`hall_door_state0`), and Skalitz's furnishings before the raid (241
+  props in `sv_state0_prefabs`, 25 in `sv_state0`: chests, shelves, the
+  items on them). Without them its houses looked looted. The world build
+  skips props and decals of hidden layers. Layered NPCs come with the quest
+  profiles (`profiles.ts`).
+- **Decals** carry the layer id at +28 as brushes do. 588 belong to the
+  burned Skalitz (`sv_state1`), 163 to its dead (`q_returntoskalitz_deadbodies`).
 - **States coexist in the file:**
   - alternative versions of places (`re_executioner_state0` / `_state1`,
     `hall_state0` / `hall_state2` / `hall_state12`, burned or intact farms,

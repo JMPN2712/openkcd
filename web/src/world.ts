@@ -15,6 +15,8 @@ export interface GroundSource {
   center(i: number): [number, number, number];
   priority(i: number): number;
   material(i: number): number;
+  /** the editor layer the item belongs to (decals; 0 = none): hidden layers' items are left out */
+  layer?(i: number): number;
   merged(ids: number[]): Promise<CgfMesh>;
 }
 import { vegetationMatrix, type LevelObjects } from "./levelObjects.ts";
@@ -303,6 +305,7 @@ export async function buildWorldScene(
   for (const [s, src] of (opts.onlyBrushes ? [] : opts.ground ?? []).entries()) {
     const batches = new Map<string, number[]>();
     for (const i of src.near(center, radius + GROUND_TILE * 1.5)) {
+      if (src.layer && opts.hiddenLayers?.has(src.layer(i))) continue;
       const c = src.center(i), tx = Math.floor(c[0] / GROUND_TILE), ty = Math.floor(c[1] / GROUND_TILE);
       const dx = Math.max(tx * GROUND_TILE - center[0], 0, center[0] - (tx + 1) * GROUND_TILE);
       const dy = Math.max(ty * GROUND_TILE - center[1], 0, center[1] - (ty + 1) * GROUND_TILE);
@@ -321,6 +324,7 @@ export async function buildWorldScene(
   caches.generation++;
   for (const e of opts.onlyBrushes ? [] : opts.props ?? []) {
     if (Math.abs(e.pos[0] - center[0]) > radius || Math.abs(e.pos[1] - center[1]) > radius) continue;
+    if (e.layerId !== undefined && opts.hiddenLayers?.has(e.layerId)) continue;
     const m = poseMatrix(e.pos, e.rot);
     if (e.scale) for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) m[c * 4 + r] *= e.scale[c];
     const path = e.model!.toLowerCase().replace(/\\/g, "/");

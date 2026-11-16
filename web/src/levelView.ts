@@ -12,7 +12,7 @@ import type { Cover } from "./cover.ts";
 import type { QuestSystem } from "./quests.ts";
 import { QuestBrains } from "./questTrees.ts";
 import { scenePlace, type ScenePlace } from "./sceneCameras.ts";
-import { GameMenu, LoadingScreen, applyGameUi, loadGameUi, lockPointer } from "./gameUi.ts";
+import { GameMenu, LoadingScreen, applyGameUi, artworkUrl, loadGameUi, lockPointer } from "./gameUi.ts";
 import { Inventory, ItemDb } from "./inventory.ts";
 import { ShopDb, Shops } from "./shops.ts";
 import { attachInventory } from "./playerState.ts";
@@ -21,6 +21,7 @@ import { Calendar } from "./calendar.ts";
 import { CombatDb } from "./combat.ts";
 import { FightBars, FightView, REACH } from "./combatView.ts";
 import type { LayerContents } from "./profiles.ts";
+import { storyHiddenLayers } from "./levelLayers.ts";
 import { MergedMeshes } from "./mergedMeshes.ts";
 import { Roads } from "./roads.ts";
 import { Decals } from "./decals.ts";
@@ -114,6 +115,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let ents: Map<number, EntityInfo>;
   let readLayerFiles: () => Promise<LayerContents>;
   let hiddenLayers: Set<number>;
+  let layerNames: Map<number, string>;
   let tod: TimeOfDay | null;
   let surfaceTypes: Map<number, string>;
   let merged: MergedMeshes;
@@ -124,7 +126,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let device: GPUDevice;
   let adapterInfo: GPUAdapterInfo | null = null;
   try {
-    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, tod, surfaceTypes, merged, roads, decals, occluders, layers: readLayerFiles } = await levelData(paks, level, (m) => { status.textContent = m; }));
+    ({ terrain, objects, cover, npcEntities, schedules, props, ents, hiddenLayers, layerNames, tod, surfaceTypes, merged, roads, decals, occluders, layers: readLayerFiles } = await levelData(paks, level, (m) => { status.textContent = m; }));
     vfs = await levelVfs(paks, level, (m) => { status.textContent = m; });
     if (!navigator.gpu) throw new Error("WebGPU is not available in this browser (chrome://flags/#enable-unsafe-webgpu).");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
@@ -335,10 +337,17 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const loading = new LoadingScreen(vfs);
   stage.append(loading.el);
   loading.show("Loading the world…");
+  /** when the view last had something loading, and when the loading screen came up */
+  let quietSince = 0, loadingSince = performance.now();
+  /** the loading screen lifts after this long at most (a stream that never settles) */
+  const LOADING_MAX = 90;
   /** a new game is being set up (the layers, the move, the scene around Henry) */
   let storyLoading = false;
   let storyReadyAt = 0;
   void loadGameUi(vfs, paks).then((a) => { applyGameUi(stage, a); buildMenu(a.text); }).catch(() => buildMenu((_k, f) => f));
+  void artworkUrl(vfs).then((u) => { if (u) stage.style.setProperty("--kcd-start-art", `url("${u}")`); });
+  /** the main menu comes up once, when the world has first loaded (?no-menu: straight into play) */
+  let startMenuDone = new URLSearchParams(location.search).has("no-menu");
   /** the simulation's speed: the clock's setting, 0 while the menu is open */
   const gameSpeed = () => (menu.isOpen ? 0 : Number(speedSel.value));
   /** the mouse is let go on purpose (free-fly, a trade window): no menu then */
@@ -377,9 +386,17 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         { label: "Debug", act: () => menu.show("debug") },
         { label: t("ui_Exit", "Exit"), act: () => { menu.close(); setFull(false); } },
       ] },
-      settings: { title: t("ui_Settings", "Settings"), items: [{ node: settings }, { label: t("ui_Back", "Back"), act: () => menu.show("main") }] },
-      help: { title: t("ui_FAQ", "Help"), items: [{ node: help }, { label: t("ui_Back", "Back"), act: () => menu.show("main") }] },
-      debug: { title: "Debug", items: [{ node: debugPage }, { label: t("ui_Back", "Back"), act: () => menu.show("main") }] },
+      // the main menu, when the world has first loaded
+      start: { title: "OpenKCD", items: [
+        { label: t("ui_NewGame", "New Game"), act: () => { menu.home = "main"; newGameBtn.click(); resume(); } },
+        { label: "Explore Rataje", act: () => { menu.home = "main"; resume(); } },
+        { label: t("ui_Settings", "Settings"), act: () => menu.show("settings") },
+        { label: t("ui_FAQ", "Help"), act: () => menu.show("help") },
+        { label: t("ui_Exit", "Exit"), act: () => { menu.close(); menu.home = "main"; setFull(false); } },
+      ] },
+      settings: { title: t("ui_Settings", "Settings"), items: [{ node: settings }, { label: t("ui_Back", "Back"), act: () => menu.show(menu.home) }] },
+      help: { title: t("ui_FAQ", "Help"), items: [{ node: help }, { label: t("ui_Back", "Back"), act: () => menu.show(menu.home) }] },
+      debug: { title: "Debug", items: [{ node: debugPage }, { label: t("ui_Back", "Back"), act: () => menu.show(menu.home) }] },
     });
   };
   // losing the mouse (Esc) opens the menu, unless it was let go on purpose
@@ -406,7 +423,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const casters = new ShadowCasters();
   renderer.setShadow(shadowMap);
   // the ground's detail layers (grass, soil, cobbles…) decode in the background
-  void loadDetailLayers(vfs, surfaceTypes, q.terrainDetail).then((d) => { if (!stopped) renderer.setDetail(d); }).catch((err) => console.warn("terrain detail:", err));
+  let detailReady = false;
+  void loadDetailLayers(vfs, surfaceTypes, q.terrainDetail).then((d) => { if (!stopped) renderer.setDetail(d); }).catch((err) => console.warn("terrain detail:", err)).finally(() => { detailReady = true; });
   // textures shared by the object, grass, NPC and player renderers, sharper for what is near
   const pool = new TexturePool(device, vfs, { budget: q.textures.budgetMiB * 2 ** 20, maxDim: q.textures.maxDim });
   // (instance indices: the scene's matrices go up once per streaming step, see ModelRenderer.indexed)
@@ -443,6 +461,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   // the far field: every town's uber-LOD (94 in Rataje), drawn beyond the streamed objects
   const farR = new ModelRenderer(device, format, passSetup.sampleCount, { ...passSetup, pool });
   let far: { scene: WorldScene; out: Float32Array[]; counts: number[] } | null = null;
+  let farFieldReady = false;
   void buildWorldScene(vfs, terrain, objects, [terrain.size / 2, terrain.size / 2], terrain.size, {
     maxModels: 1000, maxTextureDim: q.maxTextureDim, caches: newWorldCaches(), hiddenLayers, normalMaps: false, onlyBrushes: isUberLod,
   }).then((scene) => {
@@ -450,10 +469,11 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const items = lodItems(scene);
     farR.setModels(items);
     far = { scene, out: items.map((it) => new Float32Array(it.capacity * 16)), counts: items.map(() => 0) };
-  }).catch((err) => console.warn("far field:", err));
+  }).catch((err) => console.warn("far field:", err)).finally(() => { farFieldReady = true; });
   // every tree beyond the streamed ones, as cards (built in the background: a second or two)
   const farTrees = new FarTrees(device, format, passSetup);
-  void farTrees.build(vfs, terrain, objects, { maxTextureDim: q.maxTextureDim }).catch((err) => console.warn("far trees:", err));
+  let farTreesReady = false;
+  void farTrees.build(vfs, terrain, objects, { maxTextureDim: q.maxTextureDim }).catch((err) => console.warn("far trees:", err)).finally(() => { farTreesReady = true; });
   const sky = new SkyRenderer(device, format, passSetup);
   // GPU time per pass (HUD); G splits the opaque pass by what it draws, to time each part
   const timer = new GpuTimer(device);
@@ -543,8 +563,18 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     mode = "player";
     playerInfo = "";
   }).catch((err) => { playerInfo = `Henry: ${(err as Error).message}`; });
+  // debugging (the browser harness): a quest call (StartObjective …), and Henry beside a named NPC
+  (globalThis as { __openkcdQuest?: (fn: string, q: string, o?: string) => boolean }).__openkcdQuest = (fn, q, o) => viewQuests?.apply(fn, q, o) ?? false;
+  (globalThis as { __openkcdGoto?: (name: string) => string }).__openkcdGoto = (name) => {
+    const e = [...ents.values()].find((x) => x.name === name && /^NPC/.test(x.cls) && (!story || !x.layer || story.added.has(x.id))) ?? [...ents.values()].find((x) => x.name === name);
+    if (!e || !player) return "not found";
+    const n = npcs.find((x) => x.entity.id === e.id);
+    const p = n ? (npcWorld.drawn(e.id) ?? n.placement).pos : e.pos;
+    teleportHenry(p[0] + 1.4, p[1], p[2] + 1, Math.PI);
+    return `${name} at ${p.map((v) => v.toFixed(1)).join(",")}`;
+  };
   // debugging: where named NPCs are and what they do (the browser harness reads it)
-  (globalThis as { __openkcdNpcs?: (names: string[]) => string }).__openkcdNpcs = (names) => names.map((name) => {
+  (globalThis as { __openkcdNpcs?: (names: string[]) => string }).__openkcdNpcs = (names) => (names[0] === "*" ? npcs.map((x) => x.entity.name) : names).map((name) => {
     const n = npcs.find((x) => x.entity.name === name);
     if (!n) return `${name}: not shown`;
     const p = npcWorld.drawn(n.entity.id) ?? n.placement;
@@ -600,10 +630,13 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const fightBars = new FightBars();
   stage.append(fightBars.el);
   /** Start a fist fight with an NPC shown (debug control; the fight trees will decide this later). */
+  /** a fight is being set up (the combat tables loading) */
+  let fightStarting = false;
   const startFight = async (n: WorldNpc) => {
-    if (!player || !animLibs || fightView) { fightInfo = fightView ? "Fight: already fighting" : "Fight: still loading"; return; }
+    if (!player || !animLibs || fightView || fightStarting) { fightInfo = fightView ? "Fight: already fighting" : "Fight: still loading"; return; }
     fightInfo = "Fight: loading the combat tables…";
-    const db = await (combatDb ??= CombatDb.load(vfs));
+    fightStarting = true;
+    const db = await (combatDb ??= CombatDb.load(vfs)).finally(() => { fightStarting = false; });
     const henry = db.fighter("dude", null), foe = db.fighter(n.entity.name, null);
     if (stopped || !henry || !foe || !player || !animLibs) { fightInfo = `Fight: no soul for ${n.entity.name}`; return; }
     const session = player, id = n.entity.id;
@@ -632,12 +665,22 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let story: { brains: QuestBrains; layers: LayerContents; added: Set<number>; tickedAt: number } | null = null;
   let storyInfo = "";
   let profilesChanged = false;
+  /** the hidden layers before a story (the default guess); a story's are derived from them */
+  const baseHiddenLayers = hiddenLayers;
   let storyShownAt = 0;
   /** The NPCs of the layers of the profiles switched on join the level's NPCs; the others' leave. */
   const syncProfileNpcs = () => {
     const w = npcAi?.world;
     if (!story || !w) return;
     profilesChanged = false;
+    // the scene shows what the quests' profiles switch on (looted houses, the dead, a burned
+    // village only once their quest says so): rebuilt around Henry when that changes
+    const next = storyHiddenLayers(layerNames, baseHiddenLayers, story.layers.profiles, w.profiles);
+    if (next.size !== hiddenLayers.size || [...next].some((id) => !hiddenLayers.has(id))) {
+      hiddenLayers = next;
+      streamedAt = null;
+      settledAt = null;
+    }
     const on = new Set<string>();
     for (const name of w.profiles) for (const l of story.layers.profiles.get(name)?.layers ?? []) on.add(l);
     const want = new Set(story.layers.npcs.filter((n) => on.has(story!.layers.npcLayer.get(n.id) ?? "")).map((n) => n.id));
@@ -731,6 +774,26 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       ents, lua, realTime: () => npcAi?.now ?? 0, worldTime: () => (npcAi?.now ?? 0) * 15, act: (a) => npcAi?.act(a) ?? 1,
       daycycleChange: (npc, f) => schedules.change(npc, f, minute),
       // conversations the trees ask for go to the dialogue (it starts them when the NPC is near)
+      // a quest's fight (q_skalitz: Kunesh against Henry): the NPC runs the custom behaviour it was
+      // asked for; its fight step is the view's fight, and the trees read the fighters' state
+      customBehavior: (npc, source, name, entity) => {
+        const n = npcs.find((x) => x.entity.id === npc);
+        const p = n ? (npcWorld.drawn(npc) ?? n.placement) : null;
+        if (n && p && npcAi) npcAi.startCustom(n.entity, source, name, entity, p.pos, p.rot);
+      },
+      fight: (npc, opponent) => {
+        const n = npcs.find((x) => x.entity.id === npc);
+        if (!n || opponent !== -1) return undefined;
+        if (!fightView || fightWith?.entity.id !== npc) void startFight(n).catch((err) => { fightInfo = `Fight: ${(err as Error).message}`; });
+        return { tick: () => (fightView || fightStarting ? "running" : "success"), abort: () => endFight() };
+      },
+      combatant: (id) => {
+        const f = fightView?.fight;
+        const i = !f ? -1 : id === -1 ? 0 : fightWith?.entity.id === id ? 1 : -1;
+        if (!f || i < 0) return { health: 100, unconscious: false, dead: false };
+        const st = f.a[i];
+        return { health: st.health, unconscious: st.out === "knockedOut", dead: st.out === "dead" };
+      },
       requestDialog: (r) => dialogue.requests?.request(r) ?? 0,
       dialogStatus: (id) => dialogue.requests?.status(id) ?? "failed",
       playerInDialog: () => !!dialogue.talkingTo,
@@ -1273,7 +1336,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
             }
           }
         }
-        if (n && ready) {
+        // (placed while the loading screen is up; the talk begins once it has lifted)
+        if (n && ready && !storyLoading) {
           storyInfo = `New game: ${n.entity.name} starts a conversation`;
           loadRig();
           void dialogue.talk({ soul: n.soul, name: n.entity.name, entity: n.entity.id }, asked).catch((err) => { storyInfo = `New game: ${(err as Error).message}`; });
@@ -1413,10 +1477,25 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       const pc = player.controller;
       const ready = !pendingPlace && worldReadyNear(pc.pos[0], pc.pos[1]);
       if (ready && !storyReadyAt) storyReadyAt = now;
-      if (dialogue.talkingTo || (storyReadyAt && now - storyReadyAt > 8000)) storyLoading = false;
+      // (the scene is there and quiet: the screen lifts, then the first conversation begins)
+      if (storyReadyAt && now - storyReadyAt > 1000 && (now - quietSince >= 1500 || now - storyReadyAt > LOADING_MAX * 1000)) storyLoading = false;
     }
-    const loadingText = worldLoading || !player ? (worldLoading ? `Loading the world… ${sceneInfo}` : "Loading Henry…") : storyLoading ? storyInfo || "Starting a new game…" : "";
-    if (loadingText) loading.show(loadingText.replace(/^New game: /, "")); else if (loading.shown) loading.hide();
+    // (it lifts once everything around Henry has arrived and stayed quiet for a moment: the scene,
+    // its textures, the grass, the first NPCs; at most LOADING_MAX seconds)
+    // (the people too: their behaviour trees load in the background, 10–30 s, and until then
+    // everyone stands; and the forest beyond the streamed scene)
+    const busyNow = streaming || grassBusy || npcBusy || !npcsLoaded || !pool.idle || (q.grass > 0 && !grass) || !npcAi || !farTreesReady || !farFieldReady || !detailReady;
+    if (busyNow) quietSince = now; else quietSince ||= now;
+    const settling = !!player && !worldLoading && now - quietSince < 1500 && now - loadingSince < LOADING_MAX * 1000;
+    const loadingText = worldLoading || !player ? (worldLoading ? `Loading the world… ${sceneInfo}` : "Loading Henry…")
+      : storyLoading ? storyInfo || "Starting a new game…"
+      : settling && loading.shown ? `Loading… ${!pool.idle ? "textures" : !npcAi ? "what people do" : npcBusy || !npcsLoaded ? "people" : grassBusy || (q.grass > 0 && !grass) ? "grass" : !farTreesReady || !farFieldReady ? "the distance" : !detailReady ? "the ground" : "the surroundings"}` : "";
+    if (loadingText && !loading.shown) loadingSince = now;
+    if (loadingText) loading.show(loadingText.replace(/^New game: /, ""));
+    else if (loading.shown) {
+      loading.hide();
+      if (!startMenuDone && !story) { startMenuDone = true; menu.home = "start"; menu.open("start"); }
+    }
     // (a fight's own messages: loading, nobody near; its progress is on the fight bars)
     const fightNote = fightInfo && !fightView && !/^Fight: Henry/.test(fightInfo) ? fightInfo : "";
     // (the story's progress is the loading screen's text; afterwards it is readout material)

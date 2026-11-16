@@ -108,6 +108,8 @@ export interface Host {
   position?(id: number): [number, number, number] | null;
   /** resolve an IncludeTree target (file relative to Libs/AI, tree name) */
   tree(file: string, name: string): BtTree | undefined;
+  /** an include the host runs itself (a fight step through the combat rules), or undefined */
+  include?(file: string, name: string, scope: Scope): Task | undefined;
   /** run Lua; `scope` gives `data.<var>` access */
   lua?(code: string, scope: Scope): void;
   /** a function call in an expression, e.g. alias('x') */
@@ -647,9 +649,13 @@ export class Runner {
             if (!inner) {
               file = part("File").replaceAll("\\", "/").toLowerCase();
               name = part("Name").toLowerCase();
-              const t = this.host.tree(file, name);
-              if (!t) { this.report(`IncludeTree: ${file}#${name} not found`); return "failure"; }
-              inner = this.instantiate(t, scope).task;
+              const own = this.host.include?.(file, name, scope);
+              if (own) inner = own;
+              else {
+                const t = this.host.tree(file, name);
+                if (!t) { this.report(`IncludeTree: ${file}#${name} not found`); return "failure"; }
+                inner = this.instantiate(t, scope).task;
+              }
             }
             if (this.nesting > MAX_NESTING) { this.report(`IncludeTree: nesting over ${MAX_NESTING} at ${file}#${name}`); inner.abort(); inner = null; return "failure"; }
             this.nesting++;

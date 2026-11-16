@@ -28,6 +28,7 @@ import { Inventory, ItemDb } from "../src/inventory.ts";
 import { ShopDb, Shops } from "../src/shops.ts";
 import { attachInventory } from "../src/playerState.ts";
 import { Calendar } from "../src/calendar.ts";
+import { CombatDb, Fight } from "../src/combat.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
@@ -70,6 +71,27 @@ lua.shops = shops.script((entity) => soulRows.find((r) => r.soul_name === ents.g
 const calendar = new Calendar();
 calendar.world = 6 * 3600;
 lua.calendar = calendar.script();
+// the fights trees ask for, run by the combat rules (both sides by their automations, seeded)
+const combatDb = await CombatDb.load(vfs);
+const customRequests: { npc: number; source: number; name: string; entity: number }[] = [];
+let testFight = null as { fight: Fight; ids: [number, number] } | null;
+const currentFight = () => testFight;
+const fightRng = (() => { let seed = 7; return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; })();
+function startTestFight(npc: number, opponent: number) {
+  const soul = (id: number) => (id === -1 ? "dude" : ents.get(id)?.name ?? "");
+  const a = combatDb.fighter(soul(opponent), null), b = combatDb.fighter(soul(npc), null);
+  if (!a || !b) return undefined;
+  testFight = { fight: new Fight(combatDb, a, b, { random: fightRng, auto: [true, true] }), ids: [opponent, npc] };
+  const f = testFight;
+  return { tick: () => { f.fight.step(0.1); return f.fight.over ? "success" as const : "running" as const; }, abort: () => {} };
+}
+function combatantOf(id: number) {
+  const f = testFight;
+  const i = f ? f.ids.indexOf(id) : -1;
+  if (!f || i < 0) return { health: 100, unconscious: false, dead: false };
+  const s = f.fight.a[i];
+  return { health: s.health, unconscious: s.out === "knockedOut", dead: s.out === "dead" };
+}
 const clock = { real: 0 };
 const requests = new DialogRequests(ddb);
 const lines: string[] = [];
@@ -82,6 +104,10 @@ const world = await createAiWorld(vfs, {
   quest: (fn, q, o) => quests.apply(fn, q, o),
   questCall: (fn, q, o) => !!quests.call(fn, o === undefined ? [q] : [q, o]),
   requestDialog: (r) => requests.request(r),
+  // fights (combat.ts) for the trees' fight steps, and their fighters' state for the gates
+  customBehavior: (npc, source, name, entity) => customRequests.push({ npc, source, name, entity }),
+  fight: (npc, opponent) => startTestFight(npc, opponent),
+  combatant: (id) => combatantOf(id),
   dialogStatus: (id) => requests.status(id),
   playerInDialog: () => requests.playerTalking,
   daycycleChange: (npc, f) => { patches.push({ npc, name: String(f.name ?? ""), handle: String(f.handle ?? ""), source: typeof f.sourceId === "number" ? f.sourceId : (f.sourceId as { id?: number } | null)?.id ?? -1, fields: f }); },
@@ -103,7 +129,8 @@ let ticks = 0;
 const t0 = performance.now();
 // objective timers on the calendar's clocks (play time, world time at 15×)
 quests.world.clock = (which) => clock.real * 1000 * (which === "world" ? 15 : 1);
-const run = (seconds: number) => { for (let i = 0; i < seconds * 10; i++) { brains.tick(); quests.update(); clock.real += 0.1; calendar.advance(0.1); ticks++; } };
+let tickMs = 0;
+const run = (seconds: number) => { const t = performance.now(); for (let i = 0; i < seconds * 10; i++) { brains.tick(); quests.update(); clock.real += 0.1; calendar.advance(0.1); ticks++; } tickMs += performance.now() - t; };
 
 // before the game starts: the hubs and trackers that are activated from the start set themselves up
 run(2);
@@ -237,6 +264,39 @@ if (asked) {
   console.log(`  q_skalitz tracks ${dead} NPC deaths; nobody has died`);
 }
 check(Math.abs(calendar.hourOfDay - 10) < 1e-6 && calendar.paused, `the opening cutscene's script sets the clock to 10:00 and holds world time (${calendar.hourOfDay.toFixed(2)} h, paused ${calendar.paused})`);
+// (the quest trees' time per tick: run() only, not the talks' and the fight's steps)
+const ms = tickMs / ticks;
+// the fist fight with Kunesh: when kunesIsUpset starts, the quest's tree asks Kunesh for his
+// custom behaviour kunes_battle_fight against the player; its fight step runs the combat rules,
+// and the quest hears who won (his health below 50 or knocked out: kunesIsBeaten)
+{
+  const kunes = inProfile("ska_kunes");
+  check(!!kunes, `Kunesh is in the prologue's layers (${kunes?.id})`);
+  const before = events.length;
+  quests.startObjective("q_skalitz", "kunesIsUpset");
+  step(1);
+  const req = customRequests.find((r) => r.npc === kunes?.id);
+  check(!!req && req.name === "kunes_battle_fight" && req.entity === -1, `the quest asks Kunesh to fight Henry (${req ? `${req.name} against ${req.entity === -1 ? "the player" : req.entity}` : "no request"})`);
+  if (req && kunes) {
+    world.positions.set(kunes.id, [...kunes.pos]);
+    npcTasks.get(kunes.id)?.task.abort();
+    const task = world.startCustomBehaviour(kunes.id, req.source, req.name, req.entity);
+    if (task) npcTasks.set(kunes.id, { name: "ska_kunes/kunes_battle_fight", task });
+    // (until the quest has its answer: a cutscene message after the fight, or the fight is over)
+    const answered = () => lines.some((l) => /message cutscene .*dialogAfterKunes(Won|Beaten)/.test(l));
+    for (let i = 0; i < 1200 && !answered() && !currentFight()?.fight.over; i++) step(0.1);
+    step(2);
+    const f = currentFight()?.fight;
+    check(!!f, "its fight step runs through the combat rules");
+    const henry = f?.a[0], k = f?.a[1];
+    console.log(`  the fight: ${f?.time.toFixed(0)} s; Henry health ${henry?.health.toFixed(0)}${henry?.out ? ` (${henry.out})` : ""}, Kunesh health ${k?.health.toFixed(0)}${k?.out ? ` (${k.out})` : ""}`);
+    const beaten = quests.call("IsObjectiveCompleted", ["q_skalitz", "kunesIsBeaten"]) === 1;
+    const lostCutscene = lines.some((l) => /message cutscene .*dialogAfterKunesWon/.test(l));
+    const wonCutscene = lines.some((l) => /message cutscene .*dialogAfterKunesBeaten/.test(l));
+    console.log(`  quest events: ${events.slice(before).join("; ") || "none"}`);
+    check(beaten ? wonCutscene : lostCutscene, beaten ? "Henry beat Kunesh: kunesIsBeaten completes and the quest plays dialogAfterKunesBeaten" : "Kunesh beat Henry: the quest plays dialogAfterKunesWon");
+  }
+}
 console.log(`  Henry carries: ${bag.entries().map(([i, n]) => `${itemDb.get(i)?.name ?? i} ×${n}`).join(", ") || "nothing"}; rewards waiting for the RPG layer: ${paid.pending.length}`);
 console.log(`  patches ended: ${ended.join(", ") || "none"}`);
 for (const [, t] of npcTasks) {
@@ -246,7 +306,6 @@ for (const [, t] of npcTasks) {
   console.log(`${t.name} waits in:\n  ${world.runner.leaves().map((l) => l.split(" > ").slice(-5).join(" > ")).join("\n  ")}`);
   world.runner.waiting = null;
 }
-const ms = (performance.now() - t0) / ticks;
 check(ms < 8, `one tick of all ${running} quest trees takes ${ms.toFixed(2)} ms here`);
 
 if (debug) console.log(`\nevents:\n  ${events.join("\n  ")}`);

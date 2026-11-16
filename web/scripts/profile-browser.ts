@@ -100,7 +100,8 @@ await page("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceSc
 // --at=x,y[,yaw°]: Henry starts there (the page's ?at= option)
 const at = arg("at", "");
 // --query=gpu-mem&…: more of the address's debugging switches
-let query = [at ? `at=${at}` : "", arg("query", "")].filter(Boolean).join("&");
+// (straight into play: no main menu, unless --main-menu)
+let query = [at ? `at=${at}` : "", arg("query", ""), process.argv.includes("--main-menu") ? "" : "no-menu"].filter(Boolean).join("&");
 // --heap: a sampled JS heap profile from the start, its live allocations by function printed with the benchmark
 const heap = process.argv.includes("--heap");
 if (heap) { await page("HeapProfiler.enable"); await page("HeapProfiler.startSampling", { samplingInterval: 256 * 1024 }); }
@@ -525,6 +526,26 @@ if (talkTo || newGame) {
   }
 }
 
+// --then=goto:ska_kunes,quest:StartObjective:q_skalitz:kunesIsUpset: debug steps after a new game's
+// first conversation (before any tour); --fight-watch=SECONDS then prints the fight bars as they change
+for (const stepArg of arg("then", "").split(",").filter(Boolean)) {
+  const [kind, ...rest] = stepArg.split(":");
+  const r = kind === "goto" ? await evaluate<string>(`globalThis.__openkcdGoto?.(${JSON.stringify(rest[0])}) ?? "no hook"`)
+    : kind === "quest" ? await evaluate<boolean>(`globalThis.__openkcdQuest?.(${JSON.stringify(rest[0])}, ${JSON.stringify(rest[1])}, ${JSON.stringify(rest[2])}) ?? false`)
+    : kind === "wait" ? (await sleep(Number(rest[0]) * 1000), "waited") : "unknown step";
+  console.log(`  then ${stepArg}: ${r}`);
+}
+const fightWatch = Number(arg("fight-watch", "0"));
+if (fightWatch) {
+  const tw = Date.now();
+  let last = "";
+  while (Date.now() - tw < fightWatch * 1000) {
+    const line = await evaluate<string>(`(() => { const f = document.querySelector(".level-fight"); return f && !f.hidden ? f.dataset.summary ?? "" : ""; })()`);
+    if (line && line !== last) { console.log(`  ${((Date.now() - tw) / 1000).toFixed(1).padStart(5)} s  ${line.slice(0, 200)}`); last = line; }
+    if (arg("screenshot", "") && Math.floor((Date.now() - tw) / 4000) !== Math.floor((Date.now() - tw - 500) / 4000)) { const { data } = await page("Page.captureScreenshot", { format: "png" }); await writeFile(`${arg("screenshot", "")}-qf-${Math.floor((Date.now() - tw) / 1000)}.png`, Buffer.from(data, "base64")); }
+    await sleep(500);
+  }
+}
 if (arg("tour", "") && process.argv.includes("--new-game")) await runTour(arg("tour", ""));
 // --fight=NPC_NAME: a fist fight with that NPC (the debug control), Henry blocking and throwing
 // heavy punches in turn; prints the fight's HUD line as it changes, until it is over (or 90 s)

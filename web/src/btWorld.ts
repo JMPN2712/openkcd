@@ -202,6 +202,20 @@ export interface WorldOptions {
   cutscene?: (kind: "sequence" | "video", name: string) => number | void;
   /** a world effect the trees ask for that the AI world doesn't hold itself (AddBuff, SetVisibility, SetOwner, …), with its evaluated properties */
   effect?: (node: string, props: Record<string, Value>, npc: number) => void;
+  /**
+   * A fight between `npc` and `opponent` (-1: the player) for a tree's fight step
+   * (final/sb_combat_fight.xml#fight): a task that runs while they fight. Without it the step
+   * runs as a tree (the game's own, whose combat nodes are mostly stand-ins here).
+   */
+  fight?: (npc: number, opponent: number) => Task | undefined;
+  /** a fighter's state (-1: the player): health 0–100, knocked out, dead; undefined: not known */
+  combatant?: (id: number) => { health: number; unconscious: boolean; dead: boolean } | undefined;
+  /**
+   * `combat:stimulus:customBehaviorRequest` to an NPC: run behaviour `name` of smart object `source`
+   * against `entity` (the opening quest has Kunesh fight Henry this way). The host starts it
+   * (AiWorld.startCustomBehaviour) in place of what the NPC is doing.
+   */
+  customBehavior?: (npc: number, source: number, name: string, entity: number) => void;
   /** whether the player is in a conversation (DialogGate's Condition: InAny, InDialog, InInteractiveDialog) */
   playerInDialog?: (condition: string) => boolean;
   /**
@@ -375,6 +389,17 @@ export class AiWorld {
     this.o = o;
     this.addEntities([...o.ents.values()]);
     const host: Host = {
+      // a tree's fight step (sb_combat_fight.xml#fight, t_fightOptions.opponent) runs as the
+      // host's fight, through the combat rules (combat.ts)
+      include: (file, name, scope) => {
+        if (!o.fight || file !== "final/sb_combat_fight.xml" || name !== "fight") return undefined;
+        const opts = scope.get("t_fightOptions");
+        const opp = opts && typeof opts === "object" && !Array.isArray(opts) ? wuid((opts as Record<string, Value>).opponent ?? null) : null;
+        const npc = this.current.npc;
+        if (opp === null || npc === null) return undefined;
+        this.trace(`npc ${npc}: fight against ${opp === -1 ? "the player" : this.name(opp)}`);
+        return o.fight(npc, opp);
+      },
       worldTime: o.worldTime,
       realTime: o.realTime,
       random: o.random ?? Math.random,
@@ -512,6 +537,22 @@ export class AiWorld {
     this.trace(`npc ${npc}: object ${e!.name} behaviour "${b!.name}" → ${b!.file}#${b!.tree}`);
     this.gaps.delete(npc);
     const { task } = this.runner.instantiate(tree, this.globals(npc, { __object: { id: object }, __behaviorName: b!.name }));
+    return this.bind(npc, this.tagged(npc, b!.tagId, task));
+  }
+
+  /**
+   * Start a custom behaviour an NPC was asked for (combat:stimulus:customBehaviorRequest): the
+   * source object's behaviour `name`, with t_customBehaviorParams.entity = `entity`.
+   */
+  startCustomBehaviour(npc: number, source: number, name: string, entity: number): Task | null {
+    this.brain(npc).set("t_customBehaviorParams", { entity });
+    const e = this.o.ents.get(source);
+    const b = e?.soType ? this.o.ai.so.get(e.soType)?.find((x) => x.name.toLowerCase() === name.toLowerCase()) : undefined;
+    const tree = b && this.o.trees(b.file, b.tree);
+    if (!tree) { this.trace(`npc ${npc}: custom behaviour "${name}" of ${e?.name ?? source} not found`); return null; }
+    this.trace(`npc ${npc}: custom behaviour "${b!.name}" of ${e!.name} against ${entity === -1 ? "the player" : this.name(entity)} → ${b!.file}#${b!.tree}`);
+    this.gaps.delete(npc);
+    const { task } = this.runner.instantiate(tree, this.globals(npc, { __object: { id: source }, __behaviorName: b!.name }));
     return this.bind(npc, this.tagged(npc, b!.tagId, task));
   }
 
@@ -863,6 +904,15 @@ export class AiWorld {
       const raw = multi ? this.ref(n, c, "targets") : this.ref(n, c, "target");
       const targets = (multi && Array.isArray(raw) ? raw : [raw]).map((v) => wuid(v ?? null)).filter((x): x is number => x !== null);
       // patches for the NPC's daily cycle (daily-cycle.md section 4) go to the schedule store
+      // a custom behaviour (a quest's fight) for an NPC: the host starts it. ASSUMPTION (no note):
+      // the NPC drops what it does and runs behaviour `behaviorName` of `behaviorSource`, with
+      // t_customBehaviorParams.entity the `entity` field
+      if (type === "combat:stimulus:customBehaviorRequest" && this.o.customBehavior) {
+        const source = wuid(fields.behaviorSource ?? null), entity = wuid(fields.entity ?? null);
+        for (const to of targets) if (source !== null) this.o.customBehavior(to, source, String(fields.behaviorName ?? ""), entity ?? -1);
+        this.trace(`npc ${this.current.npc}: ${type} ${String(fields.behaviorName ?? "")} for ${targets.map((t) => this.name(t)).join(", ")}`);
+        return targets.map(() => true);
+      }
       if (type === "daycycle:change") {
         for (const to of targets) this.o.daycycleChange?.(to, fields);
         this.trace(`npc ${this.current.npc}: message ${type} to ${targets.map((t) => this.name(t)).join(", ")}`);
@@ -1413,8 +1463,30 @@ export class AiWorld {
       // ASSUMPTION: nobody is in combat or dead yet (combat comes with core gameplay)
       case "HasActiveThreats":
         return this.branch(n, c, () => false);
-      case "HasActiveThreatsGate": case "DeadUnconsciousGate":
+      case "HasActiveThreatsGate":
         return this.gate(n, c, () => false);
+      // someone dead or knocked out (a fight's end): the host knows fighters; nobody else is
+      case "DeadUnconsciousGate": {
+        const state = this.prop(n, "State");
+        return this.gate(n, c, () => {
+          const who = wuid(this.ref(n, c, "Who")) ?? this.current.npc;
+          const f = who === null ? undefined : this.o.combatant?.(who);
+          if (!f) return false;
+          return state === "Dead" ? f.dead : state === "Unconscious" ? f.unconscious : f.dead || f.unconscious;
+        });
+      }
+      // a soul's state against a bound (a fight's give-up threshold). ASSUMPTION (no note): Health
+      // only; the gate opens when the value falls to Low or below (High unused when equal)
+      case "NPCStateGate": {
+        if (this.prop(n, "State") !== "Health") return undefined;
+        return this.gate(n, c, () => {
+          const who = this.prop(n, "Target").trim() ? wuid(this.ref(n, c, "Target")) : this.current.npc;
+          const f = who === null ? undefined : this.o.combatant?.(who);
+          return !!f && f.health <= Number(c.eval("Low", 0) ?? 0);
+        });
+      }
+      case "AddOpponent":
+        return leaf(() => { this.trace(`npc ${this.current.npc}: AddOpponent ${String(c.eval("who", "") ?? "")}`); return "success"; });
       case "StateMachineGate":
         if (this.prop(n, "State") !== "Dead") return undefined;
         return this.gate(n, c, () => false);

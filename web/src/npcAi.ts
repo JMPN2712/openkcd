@@ -132,6 +132,22 @@ export class NpcAi {
     return true;
   }
 
+  /**
+   * Run a custom behaviour an NPC was asked for (a quest's fight) in place of its current tree,
+   * keeping its place: the daily cycle sees the same activity, so it isn't wound down for it.
+   */
+  startCustom(npc: NpcEntity, source: number, name: string, entity: number, pos: Vec3, rot: Quat): boolean {
+    const was = this.driven.get(npc.id);
+    const task = this.world.startCustomBehaviour(npc.id, source, name, entity);
+    if (!task) return false;
+    was?.task.abort();
+    was?.monologs?.abort();
+    this.female.set(npc.id, npc.female);
+    const st = was?.state ?? { pos: [...pos] as Vec3, rot: [...rot] as Quat, mode: "idle" as const, clip: null, fragment: "", since: this.now };
+    this.driven.set(npc.id, { task, area: source, monologs: this.world.startMonologServer(npc.id), state: { ...st, mode: "idle", clip: null, fragment: "" }, done: false, due: this.now });
+    return true;
+  }
+
   /** Wait until the fragment clips requested so far have loaded. */
   async settle(): Promise<void> {
     while (this.pending.size) await Promise.all([...this.pending]);

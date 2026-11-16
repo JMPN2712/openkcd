@@ -28,11 +28,15 @@ const lvl = await openRataje(root, { cover: false });
 const doors = new Doors(lvl.vfs, lvl.props);
 const all = [...doors.doors.values()];
 console.log(`${all.length} doors in Rataje: ${all.filter((d) => d.right).length} right, ${all.filter((d) => !d.right).length} left, ${all.filter((d) => d.locked).length} locked`);
-// the mission's 866 and the visible layers' (levelLayers.ts layerDoors): Skalitz around Henry's
+// the mission's 866 and the visible layers' (levelLayers.ts layerProps): Skalitz around Henry's
 // home, Rattay castle's hall door
 const skalitz = all.find((d) => Math.hypot(d.entity.pos[0] - 793.4, d.entity.pos[1] - 3459.6) < 0.3);
 const hall = all.find((d) => Math.hypot(d.entity.pos[0] - 2700.3, d.entity.pos[1] - 664.1) < 0.3);
 check(all.length > 866 && !!skalitz && !!hall && !hall.locked, `doors from the visible editor layers: ${all.length - 866} more, among them Skalitz's by Henry's home and Rattay castle's hall door (unlocked)`);
+// Skalitz before the raid: its houses' furnishings are in the shown layer files, the burned set's are not
+const names = new Map([...lvl.layerNames].map(([id, n]) => [n.toLowerCase(), id]));
+const inLayer = (n: string) => lvl.props.filter((e) => e.layerId === names.get(n)).length;
+check(inLayer("sv_state0_prefabs") > 200 && inLayer("sv_state1") === 0, `Skalitz's furnishings from the layer files: ${inLayer("sv_state0_prefabs")} in sv_state0_prefabs, ${inLayer("sv_state0")} in sv_state0, none of the burned sv_state1`);
 doors.preload();
 await doors.ready();
 

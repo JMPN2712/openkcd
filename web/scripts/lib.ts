@@ -16,7 +16,7 @@ import { parseTerrain, type Terrain } from "../src/terrain.ts";
 import { parseLevelObjects, type LevelObjects } from "../src/levelObjects.ts";
 import { parseCover, type Cover } from "../src/cover.ts";
 import { parseEntityIndex, propEntities, type EntityInfo } from "../src/levelEntities.ts";
-import { parseLayerNames, defaultHiddenLayers, layerDoors } from "../src/levelLayers.ts";
+import { parseLayerNames, defaultHiddenLayers, layerProps } from "../src/levelLayers.ts";
 import { setGpuBlockCompression } from "../src/model.ts";
 import { parseTimeOfDay, type TimeOfDay } from "../src/tod.ts";
 import { parseSurfaceTypes } from "../src/terrainDetail.ts";
@@ -54,6 +54,8 @@ export interface Level {
   cover?: Cover;
   props: EntityInfo[];
   hiddenLayers: Set<number>;
+  /** editor layers by id (leveldata.xml names) */
+  layerNames: Map<number, string>;
   tod: TimeOfDay | null;
   /** surface type id → detail material (leveldata.xml) */
   surfaceTypes: Map<number, string>;
@@ -88,12 +90,12 @@ export async function openRataje(root: string, opts: { cover?: boolean; hd?: boo
   const hiddenLayers = ld ? defaultHiddenLayers(layerNames) : new Set<number>();
   // as levelData.ts: the mission's entities plus the doors of the layers shown at game start
   const ents = mission ? parseEntityIndex(new TextDecoder().decode(mission)) : new Map<number, EntityInfo>();
-  for (const d of await layerDoors(entries, (e) => readEntry(lb, e), layerNames, hiddenLayers)) if (!ents.has(d.id)) ents.set(d.id, d);
+  for (const d of await layerProps(entries, (e) => readEntry(lb, e), layerNames, hiddenLayers)) if (!ents.has(d.id)) ents.set(d.id, d);
   const props = propEntities(ents);
   const surfaceTypes = parseSurfaceTypes(ldText);
   const missionEnv = await read("mission_mission0.xml");
   const tod = missionEnv ? parseTimeOfDay(new TextDecoder().decode(missionEnv)) : null;
-  return { sources, vfs, terrain, objects, cover, props, hiddenLayers, tod, surfaceTypes, merged: new MergedMeshes(lb, entries), roads: new Roads(lb, dataStart(lb, entries.find((x) => x.name.toLowerCase() === "terrain/terrain.dat")!), objects.roads), decals: new Decals(objects.decalIndex, terrain) };
+  return { sources, vfs, terrain, objects, cover, props, hiddenLayers, layerNames, tod, surfaceTypes, merged: new MergedMeshes(lb, entries), roads: new Roads(lb, dataStart(lb, entries.find((x) => x.name.toLowerCase() === "terrain/terrain.dat")!), objects.roads), decals: new Decals(objects.decalIndex, terrain) };
 }
 
 /**

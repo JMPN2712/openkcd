@@ -86,7 +86,7 @@ await page("Runtime.enable");
 await page("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceScaleFactor: 1, mobile: false });
 // beside the tailor in his shop (he works at his table)
 const at = arg("at", "2519.5,542");
-await page("Page.navigate", { url: `http://localhost:${PORT}/?at=${at}` });
+await page("Page.navigate", { url: `http://localhost:${PORT}/?at=${at}&no-menu` });
 await waitFor("the page", () => evaluate<boolean>(`document.readyState === "complete" && !!document.getElementById("open-input")`).then((v) => v || undefined));
 await evaluate(`localStorage.setItem("openkcd.quality", ${JSON.stringify(preset)})`);
 const adapter = await evaluate<string>(`navigator.gpu ? navigator.gpu.requestAdapter().then((a) => a ? a.info.vendor + " " + a.info.architecture + " " + a.info.description : "no adapter") : "no WebGPU"`);
@@ -134,7 +134,7 @@ const speed = (h: string) => Number(/Henry \([^)]*\)[^·]*?([\d.]+) m\/s/.exec(h
 async function converse(npc: string, atMenu: [string, string][]): Promise<{ lines: { who: string; camera: string }[]; menus: string[]; end: string }> {
   await evaluate(`(() => { const i = document.querySelector(".level-dialogue-id"); i.value = ${JSON.stringify(npc)}; [...document.querySelectorAll("button")].find((b) => /Dialogue/.test(b.textContent)).click(); })()`);
   const lines: { who: string; camera: string }[] = [], menus: string[] = [];
-  let lastSub = "", lastCam = "", lastMenu = "", end = "";
+  let lastSub = "", lastCam = "", lastMenu = "", end = "", stuckShown = false;
   const t0 = Date.now();
   while (Date.now() - t0 < 90000) {
     const [sub, menu, h] = await evaluate<[string, string, string]>(`(() => {
@@ -163,6 +163,10 @@ async function converse(npc: string, atMenu: [string, string][]): Promise<{ line
       await sleep(500);
       await evaluate(`document.dispatchEvent(new KeyboardEvent("keydown", { code: "Escape", key: "Escape", bubbles: true, cancelable: true }))`);
       await sleep(300);
+    }
+    if (Date.now() - t0 > 60000 && !stuckShown) {
+      stuckShown = true;
+      console.log(`  (stuck? menu ${await evaluate<boolean>(`!document.querySelector(".kcd-menu")?.hidden`)}, loading ${await evaluate<boolean>(`!document.querySelector(".kcd-loading")?.hidden`)}, trade ${await evaluate<boolean>(`!document.querySelector(".level-trade")?.hidden`)}, status "${await evaluate<string>(`document.querySelector(".level-status")?.textContent ?? ""`)}")`);
     }
     const info = /Conversation [^·]*|Dialogue: [^·]*/.exec(h)?.[0];
     if (info) { end = info.trim(); console.log(`  ${end}`); break; }

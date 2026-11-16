@@ -74,6 +74,8 @@ export interface EntityInfo {
   soHelpers?: string;
   /** the editor layer whose file holds it ("ska_hans{guid}", lower case); unset for the mission file's (profiles.ts) */
   layer?: string;
+  /** the editor layer id of a prop read from a layer file (levelLayers.ts layerProps) */
+  layerId?: number;
   /** the raw <Properties …>…</Properties> element (see entityProperties) */
   propsXml?: string;
   /** an ItemSlot's item class (guidItemClassId, lower case): the tool that lies there */

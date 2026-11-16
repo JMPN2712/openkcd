@@ -239,6 +239,13 @@ follows them):
      be built from the tables: `initial_weapon_preset_id`,
      `initial_clothing_preset_id`), and body-part hit selection for free
      swings.
+- **Quest fights** (`btWorld.ts`; no note covers these):
+  1. `combat:stimulus:customBehaviorRequest`: does the NPC drop its
+     current behaviour, and where does `t_customBehaviorParams` come from?
+  2. `NPCStateGate State="Health"`: does it open at or below `Low`, and
+     what is `High` for?
+  3. What the fight step (`sb_combat_fight.xml#fight`) returns when the
+     tree's give-up gates end it.
 - **Shops** (economy.md leaves these open; `shops.ts` lists its guesses):
   1. `shop_type2item.default_on`: the collier's charcoal and every shop's
      money row are "off", yet both are there in the game. What does it
@@ -423,6 +430,38 @@ follows them):
   shops with a trade panel (the tailor's "Let's talk trade" opens it), the
   shop and calendar script functions, diet mode's shop grants.
   `test-shops.ts`; `test-quest-opening.ts` now buys the charcoal.
+- #56 (2026-11-15): the opening quest's fight with Kunesh, a main menu,
+  the loading screen waits for everything, no charred Skalitz.
+  - **Kunesh fight:** when `kunesIsUpset` starts, the quest's tree sends
+    Kunesh `combat:stimulus:customBehaviorRequest` (`kunes_battle_fight`
+    against the player). The AI world hands it to the host
+    (`WorldOptions.customBehavior`, `AiWorld.startCustomBehaviour`,
+    `NpcAi.startCustom`); the tree's fight step
+    (`final/sb_combat_fight.xml#fight`) runs the host's fight
+    (`WorldOptions.fight`, the view's FightView); `NPCStateGate` (Health)
+    and `DeadUnconsciousGate` read the fighters (`WorldOptions.combatant`).
+    The quest then completes `kunesIsBeaten` (his health ≤ 50 or knocked
+    out) or plays `dialogAfterKunesWon` (Henry at half his health).
+    ASSUMPTIONs, research questions below. `test-quest-opening.ts` runs it;
+    `profile-browser.ts --then=goto:ska_kunes,quest:StartObjective:…`.
+  - **Main menu** over one of the game's paintings when the world first
+    loads: New Game, Explore Rataje, Settings, Help, Exit (`?no-menu` skips
+    it; the harness does).
+  - **Loading screen** stays until the scene, its textures, the grass and
+    the first NPCs, the NPC AI, the far field and the terrain detail have arrived and stayed quiet 1.5 s (90 s at most); a new
+    game's first talk begins after it lifts.
+  - **Charred ground in Skalitz:** the default layer guess missed suffixed
+    state layers (`sv_state1_uberlod`, the burned village's far mesh) and
+    after-states named by word (`*_burned`, `*afterbattle`); they're hidden.
+  - **Skalitz before the raid:** its houses' furnishings (241 props in
+    `sv_state0_prefabs`, 25 in `sv_state0`) live in layer files, of which
+    only doors were read: the houses looked looted. `layerProps` reads the
+    props of every shown layer; the world build leaves out props and
+    decals of hidden layers (the burned village's 588 soot and debris
+    decals were drawn). Story mode hides profiled layers that aren't
+    switched on (`storyHiddenLayers`); free roam also hides quest content
+    by name (`q_*`, corpses, Cumans). A later-shown layer's props (one
+    hidden at load) still don't appear; Pribyslawitz_fire stays shown.
 - #54 (2026-11-15): NPCs doing their work, a loading screen.
   - **Work behaviours failed at once** for most work objects: the shared
     template (`so_templates.xml#objectNewHelpers`) needs the tool's
