@@ -155,6 +155,9 @@ the game's own font, menu art and words, read from your copy.
 | F | free-fly camera (debugging): drag to look, W A S D to move, Space/E up, C/Q down, Shift faster |
 | T | in free-fly: put Henry under the camera |
 | Esc | the in-game menu (Esc or Backspace in it: back, then resume) |
+| 1, 2, F / mouse buttons | in a fist fight (Debug → ⚔ Fight): light, heavy, special attack |
+| Q | in a fight: block; pressed just before a hit, a perfect block |
+| A, D, S | in a fight, just before a hit: dodge |
 
 **Debugging extras.** *▶ Dialogue* in the bar under the view plays a
 dialogue sequence by its id with the NPCs near Henry as its cast (voices

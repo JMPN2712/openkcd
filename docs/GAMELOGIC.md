@@ -1031,9 +1031,15 @@ worked numbers and runs fights from the game's tables.
   only punches (23 wins of 200, 41 s on average); two equal bandits with
   short swords kill each other within seconds, since one unblocked slash
   on an unarmoured body is DmgR 4. Feel against the original is unchecked.
+- **In the world view** (`combatView.ts`, a debug control for now): a fist
+  fight with the NPC named or nearest. The rules step each frame; the
+  game's combat fragments (`CombatAttack` by the attack row's tags,
+  `CombatBlockImpact`, `CombatBlockPerfect`, `CombatDodge`, `CombatHit`,
+  `CombatDeath`, `CombatIdle`) play on both. OURS: the keys, picking
+  reaction variants by shared tags, the death fragment for a knock-out.
 - **Not yet:** body parts and armour pieces, injuries and bleeding, wear,
   combos, feints, the clinch, knock-out rolls, several attackers, perks
-  and buffs, the fight in the world view (targeting, input, animations).
+  and buffs, weapons in hand, moving during a fight, fights the trees start.
 - **ASSUMPTIONs** (in the code; research questions in the handoff):
   maximum stamina is the archetype's `base_stamina`; the energy's x is
   relative stamina; a full block costs the block's own stamina cost; a

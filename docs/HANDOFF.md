@@ -422,6 +422,17 @@ follows them):
   shops with a trade panel (the tailor's "Let's talk trade" opens it), the
   shop and calendar script functions, diet mode's shop grants.
   `test-shops.ts`; `test-quest-opening.ts` now buys the charcoal.
+- #53 (2026-11-15): a fist fight in the world view (Debug → "⚔ Fight",
+  `combatView.ts`): the rules of #48 stepped each frame, the game's combat
+  fragments chosen by the attack rows' tags (`AnimLibrary.tagged`) on Henry
+  (`PlayerSession.overlay`) and the NPC (`NpcWorld.overrides`), health and
+  stamina bars, the last blow. Keys: 1 light, 2 heavy, F special, Q block
+  (its press is the perfect-block press), A/D/S a dodge press; the mouse
+  buttons attack. `profile-browser.ts --fight=NPC`. Also: NPCs with bare
+  upper arms (Kunesh) showed none: the Humanskin shader's AlphaTest 0.01
+  cut the skin where its texture's alpha is low; skin is never cut out now.
+  **Next:** the opening quest's fight with Kunesh from its tree, armour from
+  clothing, weapons in hand, NPC movement during a fight.
 - #52 (2026-11-15): after the user's report (menus "really broken", Henry
   in the wrong part of the house, old audio on skipping):
   - Space skipped a line but its voice went on, over the next line.
