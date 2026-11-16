@@ -157,6 +157,14 @@ if (process.argv.includes("--list")) {
     const st = ai.state(n.entity.id);
     const run = npcWorld.running.get(n.entity.id) ?? "";
     console.log(`  ${n.entity.name.padEnd(28)} ${(c?.activity?.handle ?? "-").padEnd(14)} ${(c?.target ? `${c.target.behaviour} on ${ents.get(c.target.area)?.name}` : "-").padEnd(40)} ${run.startsWith("!") ? "held" : ai.has(n.entity.id) ? `tree ${st?.mode}${st?.fragment ? ` ${st.fragment}` : ""}` : p.pose}`);
+    // WAITS=1: where an idle tree waits (every branch still running after one more tick)
+    if (process.env.WAITS && st?.mode === "idle") {
+      world.runner.debug = true;
+      world.runner.waiting = [];
+      (ai as unknown as { driven: Map<number, { task: { tick(): string } }> }).driven.get(n.entity.id)?.task.tick();
+      for (const l of new Set(world.runner.leaves().map((x) => x.split(" > ").slice(-4).join(" > ")))) console.log(`      waits: ${l.slice(0, 170)}`);
+      world.runner.waiting = null;
+    }
   }
 }
 const unsupported = [...world.unsupported].map(([k, v]) => `${k} (${v.size})`);

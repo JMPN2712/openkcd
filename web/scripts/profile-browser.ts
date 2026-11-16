@@ -206,8 +206,7 @@ for (let k = 0; k < 3; k++) { readings.push((await hud()).replace(/ · .*?x /, "
 console.log(readings.join("\n"));
 // --tour=PREFIX [--tour-shots=6] [--tour-every=4]: screenshots of the view over time (never commit
 // them: game content); --tour-keys=KeyW holds those keys meanwhile (Henry walks), --tour-view=third
-const tour = arg("tour", "");
-if (tour) {
+async function runTour(tour: string): Promise<void> {
   // --tour-clock=18:30: set the game clock first (the clock slider)
   const clock = arg("tour-clock", "");
   if (clock) {
@@ -229,6 +228,8 @@ if (tour) {
   }
   for (const k of held) await tk(k, "keyUp");
 }
+// (with --new-game the tour comes after the first conversation)
+if (arg("tour", "") && !process.argv.includes("--new-game")) await runTour(arg("tour", ""));
 // --menu=FILE.png: Esc's in-game menu, its settings page, then closed again (screenshots)
 const menuShot = arg("menu", "");
 if (menuShot) {
@@ -518,6 +519,8 @@ if (talkTo || newGame) {
     await sleep(500);
   }
 }
+
+if (arg("tour", "") && process.argv.includes("--new-game")) await runTour(arg("tour", ""));
 
 const fly = Number(arg("fly", "0"));
 if (fly) {

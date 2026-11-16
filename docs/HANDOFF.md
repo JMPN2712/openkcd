@@ -422,6 +422,27 @@ follows them):
   shops with a trade panel (the tailor's "Let's talk trade" opens it), the
   shop and calendar script functions, diet mode's shop grants.
   `test-shops.ts`; `test-quest-opening.ts` now buys the charcoal.
+- #52 (2026-11-15): after the user's report (menus "really broken", Henry
+  in the wrong part of the house, old audio on skipping):
+  - Space skipped a line but its voice went on, over the next line.
+  - A new game's first talk now happens where the level's own cameras for
+    it look (`sceneCameras.ts`: the cameras of the profile the quest
+    switches on, `q_skalitz_mother_dialog_cameras`), in the main room;
+    the mother is pinned there (`NpcWorld.pinned`), and both wait until
+    the house has loaded after the 3 km move (`worldReadyNear`,
+    `pendingPlace`). Henry had started under the floor, on the terrain.
+  - The web toolbar is gone: Esc opens an in-game menu (`gameUi.ts`)
+    dressed in the game's own font (`fonts/alexanderquill.ttf`), menu
+    textures (background, selector banner, window frame, ornaments) and
+    menu strings (`text_ui_menus`), read from the player's copy. The
+    game's own menus are Scaleform (`Libs/UI/*.gfx`) and can't run in a
+    browser. The game waits while it is open (the conversation and its
+    voice too). The dialogue menu and the trade window use the same parts.
+    The world view opens full window; Exit returns to the file browser.
+  - Not confirmed: "NPCs in random places or facing the wrong way". The
+    tree movement and helper code read correctly; NPCs whose tree idles
+    stand at their schedule's random point in their area. Needs a place
+    and time from the user.
 - #51 (2026-11-15): a status line under the controls for what the player
   must see (a new game loading for 10–20 s, a failed talk): since #49 the
   readout is one cut line, and those messages were lost at its end.

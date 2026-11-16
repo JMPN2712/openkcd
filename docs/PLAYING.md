@@ -128,13 +128,17 @@ quests (bounty camps, hunting and theft errands, fist fights, collecting,
 races and archery contests). The main story and the memorable side quests
 stay, and the items those quests gave (the agility book, a saddle, horse
 trappings, the Queen of Sheba's sword) are sold in shops instead. Untick
-**Diet mode** in the world view's toolbar for the full game; the change
+**Diet mode** in the in-game menu's Settings (Esc) for the full game; the change
 applies at once, and nothing is deleted. A cut quest you had already started
 keeps running.
 
 ## Controls
 
-Click the view to capture the mouse; Esc releases it.
+The world view fills the window. Click it to play (it captures the mouse).
+Esc opens the in-game menu, as in the game: Resume, New Game, Settings
+(time of day and its speed, quality, diet mode), Help, Debug, and Exit back
+to the file browser. The game waits while the menu is open. The menus use
+the game's own font, menu art and words, read from your copy.
 
 | Key | Action |
 |---|---|
@@ -147,9 +151,10 @@ Click the view to capture the mouse; Esc releases it.
 | Mouse wheel | third-person camera distance (1–8 m) |
 | E | talk to the person you face ("Talk to …" when they have something to say); open or close the door or chest you face (a prompt below the middle of the view says when one is in reach; locked ones stay shut); an open chest lists what it holds; on a bed, sleep until 7:00 |
 | 1–9, ↑ ↓ or the mouse, Enter or click | in a conversation: pick a reply (a timed reply takes the highlighted one when its bar runs out); Space skips the line being said |
-| Backspace or Esc | in a conversation, at its first menu: end it ("(End dialog)"; the NPC says goodbye); at a later menu: "(Back)" if it has one. Mid-line and at menus without either, pick a reply, as in the game |
+| Backspace | in a conversation, at its first menu: end it ("(End dialog)"; the NPC says goodbye); at a later menu: "(Back)" if it has one. Mid-line and at menus without either, pick a reply, as in the game |
 | F | free-fly camera (debugging): drag to look, W A S D to move, Space/E up, C/Q down, Shift faster |
 | T | in free-fly: put Henry under the camera |
+| Esc | the in-game menu (Esc or Backspace in it: back, then resume) |
 
 **Debugging extras.** *▶ Dialogue* in the bar under the view plays a
 dialogue sequence by its id with the NPCs near Henry as its cast (voices

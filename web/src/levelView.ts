@@ -987,6 +987,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     for (const id of doorsMoved) showDoor(id);
     for (const id of chests.step(dt)) showChest(id);
     // (timed choices count play time: the game clock's speed over its normal ×15, 0 when paused)
+    dialogue.setPaused(menu.isOpen);
     dialogue.update(dt, (dt * gameSpeed()) / 15);
     if (dialogue.info) { dialogueInfo = dialogue.info; dialogue.info = ""; }
     if (mode === "player" && player) {
@@ -1309,8 +1310,13 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const benchInfo = bench ? `⏱ benchmark ${q.label}: ${bench.phase === "settle" ? "loading…" : `${bench.segment} ${Math.round((now - bench.start) / 1000)}/${Math.round(PATH_SECONDS)} s`} · ` : "";
     // the status line: the story's and the dialogue's messages, and "loading" while they last
     const status = [storyInfo, dialogueInfo.startsWith("Dialogue:") || dialogueInfo.startsWith("Loading") ? dialogueInfo : ""].filter(Boolean).join(" · ");
-    if (status !== statusText) { statusText = status; statusAt = now; statusLine.textContent = status; }
-    statusLine.hidden = !statusText || (now - statusAt > 6000 && !/…$/.test(statusText));
+    if (status !== statusText) { statusText = status; statusAt = now; }
+    // without the mouse captured (and nothing else up), how to play
+    const idle = mode === "player" && document.pointerLockElement !== canvas && !menu.isOpen && !trade?.isOpen && !dialogue.talkingTo;
+    const fresh = !!statusText && (now - statusAt <= 6000 || /…$/.test(statusText));
+    const line = fresh ? statusText : idle ? "Click to play · Esc: menu" : "";
+    if (statusLine.textContent !== line) statusLine.textContent = line;
+    statusLine.hidden = !line;
     hud.textContent = `${benchInfo}${gpuProblem ? `⚠ ${gpuProblem} · ` : ""}${(1000 / fpsAvg).toFixed(0)} fps, cpu ${cpuAvg.toFixed(1)} ms${timer.available ? `, gpu ${timer.total.toFixed(1)} ms (${timer.summary()}${splitPasses ? "" : "; G splits"})` : ""} (${q.label}, ${canvas.width}×${canvas.height}${q.upscale ? `, scene ×${scale.toFixed(2)}` : ""}) · memory: JS ${(jsHeap() / 2 ** 20).toFixed(0)} MiB, GPU ${((gpuMem.buffers + gpuMem.textures + gpuMem.targets) / 2 ** 20).toFixed(0)} MiB · ${who}x ${cam.pos[0].toFixed(0)}  y ${cam.pos[1].toFixed(0)}  z ${cam.pos[2].toFixed(0)} m (ground ${ground.toFixed(1)}) · terrain ${(renderer.stats.triangles / 1e6).toFixed(2)}M + objects ${(models.stats.triangles / 1e6).toFixed(2)}M triangles · ${pool.summary()} · ${sceneInfo}${lodInfo} · ${worldLoading ? "NPCs start once the world has loaded" : npcInfo}${npcs.length ? ` (${npcs.filter((n) => n.placement.pose === "walk").length} walking, ${npcs.filter((n) => n.placement.pose === "sleep").length} asleep, ${npcAi?.ids().length ?? 0} run by behaviour trees)` : ""}${storyInfo ? ` · ${storyInfo}` : ""}${dialogueInfo ? ` · ${dialogueInfo}` : ""}${cameraInfo ? ` · ${cameraInfo}` : ""}`;
   };
   raf = requestAnimationFrame(frame);

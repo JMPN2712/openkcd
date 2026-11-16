@@ -452,6 +452,15 @@ export class DialogueHost {
     return `Dialogue ${id}: ${await this.playTimeline(l, seq, castFor(l.db, seq, named, henry))}`;
   }
 
+  /** The game is paused (the in-game menu): the line and its voice wait. */
+  setPaused(on: boolean): void {
+    if (this.paused === on) return;
+    this.paused = on;
+    if (!this.audio) return;
+    void (on ? this.audio.suspend() : this.audio.resume()).catch(() => {});
+  }
+  private paused = false;
+
   /** Stop the voice line playing, if any. */
   private stopVoice(): void {
     try { this.playing?.stop(); } catch { /* already stopped */ }
@@ -485,6 +494,7 @@ export class DialogueHost {
    * choice down by `playDt`, seconds of play time (stopped while the game is paused; dialogue.md).
    */
   update(dt: number, playDt = dt): void {
+    if (this.paused) return;
     if (this.resume) {
       if (this.hold?.()) return;
       const r = this.resume;
