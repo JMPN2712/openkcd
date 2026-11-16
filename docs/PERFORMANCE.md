@@ -365,6 +365,30 @@ The earlier heap figures in this file, and benchmark reports before this fix,
 include a previous view (the `--memory` tables above too). A player who
 opens the world once and stays was not affected by the leak.
 
+### Smaller geometry chunks (2026-11-15, M3 Pro)
+
+Meshes share vertex and index buffers (`geometryStore.ts`). A chunk goes back
+to the GPU only when every range in it is free, so streamed-out meshes leave
+chunks held but mostly empty. In `bench-streaming --preset potato --steps 6
+--back`, 162 MiB was in use at the far point while 1,024 MiB was held with
+128 MiB chunks. With 32 MiB chunks it was 800–864; with 16 MiB, 720–832.
+`GEOMETRY_CHUNK` is now **16 MiB**. A mesh larger than that still gets a
+chunk of its own size.
+
+The in-app benchmark, interleaved (16, 128, 16, 128):
+
+| Preset | Chunk | fps | 1% low | GPU (peak) | Geometry buffers |
+|---|---|---|---|---|---|
+| Potato | 16 MiB | 398.5 / 393.1 | 54.2 / 53.5 | 1,275 (1,275) MiB | 924 MiB |
+| Potato | 128 MiB | 390.7 / 393.3 | 52.4 / 49.8 | 1,369 (1,428) MiB | 1,020 MiB |
+| Medium | 16 MiB | 133.9 / 130.2 | 21.9 / 21.9 | 2,458 (2,478) MiB | 1,267 MiB |
+| Medium | 128 MiB | 127.1 | 21.0 | 2,554 (2,563) MiB | 1,347 MiB |
+
+That is about 96 MiB less GPU memory on Potato (peak −155) and 85 on Medium,
+with no frame-rate cost. Renders are unchanged. The fragmentation that is
+left would need compaction: moving ranges between buffers and re-recording
+the draws.
+
 **16-bit indices** (suggested above) would save less than they looked to: 64
 MiB in a Potato scene, 85 on Medium, perhaps 140 after a flight's cached
 models. All meshes fit. Not done.

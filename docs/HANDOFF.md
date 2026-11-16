@@ -113,8 +113,9 @@ for a stand-in inventory. `node scripts/test-quest-opening.ts`.
      PERFORMANCE.md "Is the JS heap real?". Animation databases no longer
      all kept (−818 MiB of buffers on Potato). Target from the user:
      Potato under 2 GiB for the tab, Medium under 3 GiB. Geometry stores halved (44-byte vertices, chunks grown from
-     4 MiB: Potato GPU 2.6 → 1.3 GiB). Left: the world store's
-     fragmentation (holds up to twice what it uses); the world caches'
+     4 MiB: Potato GPU 2.6 → 1.3 GiB; 16 MiB chunks, #55: −96 MiB more).
+     Left: the world store's fragmentation (still holds up to four times
+     what it uses after a flight; needs compaction); the world caches'
      positions and indices (CPU vertex data is now dropped once uploaded:
      Potato's heap after the benchmark 3.0 → 2.3 GiB, Medium's 4.0 →
      2.9 GiB). Still over the targets: Potato's tab is about 2.3 GiB of
@@ -517,6 +518,10 @@ follows them):
   windows, the NPC's defence weights and attack delay, a `Fight` stepping
   two fighters. `test-combat.ts` (the notes' numbers; Henry against
   Kunesh with fists; swords against a bandit). No animation or view yet.
+- #55 (2026-11-15): geometry chunks of 16 MiB instead of 128: streamed-out
+  meshes left large chunks held. Potato GPU 1,369 → 1,275 MiB (peak 1,428 →
+  1,275), Medium 2,554 → 2,458, no frame-rate cost, renders unchanged
+  (PERFORMANCE.md "Smaller geometry chunks").
 
 ## Findings not yet acted on
 

@@ -22,9 +22,11 @@ import { DEFAULT_LIGHTING, depthCompare, depthFormat, lookAt, multiply, perspect
 const VERTEX_BYTES = 44;
 /**
  * Largest shared vertex or index buffer (meshes are packed into as many as needed). One buffer per
- * mesh made Chrome's GPU process check thousands of buffers on every submit.
+ * mesh made Chrome's GPU process check thousands of buffers on every submit. 16 MiB rather than
+ * 128: streamed-out meshes leave holes, and a chunk is given back only when all of it is free
+ * (Potato's benchmark: 96 MiB less GPU memory, no frame-rate cost).
  */
-const GEOMETRY_CHUNK = 128 * 2 ** 20;
+const GEOMETRY_CHUNK = 16 * 2 ** 20;
 
 /** Bytes per draw in the shared uniform buffer (208 used; bindings start at 256-byte multiples). */
 const UNIFORM_SLOT = 256;
