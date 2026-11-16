@@ -536,6 +536,7 @@ if (fightWith) {
     if (line && line !== last) { console.log(`  ${((Date.now() - tf) / 1000).toFixed(1).padStart(5)} s  ${line}`); last = line; }
     if (/ · over$/.test(line) || /isn't near|no soul/.test(line)) break;
     // every 1.5 s: a heavy punch; in between Henry holds his block
+    if (arg("screenshot", "") && n % 6 === 1 && n < 60) { const { data } = await page("Page.captureScreenshot", { format: "png" }); await writeFile(`${arg("screenshot", "")}-fight-${String(n).padStart(2, "0")}.png`, Buffer.from(data, "base64")); }
     if (n++ % 6 === 0) { await press("KeyQ", "q", "keyUp"); await press("Digit2", "2", "keyDown"); await press("Digit2", "2", "keyUp"); }
     else if (n % 6 === 3) await press("KeyQ", "q", "keyDown");
     await sleep(250);

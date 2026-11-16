@@ -1371,7 +1371,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     }
     const pc = player?.controller;
     // [key, action]: key "" for a message without one
-    const hint: readonly [string, string] | null = mode !== "player" || sleeping || dialogue.talkingTo ? null
+    const hint: readonly [string, string] | null = mode !== "player" || sleeping || dialogue.talkingTo || fightView ? null
       : chestHint ? ({ open: ["E", "Open the chest"], close: ["E", "Close the chest"], locked: ["", "The chest is locked"], busy: null } as const)[chestHint.act]
       : talkHint && talkHint.ready !== false ? ["E", `Talk to ${talkHint.name}`]
       : doorHint ? ({ open: ["E", "Open the door"], close: ["E", "Close the door"], locked: ["", "The door is locked"], busy: null } as const)[doorHint.act]

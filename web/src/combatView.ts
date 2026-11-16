@@ -74,7 +74,7 @@ export class FightView {
     const who = (i: number) => this.names[i];
     if (e.kind === "attack") {
       this.act(e.by, "CombatAttack", e.row.tags.split("+"));
-      this.last = `${who(e.by)} attacks (${e.type})`;
+      this.last = `${who(e.by)} swings (${e.type})`;
     } else if (e.kind === "hit") {
       const d = 1 - e.by;
       const guard = ["rightGuard", "dZ0", "sZ0", "oppMale", "hitTypeNormal"];
@@ -82,11 +82,12 @@ export class FightView {
       else if (e.answer === "dodge") this.act(d, "CombatDodge", [...guard, "move_back"]);
       else if (e.block === "full" || e.block === "partial") this.act(d, "CombatBlockImpact", guard);
       else if (!this.fight.a[d].out) this.act(d, "CombatHit", guard);
-      const what = e.answer === "perfectBlock" ? "a perfect block" : e.answer === "masterStrike" ? "a master strike" : e.answer === "dodge" ? "a dodge" : e.block === "full" ? "a block" : e.block === "partial" ? "a partial block" : e.block === "broken" ? "a broken block" : "a hit";
-      this.last = `${who(d)}: ${what}${e.health > 0 ? `, −${e.health.toFixed(0)} health` : ""}`;
+      const hurt = e.health > 0 ? ` (−${e.health.toFixed(0)} health)` : "";
+      this.last = e.answer === "perfectBlock" ? `${who(d)} perfectly blocks ${who(e.by)}` : e.answer === "masterStrike" ? `${who(d)} turns it into a master strike` : e.answer === "dodge" ? `${who(d)} dodges`
+        : e.block === "full" ? `${who(d)} blocks` : e.block === "partial" ? `${who(d)} half blocks${hurt}` : e.block === "broken" ? `${who(e.by)} breaks ${who(d)}'s guard${hurt}` : `${who(e.by)} hits ${who(d)}${hurt}`;
     } else if (e.kind === "counter") {
       this.act(1 - e.by, "CombatHit", ["rightGuard", "dZ0", "hitTypeNormal"]);
-      this.last = `${who(e.by)} counters${e.health > 0 ? `, −${e.health.toFixed(0)} health` : ""}`;
+      this.last = `${who(e.by)} strikes back${e.health > 0 ? ` (−${e.health.toFixed(0)} health)` : ""}`;
     } else {
       this.act(e.who, "CombatDeath", ["death", "rightGuard", "dZ0"], true);
       this.last = `${who(e.who)} is ${e.how === "dead" ? "dead" : "knocked out"}`;

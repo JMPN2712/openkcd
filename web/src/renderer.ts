@@ -453,6 +453,16 @@ const VERTEX_LAYOUT_INDEXED: GPUVertexBufferLayout[] = [VERTEX_LAYOUT[0], {
 /** A stand-in shadow map (always lit) per device, for renderers without shadows. */
 const noShadows = new WeakMap<GPUDevice, ShadowMap>();
 
+/**
+ * A material's alpha-test threshold as drawn. Skin (the Humanskin shader) is never cut out: its
+ * diffuse alpha holds other skin data, and the bodies' AlphaTest of 0.01 discarded the upper arms of
+ * NPCs whose clothes leave them bare (Kunesh's short-sleeved tunic). OURS, from what the game shows.
+ */
+function alphaTestOf(mat: { alphaTest: number; shader: string } | null | undefined): number {
+  if (!mat || /^humanskin$/i.test(mat.shader)) return 0;
+  return mat.alphaTest ?? 0;
+}
+
 export class ModelRenderer {
   readonly device: GPUDevice;
   readonly format: GPUTextureFormat;
@@ -760,7 +770,7 @@ export class ModelRenderer {
     // reflectance it turned lashes and hair partings white, so scale it to a dielectric level
     const specular = mat?.specular ?? [0.04, 0.04, 0.04];
     u.set([...(/^hair$/i.test(mat?.shader ?? "") ? specular.map((v) => v * 0.05) : specular), 0], 20);
-    u.set([decal ? 0 : mat?.alphaTest ?? 0, chain ? 1 : 0, specChain ? 1 : 0, layer], 24);
+    u.set([decal ? 0 : alphaTestOf(mat), chain ? 1 : 0, specChain ? 1 : 0, layer], 24);
     if (/%LEAVES|%GRASS/.test(mat?.genMask ?? "")) {
       const tc = (mat.params.TransmittanceColor ?? "1,1,1").split(",").map(Number);
       u.set([tc[0] || 1, tc[1] || 1, tc[2] || 1, Number(mat.params.BackDiffuseMultiplier ?? 0.5) || 0.5], 48);
@@ -786,7 +796,7 @@ export class ModelRenderer {
     return {
       vb, ib, firstIndex: s.firstIndex + iOff / 4, baseVertex: vOff / VERTEX_BYTES, count: s.numIndices, bind, item: -1, ubuf, uoff, cached: false, meshTm: mesh.transform,
       inst: this.identityInstance, instCount: 1, blend: (blend && !decal) || overlay, ground: decal, overlay,
-      cutout: !decal && (mat?.alphaTest ?? 0) > 0,
+      cutout: !decal && alphaTestOf(mat) > 0,
       pooled, palette: paletteBinding, uvDensity: pooled.some(Boolean) ? cachedUvDensity(mesh, s.firstIndex, s.numIndices) : 0,
     };
   }
