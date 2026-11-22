@@ -347,7 +347,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let storyLoading = false;
   /** a new game's first talk has its two in place (the loading screen waits for it) */
   let firstTalkPlaced = false;
-  let storyReadyAt = 0;
+  let storyReadyAt = 0, storyArrivedAt = 0, layersPrefetched = false;
+  let storyPlaceInfo = "";
   void loadGameUi(vfs, paks).then((a) => { applyGameUi(stage, a); buildMenu(a.text); }).catch(() => buildMenu((_k, f) => f));
   void artworkUrl(vfs).then((u) => { if (u) stage.style.setProperty("--kcd-start-art", `url("${u}")`); });
   /** the main menu comes up once, when the world has first loaded (?no-menu: straight into play) */
@@ -596,6 +597,26 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     return `${name} at ${p.map((v) => v.toFixed(1)).join(",")}`;
   };
   // debugging: why talking to a named NPC is or isn't offered (with Henry where he stands)
+  // (debug: what holds the loading screen)
+  (globalThis as { __openkcdBusy?: () => string }).__openkcdBusy = () => {
+    const now = performance.now();
+    const f = { streaming, grassBusy, npcsLoaded, poolIdle: pool.idle, grass: !!grass, npcAi: !!npcAi, farTreesReady, farFieldReady, detailReady, storyLoading, firstTalkPlaced, worldLoading, pendingPlace: !!pendingPlace };
+    return `${npcInfo} · cam ${cam.pos.map((v) => v.toFixed(0)).join(",")} henry ${player ? player.controller.pos.map((v) => v.toFixed(0)).join(",") : "-"} ${Object.entries(f).map(([k, v]) => `${k}=${v ? 1 : 0}`).join(" ")} ready ${storyReadyAt ? ((now - storyReadyAt) / 1000).toFixed(0) : "-"} s, quiet ${((now - quietSince) / 1000).toFixed(1)} s, ${storyPlaceInfo}`;
+  };
+  // (debug: NPCs within `r` m of Henry whose bones are through walls or props, deepest first)
+  (globalThis as { __openkcdClipping?: (r?: number) => string }).__openkcdClipping = (r = 60) => {
+    const h = player?.controller.pos ?? cam.pos;
+    const rows: string[] = [];
+    for (const n of npcs) {
+      const p = (npcWorld.drawn(n.entity.id) ?? n.placement).pos;
+      if (Math.hypot(p[0] - h[0], p[1] - h[1]) > r) continue;
+      const c = NpcWorld.clipping(n, (a, b) => surroundings.raycast(a, b)).filter((x) => x.depth > 0.05);
+      if (!c.length) continue;
+      const st = npcAi?.state(n.entity.id);
+      rows.push(`${n.entity.name} (${st ? `${st.mode} ${st.fragment}` : (npcWorld.drawn(n.entity.id) ?? n.placement).pose}) at ${p.map((v) => v.toFixed(1)).join(",")}: ${c.slice(0, 3).map((x) => `${x.bone} ${x.depth.toFixed(2)} m`).join(", ")}`);
+    }
+    return rows.join("\n") || "none";
+  };
   (globalThis as { __openkcdTalk?: (name: string) => string }).__openkcdTalk = (name) => {
     const n = npcs.find((x) => x.entity.name === name);
     if (!n) return `${name}: not shown`;
@@ -608,12 +629,18 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   // debugging: where named NPCs are and what they do (the browser harness reads it)
   (globalThis as { __openkcdNpcs?: (names: string[]) => string }).__openkcdNpcs = (names) => (names[0] === "*" ? npcs.map((x) => x.entity.name) : names).map((name) => {
     const n = npcs.find((x) => x.entity.name === name);
-    if (!n) return `${name}: not shown`;
+    if (!n) {
+      const e = npcWorld.entities.find((x) => x.name === name);
+      const p = e ? npcWorld.placeAt(e, [], minute) : null;
+      return `${name}: not shown${e ? "" : " (no entity)"}${p ? ` (unscheduled spot ${p.pos.map((v) => v.toFixed(0)).join(",")}, ${Math.hypot(p.pos[0] - cam.pos[0], p.pos[1] - cam.pos[1]).toFixed(0)} m from the camera; ${npcs.length} shown)` : ""}`;
+    }
     const p = npcWorld.drawn(n.entity.id) ?? n.placement;
     const st = npcAi?.state(n.entity.id);
     return `${name}: ${p.pos.map((v) => v.toFixed(1)).join(",")} ${p.pose} ${p.where}${st ? ` tree ${st.mode}${st.fragment ? ` ${st.fragment}` : ""}` : " (no tree)"}${npcWorld.running.get(n.entity.id) ? ` [${npcWorld.running.get(n.entity.id)}]` : ""}${npcWorld.pinned.has(n.entity.id) ? " pinned" : ""} {${npcWorld.moverInfo(n.entity.id)}} ${NpcWorld.bodyInfo(n)}`;
   }).join(" | ");
-  const npcWorld = new NpcWorld(vfs, npcEntities, schedules, (x, y) => heightAt(terrain, x, y));
+  // (its character reads go ahead of the streaming ones: a new game's NPCs waited behind Skalitz's buildings)
+  const npcWorld = new NpcWorld(vfs.urgentCopy(), npcEntities, schedules, (x, y) => heightAt(terrain, x, y));
+  npcWorld.raycast = (a, b) => surroundings.raycast(a, b);
   dlgBtn.addEventListener("click", () => {
     // the cast: NPCs within 30 m of Henry (or the camera), nearest first
     const at = player && mode === "player" ? player.controller.pos : cam.pos;
@@ -758,7 +785,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     // under the loading screen from the click on: a new game asked for before the behaviour trees
     // had loaded waits for them there (it did nothing, and Henry stood on in Rattay)
     storyLoading = true;
-    storyReadyAt = 0;
+    storyReadyAt = storyArrivedAt = 0;
     firstTalkPlaced = false;
     storyInfo = "New game: waiting for the behaviour trees…";
     for (let t = 0; (!npcAi?.world || !viewQuests) && t < 600 && !stopped; t++) await new Promise((r) => setTimeout(r, 200));
@@ -781,6 +808,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       teleportHenry(spawn.pos[0], spawn.pos[1], spawn.pos[2] + 1.5, 2 * Math.atan2(spawn.rot[3], spawn.rot[0]));
       mode = "player";
     }
+    storyReadyAt = 0;
+    storyArrivedAt = performance.now();
   };
   void (async () => {
     // Lua 5.1 with the game's scripts (Scripts/main.lua) for the trees' Lua code
@@ -820,6 +849,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     // (names among the shown NPCs too: the story's layer NPCs aren't in the mission's entities)
     const traceIds = () => new Set(traceNames.flatMap((nm) => [[...ents.values()].find((e) => e.name === nm)?.id, ...npcs.filter((n) => n.entity.name === nm).map((n) => n.entity.id)]).filter((x): x is number => x !== undefined));
     let traced: Set<number> | null = null, tracedAt = 0;
+    // (and their daily cycle's tree starts, wind-downs and ends)
+    if (traceNames.length) npcWorld.aiLog = (e, what, detail) => { if (traceNames.includes(e.name)) console.warn(`[tree] ai ${e.name} ${(npcAi?.now ?? 0).toFixed(1)} s: ${what} ${detail}`); };
     const w = await createAiWorld(vfs, {
       trace: traceNames.length ? (m) => { if (!traced || performance.now() - tracedAt > 2000) { traced = traceIds(); tracedAt = performance.now(); } const id = Number(/^npc (\d+)/.exec(m)?.[1]); if (traced.has(id) || traceNames.some((nm) => m.includes(nm))) console.warn(`[tree] ${m}`); } : undefined,
       quest: (fn, q, o) => quests.apply(fn, q, o),
@@ -898,6 +929,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       // start's, and the loading screen waited for "people" forever)
       if (key === npcKey) npcsLoaded = true;
       if (key === npcKey || stopped) return;
+      // (a new set: the loading screen, while up, waits for it; the old flag said Rattay's were in)
+      npcsLoaded = false;
       const next = await npcWorld.near(at, NPC_RADIUS, NPC_MAX, m, (s) => { npcInfo = s; });
       if (stopped) return;
       npcR.setModels(npcItems(next));
@@ -918,12 +951,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   let depthView: GPUTextureView | null = null;
   // dynamic resolution (q.upscale): the scene's texture, its scale of the canvas, and the scales
   // the benchmark ran at
-  const upscaler = q.upscale ? new Upscaler(device, format) : null;
+  const upscaler = q.upscale || q.fxaa ? new Upscaler(device, format) : null;
   let sceneTex: GPUTexture | null = null;
   let scale = q.upscale?.max ?? 1;
   let scaleCheckedAt = 0;
   let msaa: GPUTexture | null = null;
-  let streamedAt: [number, number] | null = null;
+  let streamedAt: [number, number] | null = null, streamedOnce = false;
   /** where the last complete scene was built (everything in range loaded) */
   let settledAt: [number, number] | null = null;
   /** Whether the world around a point has loaded completely (floors and walls are there). */
@@ -974,6 +1007,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         lodCounts = items.map(() => 0);
         scene = next;
         streamedAt = at;
+        streamedOnce = true;
         // forget what the last two positions' scenes (two builds each) didn't use, and the models
         // whose released geometry the renderer just let go
         trimWorldCaches(caches!, 4, (m) => models.holds(m));
@@ -1356,6 +1390,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
         // up to 15 m brings Henry to a free spot 1.3 m in front of the NPC, and others wait
         // until he is within 2.5 m and in sight
         let ready = false;
+        storyPlaceInfo = "";
         // a scene with cameras of its own (the level's, switched on with the quest's profile):
         // the two stand where those cameras look, the NPC pinned there for the talk
         const place = n && npcAi ? sceneFor(n.entity.id) : null;
@@ -1370,6 +1405,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
           }
           // the NPC is there (it jumps when far, else walks the last metres)
           ready = Math.hypot(at.pos[0] - npcSpot[0], at.pos[1] - npcSpot[1]) < 0.4;
+          storyPlaceInfo = `scene: ${n.entity.name} ${Math.hypot(at.pos[0] - npcSpot[0], at.pos[1] - npcSpot[1]).toFixed(1)} m from her spot`;
         } else if (n && at && !place && !worldLoading && worldReadyNear(at.pos[0], at.pos[1]) && !pendingPlace) {
           const pc = player.controller;
           const chest = (p: readonly number[]): [number, number, number] => [p[0], p[1], p[2] + 1.3];
@@ -1392,6 +1428,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
             }
           }
         }
+        if (!ready && !storyPlaceInfo.startsWith("scene")) storyPlaceInfo = `asked by ${n?.entity.name ?? "nobody shown"}${place ? ", scene" : ""}${at ? "" : ", not placed"}${worldReadyNear(...(place ? place.npc : at ? [at.pos[0], at.pos[1]] : [0, 0]) as [number, number]) ? "" : ", world not ready there"}${pendingPlace ? ", Henry being placed" : ""}`;
         // (placed while the loading screen is up; the talk begins once it has lifted)
         if (n && ready) firstTalkPlaced = true;
         if (n && ready && !storyLoading) {
@@ -1404,7 +1441,21 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     const hh = Math.floor(minute / 60), mm = Math.floor(minute % 60);
     clockLabel.textContent = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
     if (document.activeElement !== clockRange) clockRange.value = String(Math.floor(minute));
-    if (streamedAt && !worldLoading && now - npcCheckedAt > 500) { npcCheckedAt = now; void updateNpcs(); }
+    // (also while a scene rebuilds once the first has loaded: a new game's layer change rebuilt
+    // Skalitz for ~45 s, and Henry's mother appeared only after it)
+    if ((streamedAt || streamedOnce) && !worldLoading && now - npcCheckedAt > 500) { npcCheckedAt = now; void updateNpcs(); }
+    // the editor layers a new game needs, read in the background once the world has settled
+    // (a few seconds of reads; the New game click then doesn't wait for them)
+    if (!layersPrefetched && npcAi && !worldLoading && quietSince && now - quietSince > 3000) {
+      layersPrefetched = true;
+      // and the characters of the layers' people within 40 m of the spawn point
+      void readLayerFiles().then((l) => {
+        const spawn = [...ents.values()].find((e) => e.cls === "SpawnPoint" && !e.layer);
+        if (!spawn || story) return;
+        const near = l.npcs.filter((e) => Math.hypot(e.pos[0] - spawn.pos[0], e.pos[1] - spawn.pos[1]) < 40);
+        return npcWorld.prefetch(near);
+      }).catch(() => {});
+    }
     const target = ctx.getCurrentTexture();
     // dynamic resolution: every half second, the scale from the GPU's frame time
     if (q.upscale && timer.available && !worldLoading && now - scaleCheckedAt > 500) {
@@ -1414,10 +1465,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     // the scene's size: the canvas's, or scaled (then drawn into sceneTex and upscaled)
     // (at full scale straight to the canvas: the upscale pass cost 2 ms there for nothing)
     const scaled = !!q.upscale && scale < 1;
+    // (anti-aliasing: the scene always goes through sceneTex and the final pass)
+    const viaTex = scaled || q.fxaa;
     const sw = scaled ? Math.max(1, Math.round(target.width * scale)) : target.width;
     const sh = scaled ? Math.max(1, Math.round(target.height * scale)) : target.height;
-    if (!scaled && sceneTex) { sceneTex.destroy(); sceneTex = null; }
-    if (scaled && (!sceneTex || sceneTex.width !== sw || sceneTex.height !== sh)) {
+    if (!viaTex && sceneTex) { sceneTex.destroy(); sceneTex = null; }
+    if (viaTex && (!sceneTex || sceneTex.width !== sw || sceneTex.height !== sh)) {
       sceneTex?.destroy();
       sceneTex = device.createTexture({ size: [sw, sh], format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
     }
@@ -1500,7 +1553,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     water.setDepth(depthView, mode === "player" && player?.viewMode === "first" ? 0.01 : 0.1);
     water.draw(blend);
     blend.end();
-    if (upscaler && sceneTex) upscaler.draw(enc, sceneTex, target.createView(), q.upscale!.sharpness, timer.pass("upscale"));
+    if (upscaler && sceneTex) upscaler.draw(enc, sceneTex, target.createView(), q.upscale?.sharpness ?? 0, timer.pass("upscale"), q.fxaa);
     timer.resolve(enc);
     device.queue.submit([enc.finish()]);
     timer.collect();
@@ -1533,11 +1586,12 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (storyLoading && player) {
       const pc = player.controller;
       const ready = !pendingPlace && worldReadyNear(pc.pos[0], pc.pos[1]);
-      if (ready && !storyReadyAt) storyReadyAt = now;
+      // (counted from Henry's arrival in Skalitz: the scene he left was ready long before)
+      if (ready && !storyReadyAt && storyArrivedAt) storyReadyAt = now;
       // (the scene is there and quiet: the screen lifts, then the first conversation begins)
       // (and the first talk placed: lifted at the level's spawn point, the talk then moved Henry into
       // the room in view; at most LOADING_MAX seconds after the scene was ready)
-      if (storyReadyAt && now - storyReadyAt > 1000 && ((now - quietSince >= 1500 && firstTalkPlaced) || now - storyReadyAt > LOADING_MAX * 1000)) storyLoading = false;
+      if ((storyReadyAt && now - storyReadyAt > 1000 && now - quietSince >= 1500 && firstTalkPlaced) || (storyArrivedAt && now - storyArrivedAt > LOADING_MAX * 1000)) storyLoading = false;
     }
     // (it lifts once everything around Henry has arrived and stayed quiet for a moment: the scene,
     // its textures, the grass, the first NPCs; at most LOADING_MAX seconds)

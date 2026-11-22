@@ -75,6 +75,8 @@ export interface WorldNpc {
   soul: string;
   placement: Placement;
   schedule: ScheduleItem[];
+  /** bones whose reach into walls wallPush checks (head, neck, chest) */
+  wallBones?: number[];
   character: LoadedCharacter;
   /** entity world matrix (column-major) */
   world: Float32Array;
@@ -237,6 +239,10 @@ export class NpcWorld {
   ai: NpcAi | null = null;
   /** debugging and tests: what updateAi does to each NPC's tree (start, windDown, ended, early, failedStart) */
   aiLog: ((npc: NpcEntity, event: string, detail: string) => void) | null = null;
+  /** the scene's collision (a hit's fraction of the segment, or null): NPCs at work are eased out of walls */
+  raycast: ((from: [number, number, number], to: [number, number, number]) => number | null) | null = null;
+  /** per NPC at work: how far it is moved out of walls at its spot (wallPush) */
+  readonly pushes = new Map<number, { spot: [number, number]; off: [number, number] }>();
 
   /** An NPC's daily cycle at `minute` (null without schedules). */
   cycle(e: NpcEntity, schedule: ScheduleItem[], minute: number): NpcCycle | null {
@@ -483,6 +489,29 @@ export class NpcWorld {
     return `body at ${hips.map((v) => v.toFixed(2)).join(",")}${facing}`;
   }
 
+  /**
+   * Bones of NPC `n` behind a wall (debugging clipping): a level ray from the hips' vertical line
+   * to each bone of the upper body; a hit before the bone means the bone is through a wall
+   * or prop, by `depth` metres. `raycast` gives the hit's fraction of the segment or null.
+   */
+  static clipping(n: WorldNpc, raycast: (from: [number, number, number], to: [number, number, number]) => number | null): { bone: string; depth: number }[] {
+    const a = n.animator, W = n.world;
+    const at = (b: number): [number, number, number] => { const m = a.world[b]; const x = m[12], y = m[13], z = m[14]; return [W[0] * x + W[4] * y + W[8] * z + W[12], W[1] * x + W[5] * y + W[9] * z + W[13], W[2] * x + W[6] * y + W[10] * z + W[14]]; };
+    const hips = at(a.centerBone);
+    // (level rays from the hips' vertical line at each bone's height: walls stop them; a table the
+    // NPC bends over, the seat or the floor don't)
+    const out: { bone: string; depth: number }[] = [];
+    a.skeleton.bones.forEach((b, i) => {
+      if (!/(head|spine2|neck|hand|forearm|upperarm)$/i.test(b.name)) return;
+      const p = at(i);
+      const from: [number, number, number] = [hips[0], hips[1], p[2]];
+      const len = Math.hypot(p[0] - from[0], p[1] - from[1]);
+      const t = len > 0.05 ? raycast(from, p) : null;
+      if (t !== null) out.push({ bone: b.name, depth: (1 - t) * len });
+    });
+    return out.sort((x, y) => y.depth - x.depth);
+  }
+
   /** NPC `id`'s current walking speed (m/s) from the crowd step, if it has moved. */
   speed(id: number): number | undefined {
     const a = this.movers.get(id)?.agent;
@@ -573,13 +602,37 @@ export class NpcWorld {
   }
 
   /** Assemble up to `max` NPCs within `radius` of a point at time `minute` (0–1439), nearest first. */
+  /**
+   * Load these NPCs' characters in the background, two at a time (a new game's people around
+   * Henry's spawn point, read before the click: under the loading screen they waited ~50 s for
+   * the streaming of Skalitz to free the main thread).
+   */
+  async prefetch(entities: NpcEntity[]): Promise<void> {
+    const db = await (this.db ??= CharacterDb.load(this.vfs));
+    const souls = new Map(db.souls.map((s) => [s.name, s]));
+    const todo = entities.filter((e) => !this.chars.has(e.id) && souls.has(e.name));
+    const next = async (): Promise<void> => {
+      const e = todo.shift();
+      if (!e) return;
+      if (!this.chars.has(e.id)) {
+        const p = loadCharacter(this.vfs, db.soul(souls.get(e.name)!.id), { maxTextureDim: 256 }).catch(() => null);
+        this.chars.set(e.id, p);
+        await p;
+        await this.rig((await p)?.spec.skeleton ?? "", e.female).catch(() => null);
+      }
+      return next();
+    };
+    await Promise.all([next(), next()]);
+  }
+
   async near(center: [number, number, number], radius: number, max: number, minute = 720, onStatus?: (s: string) => void): Promise<WorldNpc[]> {
     const db = await (this.db ??= CharacterDb.load(this.vfs));
     const souls = new Map(db.souls.map((s) => [s.name, s]));
     const candidates = await this.select(center, radius, max, minute);
-    // start the character loads up front, four at a time, so file reads and decoding overlap
+    // start the character loads up front, eight at a time, so file reads and decoding overlap
     const missing = candidates.filter(({ e }) => !this.chars.has(e.id));
     let started = 0, done = 0;
+    onStatus?.(`Assembling NPCs 0/${missing.length}`);
     const startNext = (): Promise<void> | undefined => {
       const c = missing[started++];
       if (!c) return undefined;
@@ -587,7 +640,7 @@ export class NpcWorld {
       this.chars.set(c.e.id, p);
       return p.then(() => { onStatus?.(`Assembling NPCs ${++done}/${missing.length}`); return startNext(); });
     };
-    await Promise.all([startNext(), startNext(), startNext(), startNext()]);
+    await Promise.all(Array.from({ length: 8 }, startNext));
     const out: WorldNpc[] = [];
     for (const { e, p: placement } of candidates) {
       const p = this.chars.get(e.id)!;
@@ -761,7 +814,13 @@ let animFrame = 0;
 export function animateNpcs(npcs: WorldNpc[], world: NpcWorld, minute: number, seconds: number, r: NpcRendererOps, eye?: [number, number, number], viewProj?: Float32Array): void {
   animFrame++;
   for (const [k, n] of npcs.entries()) {
-    const p = world.drawn(n.entity.id) ?? world.placeAt(n.entity, n.schedule, minute);
+    let p = world.drawn(n.entity.id) ?? world.placeAt(n.entity, n.schedule, minute);
+    // at work: moved out of walls as far as its pose went into them (wallPush)
+    // (kept from clip to clip at one spot: a lean's in, idle and out clips start from different points)
+    const spot: [number, number] | null = p.pose === "act" ? [p.pos[0], p.pos[1]] : null;
+    let push = world.pushes.get(n.entity.id);
+    if (push && (!spot || Math.hypot(spot[0] - push.spot[0], spot[1] - push.spot[1]) > 1.5)) { world.pushes.delete(n.entity.id); push = undefined; }
+    if (push) p = { ...p, pos: [p.pos[0] + push.off[0], p.pos[1] + push.off[1], p.pos[2]] };
     // the walk cycle advances with the distance actually walked (the clip's own speed is the NPCs'
     // walking speed, but they catch up and slow down around others): no sliding feet
     const walk = n.clips.walk, dt = seconds - (n.lastSeconds ?? seconds);
@@ -808,5 +867,47 @@ export function animateNpcs(npcs: WorldNpc[], world: NpcWorld, minute: number, s
     n.character.parts.forEach(({ model }, k) => {
       if (model.skeleton && r.paletteSize(n.items[k]) && !r.paletteShared?.(n.items[k])) r.setPalette(n.items[k], n.animator.palette(model.skeleton));
     });
+    // every few poses of an NPC at work near the camera: its upper body against the walls
+    if (spot && world.raycast && (animFrame + k) % WALL_CHECK_EVERY === 0 && (!eye || Math.hypot(p.pos[0] - eye[0], p.pos[1] - eye[1]) < WALL_CHECK_RANGE)) wallPush(n, world, spot);
   }
+}
+
+/** Poses between wall checks of an NPC at work, and how near the camera they are checked (m). */
+const WALL_CHECK_EVERY = 6;
+const WALL_CHECK_RANGE = 40;
+/** The farthest an NPC at work is moved out of walls (m), and the margin kept from them. */
+const WALL_PUSH_MAX = 0.5;
+const WALL_MARGIN = 0.04;
+
+/**
+ * Ease an NPC at work out of the walls its pose reaches into. OURS: the game's leaning spots and
+ * work helpers put the root where the clips end, but with our alignment of those clips (npcAi.ts
+ * alignClip) a leaning guard's head went 5–40 cm into the wall behind him. Level rays from the
+ * hips' vertical line to the head, neck and chest (NpcWorld.clipping's test): a bone behind a wall
+ * moves the NPC away from it, by its depth and a margin, at most WALL_PUSH_MAX in all; the push
+ * holds for as long as it works at that spot.
+ */
+function wallPush(n: WorldNpc, world: NpcWorld, spot: [number, number]): void {
+  const a = n.animator, W = n.world;
+  const at = (b: number): [number, number, number] => { const m = a.world[b]; const x = m[12], y = m[13], z = m[14]; return [W[0] * x + W[4] * y + W[8] * z + W[12], W[1] * x + W[5] * y + W[9] * z + W[13], W[2] * x + W[6] * y + W[10] * z + W[14]]; };
+  const hips = at(a.centerBone);
+  n.wallBones ??= a.skeleton.bones.flatMap((b, i) => (/(head|neck|spine2)$/i.test(b.name) ? [i] : []));
+  let best = 0, dir: [number, number] = [0, 0];
+  for (const i of n.wallBones) {
+    const p = at(i);
+    const dx = p[0] - hips[0], dy = p[1] - hips[1], len = Math.hypot(dx, dy);
+    if (len < 0.05) continue;
+    const t = world.raycast!([hips[0], hips[1], p[2]], p);
+    if (t === null) continue;
+    const depth = (1 - t) * len;
+    if (depth > best) { best = depth; dir = [-dx / len, -dy / len]; }
+  }
+  if (best <= 0) return;
+  const push = world.pushes.get(n.entity.id) ?? { spot, off: [0, 0] as [number, number] };
+  const k = best + WALL_MARGIN;
+  let ox = push.off[0] + dir[0] * k, oy = push.off[1] + dir[1] * k;
+  const m = Math.hypot(ox, oy);
+  if (m > WALL_PUSH_MAX) { ox *= WALL_PUSH_MAX / m; oy *= WALL_PUSH_MAX / m; }
+  push.off = [ox, oy];
+  world.pushes.set(n.entity.id, push);
 }

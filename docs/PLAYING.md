@@ -105,9 +105,9 @@ Pick one in the world view (saved per browser). Medium is the default.
 | Preset | For | Textures | Shadows | Render scale | Streamed radius |
 |---|---|---|---|---|---|
 | Potato | integrated GPUs (AMD Vega 7) | up to 512 px | off | 50% | 200 m |
-| Low | older or weaker GPUs | up to 1024 px | 1 cascade | 75% | 300 m |
-| Medium | mid-range GPUs | up to 1024 px | 2 cascades | 100%, 4× MSAA | 500 m |
-| High | recent discrete GPUs | up to 2048 px | 2 cascades, sharper | 100%, 4× MSAA | 700 m |
+| Low | older or weaker GPUs | up to 1024 px | 1 cascade | 75%, FXAA | 300 m |
+| Medium | mid-range GPUs | up to 1024 px | 2 cascades | 50–100% (dynamic), FXAA | 500 m |
+| High | recent discrete GPUs | up to 2048 px | 2 cascades, sharper | 100%, 4× MSAA and FXAA | 700 m |
 
 **Benchmark:** the ⏱ Benchmark button flies over Rataje and walks through its
 market (about 80 s) at every preset, then copies a report to the clipboard:

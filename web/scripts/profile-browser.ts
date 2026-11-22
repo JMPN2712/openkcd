@@ -32,6 +32,8 @@ const DEBUG = Number(process.env.DEBUG_PORT ?? 9338);
 const headed = process.argv.includes("--headed");
 const children: ChildProcess[] = [];
 process.on("exit", () => children.forEach((c) => c.kill()));
+// (killed from outside, e.g. by `timeout`: Chrome and the preview server went on running for hours)
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(sig, () => process.exit(130));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function waitFor<T>(what: string, fn: () => Promise<T | undefined>, ms = 60000): Promise<T> {
   const end = Date.now() + ms;
@@ -490,10 +492,12 @@ if (talkTo || newGame) {
   const td = Date.now();
   let lastSub = "", lastMenu = "", quietFor = 0, k = 0, lastStory = "", lastTrade = "", talked = false, snaps = 0;
   // (a new game takes a while to reach its first conversation: the layers, the world around Skalitz)
-  while ((quietFor < 10 || (newGame && !talked && Date.now() - td < 120000)) && Date.now() - td < 240000) {
+  while ((quietFor < 10 || (newGame && !talked && Date.now() - td < 200000)) && Date.now() - td < 240000) {
     if (newGame) {
       const story = await evaluate<string>(`(() => { const h = document.querySelector(".level-hud")?.textContent ?? ""; const m = /New game: [^·]*/.exec(h); return m ? m[0].trim() : ""; })()`);
       if (story && story !== lastStory) { console.log(`  ${((Date.now() - td) / 1000).toFixed(1).padStart(5)} s  ${story}`); lastStory = story; }
+      // (BUSY=1: what holds the loading screen, every 5 s)
+      if (process.env.BUSY && !talked && k % 1 === 0 && Math.floor((Date.now() - td) / 5000) !== Math.floor((Date.now() - td - 500) / 5000)) console.log(`  ${((Date.now() - td) / 1000).toFixed(1).padStart(5)} s  busy: ${await evaluate<string>(`(globalThis.__openkcdBusy?.() ?? "") + " · " + (process.env.BUSY_NPC ? globalThis.__openkcdNpcs?.([process.env.BUSY_NPC]) : "")`.replace("process.env.BUSY_NPC ?", JSON.stringify(!!process.env.BUSY_NPC) + " ?").replace("[process.env.BUSY_NPC]", JSON.stringify([process.env.BUSY_NPC ?? ""])))}`);
     }
     const [sub, menu, info] = await evaluate<[string, string, string]>(`(() => {
       const s = document.querySelector(".level-subtitle"), m = document.querySelector(".level-dialogue-menu"), h = document.querySelector(".level-hud")?.textContent ?? "";

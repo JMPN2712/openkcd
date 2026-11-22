@@ -61,14 +61,27 @@ export interface LayerContents {
 }
 
 /** Read the level's profiles (`whdata_1`) and all its layer files. A few seconds for Rataje's 1,831 files. */
+/**
+ * Read `entries` with up to `n` reads in flight, the results in the entries' order. One by one,
+ * each read waited behind a rendered frame: the 1,831 layer files took ~57 s in the view.
+ */
+export async function readAllInOrder(entries: PakEntry[], read: (e: PakEntry) => Promise<Uint8Array>, n = 32): Promise<Uint8Array[]> {
+  const out: Uint8Array[] = new Array(entries.length);
+  let next = 0;
+  const worker = async () => { while (next < entries.length) { const i = next++; out[i] = await read(entries[i]); } };
+  await Promise.all(Array.from({ length: Math.min(n, entries.length) }, worker));
+  return out;
+}
+
 export async function readLayers(entries: PakEntry[], read: (e: PakEntry) => Promise<Uint8Array>): Promise<LayerContents> {
   const dec = new TextDecoder();
   const wh = entries.find((e) => e.name.toLowerCase() === "whdata_1");
   const out: LayerContents = { profiles: wh ? parseProfiles(dec.decode(await read(wh))) : new Map(), entities: [], npcs: [], npcLayer: new Map() };
-  for (const e of entries) {
-    const layer = layerOfEntry(e.name);
-    if (!layer) continue;
-    const xml = dec.decode(await read(e));
+  const files = entries.filter((e) => layerOfEntry(e.name));
+  const data = await readAllInOrder(files, read);
+  for (let i = 0; i < files.length; i++) {
+    const layer = layerOfEntry(files[i].name)!;
+    const xml = dec.decode(data[i]);
     for (const ent of parseEntityIndex(xml).values()) { ent.layer = layer; out.entities.push(ent); }
     if (xml.includes('EntityClass="NPC')) for (const n of parseNpcEntities(xml)) { out.npcs.push(n); out.npcLayer.set(n.id, layer); }
   }

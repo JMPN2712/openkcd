@@ -55,6 +55,8 @@ export class Vfs {
   private blobs = new Map<PakSource, Promise<Blob>>();
   /** worker threads for large reads (readWorkers.ts); shared by the copies extend() makes */
   workers: ReadWorkers | null = null;
+  /** this copy's worker reads go ahead of the others' (urgentCopy) */
+  private urgent = false;
 
   get size(): number {
     return this.files.size;
@@ -88,6 +90,16 @@ export class Vfs {
     const list = this.files.get(key);
     if (list) list.push({ pak, entry });
     else this.files.set(key, [{ pak, entry }]);
+  }
+
+  /** The same files, its worker reads ahead of the queue (NPC characters while the world streams). */
+  urgentCopy(): Vfs {
+    const v = new Vfs();
+    v.files = this.files;
+    v.blobs = this.blobs;
+    v.workers = this.workers;
+    v.urgent = true;
+    return v;
   }
 
   /**
@@ -130,7 +142,7 @@ export class Vfs {
   async read(hit: VfsHit, limit?: number): Promise<Uint8Array> {
     // asset reads skip the CRC check (the pak tests verify the files)
     const blob = await this.blob(hit.pak);
-    if (this.workers && limit === undefined && hit.entry.csize >= READ_IN_WORKER) return this.workers.read(hit.pak, blob, hit.entry);
+    if (this.workers && limit === undefined && hit.entry.csize >= READ_IN_WORKER) return this.workers.read(hit.pak, blob, hit.entry, this.urgent);
     return readEntry(blob, hit.entry, limit, false);
   }
 }

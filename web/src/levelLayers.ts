@@ -8,6 +8,7 @@
 
 import { parseEntityIndex, propEntities, type EntityInfo } from "./levelEntities.ts";
 import type { PakEntry } from "./zip.ts";
+import { readAllInOrder } from "./profiles.ts";
 
 export function parseLayerNames(levelDataXml: string): Map<number, string> {
   const out = new Map<number, string>();
@@ -113,12 +114,18 @@ export function applyDetailLayers(hidden: Set<number>, detail: { parent: Map<num
 export async function layerProps(entries: PakEntry[], read: (e: PakEntry) => Promise<Uint8Array>, names: Map<number, string>, hidden: Set<number>): Promise<EntityInfo[]> {
   const ids = new Map([...names].map(([id, n]) => [n.toLowerCase(), id]));
   const out: EntityInfo[] = [];
+  const files: [PakEntry, number][] = [];
   for (const e of entries) {
     const m = /^layers\/([^{/]+)(\{[^}]*\})?\.xml$/i.exec(e.name);
     if (!m) continue;
     const id = ids.get(m[1].toLowerCase());
     if (id === undefined || hidden.has(id)) continue;
-    const text = new TextDecoder().decode(await read(e));
+    files.push([e, id]);
+  }
+  const data = await readAllInOrder(files.map((f) => f[0]), read);
+  for (let i = 0; i < files.length; i++) {
+    const id = files[i][1];
+    const text = new TextDecoder().decode(data[i]);
     if (!text.includes("object_Model=") && !text.includes("Geometry=")) continue;
     for (const ent of propEntities(parseEntityIndex(text))) {
       ent.layerId = id;

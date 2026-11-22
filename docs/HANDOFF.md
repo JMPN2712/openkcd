@@ -201,6 +201,26 @@ follows them):
 
 ## Questions for a research session
 
+- **Smart-object clips: where they start, which way the NPC faces** (#62;
+  `npcAi.ts` `alignClip`, `btWorld.ts` `PlayAnimation`). Our rules, all
+  ASSUMPTIONs: a root-motion clip right after a walk to a helper ends at the
+  helper (sitting down, leaning); one after another clip starts where that
+  one ended (the smith's `SmithHeatingToForging` turns 137° and travels
+  1.14 m); a clip with a `SlavedObject` (the forge's bellows) starts facing
+  that object, since the forge's `stand` helper is `Category(Gate)` with no
+  facing of its own. With these Henry's father works the bellows and then
+  turns to the anvil, but ends 1.2 m from the anvil's top. Questions: how
+  the game places the character for a `PlayAnimation` with `SmartObject`,
+  `HelperID` and `SlavedObject` (the helper as the clip's start or end; the
+  slaved object's frame); what `Category(Gate)` and `Category(Sit)` mean
+  for the facing; whether the locator or the body bone is aligned.
+- **A greeting before a forced requested topic** (#62; `dialogueFlow.ts`
+  `start`). The opening quest asks for `q_skalitz_characterCreation` with
+  `Greeting` true; its branch has priority 2. dialogue.md cancels the
+  greeting for a forced branch only in the start list. We cancel it (and the
+  farewell) for a requested forced topic too, so the mother opens on her own
+  line rather than a random "What is it, my boy?". Is that the game's rule?
+
 - **Conversations asked for by trees** (dialogue.md gives `RequestDialog`'s
   fields only; `btWorld.ts`, `dialogRequests.ts`):
   1. What `RequestDialog` returns when the conversation can't start, and
@@ -430,6 +450,35 @@ follows them):
   shops with a trade panel (the tailor's "Let's talk trade" opens it), the
   shop and calendar script functions, diet mode's shop grants.
   `test-shops.ts`; `test-quest-opening.ts` now buys the charcoal.
+- #62 (2026-11-22): the opening starts on the mother's own line, a new game
+  reaches it in seconds, anti-aliasing, Henry's father turns from the
+  forge to the anvil, NPCs at work kept out of walls.
+  - **Opening line:** the requested opening topic played a random greeting
+    first ("What is it, my boy?"). A forced requested topic now skips the
+    greeting and farewell (ASSUMPTION, research question above).
+  - **New-game loading:** 190 s to the first line in the headless harness,
+    now 14–25 s. The 1,831 layer files were read one by one, each waiting
+    for a frame (57 s; now 32 at a time, and read in the background once
+    the world settles); NPC updates stopped while a scene rebuilt (Skalitz
+    for ~45 s; they now go on once the first scene has loaded); the loading
+    screen's 90 s limit counted from the click; worker reads queue on the
+    main thread with an urgent lane for NPC characters; the characters
+    around the spawn point are loaded ahead.
+  - **Anti-aliasing:** FXAA-style pass on Low, Medium and High (PERFORMANCE.md).
+  - **Clips after clips** start where the last left the NPC (the smith's
+    forge-to-anvil turn); a clip with a slaved object faces it (research
+    question above).
+  - **Walls:** NPCs at work whose head, neck or chest reach into a wall
+    are eased out by that much (at most 0.5 m; `npcs.ts` `wallPush`):
+    Rattay's leaning guards had heads 5–40 cm into walls.
+  - Debugging: `__openkcdClipping(r)` lists NPCs with bones in walls;
+    `__openkcdBusy()` what holds the loading screen (`BUSY=1` in the
+    harness prints it every 5 s, `BUSY_NPC=NAME` adds that NPC); harness
+    `--trace` also logs daily-cycle tree starts. The harness now stops its
+    Chrome when killed (a `timeout`ed run left one running for 14 hours).
+  - Not done: frame-time spikes weren't measured (the laptop was on battery
+    with a game running, so numbers weren't comparable); sleepers' arms
+    still reach into bunk walls; graphics quality and UI work.
 - #61 (2026-11-21): the mother sits facing the table, the forge is drawn,
   NPCs at work keep their height, NPCs out of view posed less often.
   - **The mother inside the table:** the walk to a smart object's helper

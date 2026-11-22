@@ -24,6 +24,18 @@ export interface ReadRequest {
 }
 export type ReadReply = { id: number; out: Uint8Array } | { id: number; values: unknown[] } | { id: number; error: string };
 
+/** Reads posted to one worker at a time; the rest wait here, urgent ones first. */
+const IN_FLIGHT = 3;
+
+interface Job {
+  id: number;
+  key: number;
+  src: () => Blob | string;
+  what: Pick<ReadRequest, "entry" | "slim">;
+  resolve: (v: unknown) => void;
+  reject: (e: Error) => void;
+}
+
 /** The part of a Web Worker or a worker_threads Worker this needs. */
 export interface WorkerPort {
   postMessage(m: ReadRequest): void;
@@ -38,6 +50,8 @@ export class ReadWorkers {
   /** compact package files, keyed apart from the paks */
   private slimKeys = new Map<string, number>();
   private nextId = 0;
+  private urgent: Job[] = [];
+  private normal: Job[] = [];
   private handleOf: (pak: PakSource, blob: Blob) => Blob | string;
 
   constructor(ports: WorkerPort[], handleOf: (pak: PakSource, blob: Blob) => Blob | string = (_p, b) => b) {
@@ -47,10 +61,12 @@ export class ReadWorkers {
       w.port.onReply((r) => {
         w.busy--;
         const p = this.waiting.get(r.id);
-        if (!p) return;
-        this.waiting.delete(r.id);
-        if ("error" in r) p.reject(new Error(r.error));
-        else p.resolve(("out" in r ? r.out : r.values) as never);
+        if (p) {
+          this.waiting.delete(r.id);
+          if ("error" in r) p.reject(new Error(r.error));
+          else p.resolve(("out" in r ? r.out : r.values) as never);
+        }
+        this.pump();
       });
     }
   }
@@ -64,10 +80,11 @@ export class ReadWorkers {
     }));
   }
 
-  read(pak: PakSource, blob: Blob, entry: PakEntry): Promise<Uint8Array> {
+  /** `urgent`: ahead of every queued read that isn't (the NPCs around Henry, while streaming) */
+  read(pak: PakSource, blob: Blob, entry: PakEntry, urgent = false): Promise<Uint8Array> {
     let key = this.keys.get(pak);
     if (key === undefined) this.keys.set(pak, (key = this.keys.size));
-    return this.send<Uint8Array>(key, () => this.handleOf(pak, blob), { entry });
+    return this.send<Uint8Array>(key, () => this.handleOf(pak, blob), { entry }, urgent);
   }
 
   /**
@@ -80,23 +97,42 @@ export class ReadWorkers {
     return this.send<unknown[]>(key, () => file, { slim: { piece, entries } });
   }
 
-  private send<T>(key: number, src: () => Blob | string, what: Pick<ReadRequest, "entry" | "slim">): Promise<T> {
-    // the least busy worker
-    let w = this.workers[0];
-    for (const x of this.workers) if (x.busy < w.busy) w = x;
-    w.busy++;
-    const id = this.nextId++;
-    const req: ReadRequest = { id, key, ...what };
-    if (!w.sent.has(key)) { w.sent.add(key); req.src = src(); }
+  private send<T>(key: number, src: () => Blob | string, what: Pick<ReadRequest, "entry" | "slim">, urgent = false): Promise<T> {
     return new Promise((resolve, reject) => {
-      this.waiting.set(id, { resolve, reject });
-      w.port.postMessage(req);
+      const job: Job = { id: this.nextId++, key, src, what, resolve: resolve as (v: unknown) => void, reject };
+      (urgent ? this.urgent : this.normal).push(job);
+      this.pump();
     });
+  }
+
+  /**
+   * Hand queued reads to workers, urgent ones first, at most IN_FLIGHT per worker: posted all at
+   * once, a burst of streaming reads sat in the workers' own queues ahead of anything asked later
+   * (a new game's NPCs waited ~50 s behind Skalitz's buildings).
+   */
+  private pump(): void {
+    for (;;) {
+      const queue = this.urgent.length ? this.urgent : this.normal;
+      if (!queue.length) return;
+      // the least busy worker
+      let w = this.workers[0];
+      for (const x of this.workers) if (x.busy < w.busy) w = x;
+      if (w.busy >= IN_FLIGHT) return;
+      const job = queue.shift()!;
+      w.busy++;
+      const req: ReadRequest = { id: job.id, key: job.key, ...job.what };
+      if (!w.sent.has(job.key)) { w.sent.add(job.key); req.src = job.src(); }
+      this.waiting.set(job.id, { resolve: job.resolve as (b: never) => void, reject: job.reject });
+      w.port.postMessage(req);
+    }
   }
 
   terminate(): void {
     for (const w of this.workers) w.port.terminate();
     for (const p of this.waiting.values()) p.reject(new Error("read workers stopped"));
+    for (const j of [...this.urgent, ...this.normal]) j.reject(new Error("read workers stopped"));
     this.waiting.clear();
+    this.urgent = [];
+    this.normal = [];
   }
 }

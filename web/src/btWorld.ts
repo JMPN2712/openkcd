@@ -157,6 +157,8 @@ export interface Action {
   rot?: [number, number, number, number];
   /** animation: the fragment tags it asks for (a lean's side: "leaningLeft") */
   tags?: string[];
+  /** animation: a point to face before it starts (its slaved object: the forge's bellows) */
+  face?: [number, number, number];
 }
 
 export interface WorldOptions {
@@ -2026,7 +2028,13 @@ export class AiWorld {
               } else if (n.tag === "PlayAnimation") {
                 walkedToHelper = false;
                 const tags = String(c.eval("tags", "") ?? "").split(/[+,]/).map((t) => t.trim()).filter((t) => t && t !== "undefined");
-                a = { kind: "animation", npc, target: String(c.eval("animation", "")), object: so ?? undefined, ...(tags.length ? { tags } : {}) };
+                // ASSUMPTION: a clip with a slaved object (SmithHeating works the forge's bellows) is played
+                // facing that object; at the forge's helper, which carries no facing of its own
+                // (Category(Gate)), Henry's father pumped air with the bellows beside him, and the clip
+                // that turns him to the anvil then took him away from it
+                const slave = this.prop(n, "SlavedObject") ? wuid(this.ref(n, c, "SlavedObject")) : null;
+                const face = slave !== null ? this.pos(slave) : null;
+                a = { kind: "animation", npc, target: String(c.eval("animation", "")), object: so ?? undefined, ...(tags.length ? { tags } : {}), ...(face ? { face: [...face] as [number, number, number] } : {}) };
               } else {
                 const dest = this.ref(n, c, "destinationSpecification");
                 let p = Array.isArray(dest) && dest.length === 3 ? (dest as number[]) : wuid(dest) !== null ? this.pos(wuid(dest)!) : null;

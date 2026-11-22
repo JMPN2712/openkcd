@@ -345,6 +345,10 @@ export class Conversation {
       const b = this.db.branch(this.requestedTopic);
       if (b && npcOnlyType(b.type)) this.npcOnly = true;
       if (b && !b.allowGreeting) this.greeting = false;
+      // ASSUMPTION (the note states it for the start list only): a requested topic whose branch is
+      // forced (priority not 0) skips the greeting and farewell too, as the start list's does; the
+      // opening quest's talk with Henry's mother starts on her own line, not a random greeting
+      if (this.greeting && b && b.priority !== 0) this.greeting = this.farewell = false;
       list = this.collect(this.requestedTopic, true, b?.type ?? 0, b?.priority ?? 0, true);
     } else {
       list = this.narrow(this.collectStarts(NORMAL), true);

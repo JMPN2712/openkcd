@@ -225,6 +225,8 @@ if (asked) {
   const log = converse(asked);
   console.log(`  ${log.join("\n  ")}`);
   check(log.some((l) => l.startsWith("seq ")) && requests.status(asked.id) === "done", "the conversation plays through the dialogue flow");
+  // (a forced branch skips the greeting: she opens with her own line, not "What is it, my boy?")
+  check(log[0] === `seq ${log.find((l) => l.startsWith("seq "))!.slice(4)}` && log[0].endsWith(`(topic ${asked.topic})`), `it opens on the requested topic, no greeting first (${log[0]})`);
   step(3);
   console.log(`  quest events during and after it:\n    ${events.slice(before).join("\n    ") || "none"}`);
 }

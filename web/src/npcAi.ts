@@ -18,21 +18,35 @@ const WALK_SPEED = 1.4;
 const yawQuat = (a: number): Quat => [Math.cos(a / 2), 0, 0, Math.sin(a / 2)];
 
 /**
- * A clip whose root moves or turns (an "in" clip: leaning_back_in walks 0.75 m and turns 180°,
- * sitting_bench_sitdown_front_01 1.67 m and 180°) ends where the NPC was put, at the helper,
- * facing its way: it starts back from there by its travel and turn. Started at the helper, the
- * NPCs ended past their spot facing the other way (leaning into walls, sitting beside benches).
- * ASSUMPTION: the helpers mark where such clips end (the research notes don't say).
+ * Where a clip whose root moves or turns leaves the NPC (`st.anchor`), and where it starts.
+ * - Right after a walk to a spot (`afterMove`: an "in" clip: leaning_back_in walks 0.75 m and turns
+ *   180°, sitting_bench_sitdown_front_01 1.67 m and 180°) it ends where the NPC was put, at the
+ *   helper, facing its way: it starts back from there by its travel and turn. Started at the
+ *   helper, the NPCs ended past their spot facing the other way (leaning into walls, sitting beside
+ *   benches).
+ * - After another clip (a transition: the smith's SmithHeatingToForging turns from the forge and
+ *   walks 2.7 m to the anvil; standing up from a bench) it starts where the last one left the NPC,
+ *   and its root carries him on. Anchored at its end, Henry's father hammered at the forge, with
+ *   the anvil behind him: the anvil's own stand helper is the forge's spot, so the clip starts there.
+ * ASSUMPTION: the helpers mark where "in" clips end and where transitions start (the research
+ * notes don't say).
  */
-function alignToEnd(st: AiState, c: FragmentClip | null): void {
+function alignClip(st: AiState, c: FragmentClip | null, afterMove: boolean): void {
   const m = c?.clip.motion;
   if (!c || c.loop || !m || (m.distance < 0.05 && Math.abs(m.turn) < 0.05)) return;
-  const endPos = st.pos, endRot = st.rot;
-  const endYaw = 2 * Math.atan2(endRot[3], endRot[0]), startYaw = endYaw - m.turn;
-  const [tx, ty] = m.travel, cs = Math.cos(startYaw), sn = Math.sin(startYaw);
-  st.anchor = { pos: [...endPos], rot: [...endRot] };
-  st.pos = [endPos[0] - (tx * cs - ty * sn), endPos[1] - (tx * sn + ty * cs), endPos[2]];
-  st.rot = yawQuat(startYaw);
+  const [tx, ty] = m.travel;
+  if (afterMove) {
+    const endPos = st.pos, endRot = st.rot;
+    const endYaw = 2 * Math.atan2(endRot[3], endRot[0]), startYaw = endYaw - m.turn;
+    const cs = Math.cos(startYaw), sn = Math.sin(startYaw);
+    st.anchor = { pos: [...endPos], rot: [...endRot] };
+    st.pos = [endPos[0] - (tx * cs - ty * sn), endPos[1] - (tx * sn + ty * cs), endPos[2]];
+    st.rot = yawQuat(startYaw);
+    return;
+  }
+  const startYaw = 2 * Math.atan2(st.rot[3], st.rot[0]);
+  const cs = Math.cos(startYaw), sn = Math.sin(startYaw);
+  st.anchor = { pos: [st.pos[0] + (tx * cs - ty * sn), st.pos[1] + (tx * sn + ty * cs), st.pos[2]], rot: yawQuat(startYaw + m.turn) };
 }
 
 export interface AiState {
@@ -147,6 +161,10 @@ export class NpcAi {
     }
     const fragment = String(a.target);
     const lib = this.libs[this.female.get(a.npc) ? "female" : "male"];
+    // (a clip right after a walk ends at the spot; one after another clip starts where that left off)
+    const afterMove = st.mode !== "act";
+    if (a.face && Math.hypot(a.face[0] - st.pos[0], a.face[1] - st.pos[1]) > 0.05) st.rot = yawQuat(Math.atan2(a.face[1] - st.pos[1], a.face[0] - st.pos[0]) - Math.PI / 2);
+    const alignToEnd = (st: AiState, c: FragmentClip | null) => alignClip(st, c, afterMove);
     Object.assign(st, { mode: "act", fragment, since: this.now, clip: null });
     // loaded clips give the real length (loops: three cycles); else an estimate while it loads
     // a fragment asked for with tags (a lean's side): the variant with those tags

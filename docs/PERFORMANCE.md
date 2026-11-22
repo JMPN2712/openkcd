@@ -2,12 +2,12 @@
 
 ## Quality presets (`web/src/quality.ts`)
 
-| Preset | Render scale | MSAA | Streaming radius | View distance × | LOD distance × | Terrain full detail | NPCs | Textures: first load → streamed up to | Texture memory |
-|---|---|---|---|---|---|---|---|---|---|
-| Potato | 0.5 | off | 200 m | 0.45 | 0.5 | 100 m | 8 | 128 → 512 | 256 MiB |
-| Low | 0.75 | off | 300 m | 0.65 | 0.7 | 160 m | 16 | 256 → 1024 | 640 MiB |
-| Medium | 1 (dynamic 0.5–1, upscaled) | off | 500 m | 1 | 1 | 250 m | 40 | 256 → 1024 | 1 GiB |
-| High | 1 | 4× | 700 m | 1.4 | 1.3 | 350 m | 60 | 512 → 2048 | 2 GiB |
+| Preset | Render scale | MSAA | FXAA | Streaming radius | View distance × | LOD distance × | Terrain full detail | NPCs | Textures: first load → streamed up to | Texture memory |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Potato | 0.5 | off | off | 200 m | 0.45 | 0.5 | 100 m | 8 | 128 → 512 | 256 MiB |
+| Low | 0.75 | off | on | 300 m | 0.65 | 0.7 | 160 m | 16 | 256 → 1024 | 640 MiB |
+| Medium | 1 (dynamic 0.5–1, upscaled) | off | on | 500 m | 1 | 1 | 250 m | 40 | 256 → 1024 | 1 GiB |
+| High | 1 | 4× | on | 700 m | 1.4 | 1.3 | 350 m | 60 | 512 → 2048 | 2 GiB |
 
 **Shadows and terrain detail by preset:**
 
@@ -842,6 +842,16 @@ Henry by the pub (Medium, 960×540 in the headless harness): 64 fps, CPU
 still cast shadows, a little behind): 68 fps, CPU 12 ms, the palette
 uploads gone from the profile. Rattay's market benchmark (Medium) is
 unchanged by the week's NPC and layer work: 88 fps before #56, 91 after.
+
+## Anti-aliasing (2026-11-21, Apple M3 Pro)
+
+Medium and Low had no anti-aliasing at all (High has 4× MSAA, which leaves
+shader and alpha-tested edges). The final pass now anti-aliases the
+finished image (`upscale.ts` `fsAa`, our own luma-edge filter in the FXAA
+style) on Low, Medium and High; Potato stays without. The scene then always
+goes through the scene texture. Rattay's market, Medium, 1920×1080 in the
+headless harness: GPU 9.3 → 9.7 ms (the pass about 0.4 ms), frame rate
+within noise (93–108 fps with it, 84–107 without).
 
 ## Next
 
