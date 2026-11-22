@@ -422,8 +422,10 @@ export class NpcWorld {
         } else { a.pos[0] = nx; a.pos[1] = ny; }
       } else { a.pos[0] = nx; a.pos[1] = ny; }
       const z = m.goalZ ?? m.agent.pos[2];
-      // sleepers keep the bed helper's height (the bench's top lifted them 0.45 m)
-      m.agent.pos[2] = m.ref.pose === "sleep" ? z : this.surface?.(m.agent.pos[0], m.agent.pos[1], z) ?? z;
+      // sleepers keep the bed helper's height (the bench's top lifted them 0.45 m), and so do NPCs at
+      // work: their spot's height is the helper's (a man picking at the top of a hay pile dropped to the
+      // ground beneath it once Henry came near, where the straw has no collision to stand on)
+      m.agent.pos[2] = m.ref.pose === "sleep" || m.ref.pose === "act" ? z : this.surface?.(m.agent.pos[0], m.agent.pos[1], z) ?? z;
     }
     // stuck: an NPC that wants to move and hasn't for STUCK_SECONDS (a wall or a fence between it
     // and its spot that the navmesh rule won't let it cross) is put at its spot, not left standing
@@ -461,6 +463,24 @@ export class NpcWorld {
     if (!m) return "no mover";
     const a = m.agent, g = m.goal;
     return `at ${a.pos.map((v) => v.toFixed(2)).join(",")} goal ${g ? `${g[0].toFixed(2)},${g[1].toFixed(2)} (${Math.hypot(g[0] - a.pos[0], g[1] - a.pos[1]).toFixed(2)} m)` : "-"} pref ${Math.hypot(a.pref[0], a.pref[1]).toFixed(2)} vel ${Math.hypot(a.vel[0], a.vel[1]).toFixed(2)} ref ${m.ref.pose}${this.held.has(id) ? " held" : ""}`;
+  }
+
+  /**
+   * For debugging: where NPC `n`'s body is drawn, the hips in the world and, for a seated body, the
+   * way its knees point from the hips (degrees, 0 = east, 90 = north).
+   */
+  static bodyInfo(n: WorldNpc): string {
+    const a = n.animator, W = n.world;
+    const at = (b: number): [number, number, number] => { const m = a.world[b]; const x = m[12], y = m[13], z = m[14]; return [W[0] * x + W[4] * y + W[8] * z + W[12], W[1] * x + W[5] * y + W[9] * z + W[13], W[2] * x + W[6] * y + W[10] * z + W[14]]; };
+    const hips = at(a.centerBone);
+    const calves = a.skeleton.bones.map((b, i) => [b.name, i] as const).filter(([nm]) => /calf$/i.test(nm)).map(([, i]) => at(i));
+    let facing = "";
+    if (calves.length === 2) {
+      const k = [(calves[0][0] + calves[1][0]) / 2, (calves[0][1] + calves[1][1]) / 2];
+      const d = Math.hypot(k[0] - hips[0], k[1] - hips[1]);
+      if (d > 0.15) facing = `, knees ${((Math.atan2(k[1] - hips[1], k[0] - hips[0]) * 180) / Math.PI).toFixed(0)}° ${d.toFixed(2)} m out`;
+    }
+    return `body at ${hips.map((v) => v.toFixed(2)).join(",")}${facing}`;
   }
 
   /** NPC `id`'s current walking speed (m/s) from the crowd step, if it has moved. */
@@ -717,6 +737,19 @@ export interface NpcRendererOps {
 
 /** Pose updates by distance from the viewer: every frame within 25 m, every 2nd to 50 m, every 4th beyond. */
 const POSE_RATE: [number, number][] = [[25, 1], [50, 2], [Infinity, 4]];
+/** Frames between poses of an NPC out of view (it still casts its shadow, a little behind) */
+const OUT_OF_VIEW_RATE = 8;
+
+/** Whether a body standing at `pos` (2 m tall) may show in the view (clip space, a body's margin). */
+function inView(vp: Float32Array, pos: readonly number[]): boolean {
+  const x = pos[0], y = pos[1], z = pos[2] + 1;
+  const cx = vp[0] * x + vp[4] * y + vp[8] * z + vp[12];
+  const cy = vp[1] * x + vp[5] * y + vp[9] * z + vp[13];
+  const cw = vp[3] * x + vp[7] * y + vp[11] * z + vp[15];
+  if (cw < -1.5) return false;
+  const m = Math.abs(cw) * 0.15 + 1.5;
+  return Math.abs(cx) <= Math.abs(cw) + m && Math.abs(cy) <= Math.abs(cw) + m;
+}
 let animFrame = 0;
 
 /**
@@ -725,7 +758,7 @@ let animFrame = 0;
  * and skinning palettes. With `eye`, distant NPCs re-pose less often (they still move every
  * frame; the pose is held in between).
  */
-export function animateNpcs(npcs: WorldNpc[], world: NpcWorld, minute: number, seconds: number, r: NpcRendererOps, eye?: [number, number, number]): void {
+export function animateNpcs(npcs: WorldNpc[], world: NpcWorld, minute: number, seconds: number, r: NpcRendererOps, eye?: [number, number, number], viewProj?: Float32Array): void {
   animFrame++;
   for (const [k, n] of npcs.entries()) {
     const p = world.drawn(n.entity.id) ?? world.placeAt(n.entity, n.schedule, minute);
@@ -745,7 +778,11 @@ export function animateNpcs(npcs: WorldNpc[], world: NpcWorld, minute: number, s
     }
     if (eye) {
       const d = Math.hypot(p.pos[0] - eye[0], p.pos[1] - eye[1], p.pos[2] - eye[2]);
-      const every = POSE_RATE.find(([max]) => d < max)![1];
+      let every = POSE_RATE.find(([max]) => d < max)![1];
+      // out of view (behind the camera or beside it, with a margin for a body's size): posed every
+      // OUT_OF_VIEW_RATE-th frame. Skalitz in a new game has 139 more NPCs about, and uploading every
+      // one's bone palette every frame took a third of the frame
+      if (viewProj && d > 3 && !inView(viewProj, p.pos)) every = Math.max(every, OUT_OF_VIEW_RATE);
       // spread the skipped NPCs over the frames
       if ((animFrame + k) % every !== 0) continue;
     }

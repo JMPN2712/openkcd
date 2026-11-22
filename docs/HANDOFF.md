@@ -430,6 +430,34 @@ follows them):
   shops with a trade panel (the tailor's "Let's talk trade" opens it), the
   shop and calendar script functions, diet mode's shop grants.
   `test-shops.ts`; `test-quest-opening.ts` now buys the charcoal.
+- #61 (2026-11-21): the mother sits facing the table, the forge is drawn,
+  NPCs at work keep their height, NPCs out of view posed less often.
+  - **The mother inside the table:** the walk to a smart object's helper
+    before its animation (#60) also ran for NPCs already at the object:
+    seated on a stool by a MoveAndAct, she was walked to the helper offering
+    `SitDown`, the stool's approach point, inside the table. It now runs only
+    from more than 2 m away.
+  - **Seats:** helpers with `Category(Sit)` give the sitter the facing of
+    the seat's approach side, half a turn from the helper's own (WORKAROUND,
+    in `helperFor`): drawn with the helper's facing she sat with her back
+    to the table. The lean (no Sit helper) is unchanged. Research question:
+    how the game turns a sitter at a seat helper (the sit-down clips carry a
+    locator track: `sitting_bench_sitdown_front_01`'s walks 1.3 m and turns
+    180°, while the body bone stays put; we draw the body bone only).
+  - **GeomEntity meshes:** 1,869 entities name their mesh in a `Geometry`
+    attribute on the entity (not `object_Model`): forges, weapons on racks,
+    shields, cloth, carts. None were drawn; Henry's father worked an
+    invisible forge.
+  - **Height at work:** the crowd put every NPC on the surface it found
+    below; one picking at the top of a hay pile dropped to the ground once
+    Henry came near (straw has no collision). Acting NPCs keep their spot's
+    height, as sleepers did.
+  - **Frame rate:** in Skalitz in a new game the 139 story NPCs' bone
+    palettes took a third of the frame (64 fps, Medium, M3 Pro). NPCs out of
+    view are posed every 8th frame: 68 fps. Rattay's benchmark is unchanged
+    by the last week (88 fps before #56, 91 now, Medium, M3 Pro).
+  - Debugging: `__openkcdNpcs` prints where each body is drawn; `goto:NAME:dx:dy:yaw`
+    and `eval:` steps in the harness.
 - #60 (2026-11-21): Kunesh talks, NPCs at their work spots facing the right
   way, a new game opens straight on the first talk.
   - **Kunesh:** trigger areas (`TriggerArea`) had no polygon (only

@@ -833,6 +833,16 @@ full market). Behaviour trees tick at 10 Hz, staggered.
 - Free-time searches are cached per settlement and hobby; containment
   tests check bounding boxes first.
 
+## NPCs in a new game (2026-11-21, Apple M3 Pro)
+
+In Skalitz after a new game the story adds 139 NPCs from its layers. With
+Henry by the pub (Medium, 960×540 in the headless harness): 64 fps, CPU
+14 ms, a third of it uploading the NPCs' bone palettes (`uploadPalettes`,
+`writeBuffer`). NPCs out of the view are now posed every 8th frame (they
+still cast shadows, a little behind): 68 fps, CPU 12 ms, the palette
+uploads gone from the profile. Rattay's market benchmark (Medium) is
+unchanged by the week's NPC and layer work: 88 fps before #56, 91 after.
+
 ## Next
 
 - **Terrain detail layers** are still 256–512 px and blurry up close (the ground under Henry's

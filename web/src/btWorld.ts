@@ -1343,7 +1343,12 @@ export class AiWorld {
       e.pos[1] + py + w * ty + (z * tx - x * tz),
       e.pos[2] + pz + w * tz + (x * ty - y * tx),
     ];
-    const [hw, hx, hy, hz] = h.rot;
+    // a seat (Category(Sit)): the sitter faces the side its approach points are on, the seat's −y
+    // (a stool's at a table's end: the table side), half a turn from the helper's own facing.
+    // WORKAROUND: drawn with the helper's facing, Henry's mother sat with her back to the table; how
+    // the game's seats turn the sitter (the sit-down clips' locator?) isn't in the research notes
+    const seat = /Category\(Sit\)/i.test(h.description);
+    const [hw, hx, hy, hz] = seat ? [-h.rot[3], h.rot[2], -h.rot[1], h.rot[0]] : h.rot;
     const rot: [number, number, number, number] = [w * hw - x * hx - y * hy - z * hz, w * hx + x * hw + y * hz - z * hy, w * hy - x * hz + y * hw + z * hx, w * hz + x * hy - y * hx + z * hw];
     return { id: k, pos, rot };
   }
@@ -2009,8 +2014,12 @@ export class AiWorld {
               // ASSUMPTION: an animation played on a smart object (the forge's SmithGrab) is played at
               // that object's helper, as a MoveAndAct would; the NPC walks there first and takes the
               // helper's facing. Played where he stood, Henry's father hammered at nothing 17 m away
-              const helper = so !== null && !walkedToHelper ? this.helperFor(so, String(c.eval("animation", ""))) : null;
               const here = this.pos(npc);
+              // (only when away from the object: one already there, put on a bench's seat by a MoveAndAct,
+              // was walked to the helper offering the animation, the bench's approach point, inside the table)
+              const soPos = so !== null ? this.pos(so) : null;
+              const away = !!here && !!soPos && Math.hypot(soPos[0] - here[0], soPos[1] - here[1]) > 2;
+              const helper = so !== null && !walkedToHelper && away ? this.helperFor(so, String(c.eval("animation", ""))) : null;
               if (helper && helper.id >= 0 && here && Math.hypot(helper.pos[0] - here[0], helper.pos[1] - here[1]) > 0.4) {
                 walkedToHelper = true;
                 a = { kind: "move", npc, target: [...helper.pos] as [number, number, number], object: so ?? undefined, rot: helper.rot };

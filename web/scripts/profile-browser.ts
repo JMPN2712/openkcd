@@ -530,13 +530,16 @@ if (talkTo || newGame) {
 // first conversation (before any tour); --fight-watch=SECONDS then prints the fight bars as they change
 for (const stepArg of arg("then", "").split(",").filter(Boolean)) {
   const [kind, ...rest] = stepArg.split(":");
-  const r = kind === "goto" ? await evaluate<string>(`globalThis.__openkcdGoto?.(${JSON.stringify(rest[0])}) ?? "no hook"`)
+  // goto:NAME[:dx:dy:yaw°]: Henry beside that NPC (default 1.4 m east of it, facing west)
+  const r = kind === "goto" ? await evaluate<string>(`globalThis.__openkcdGoto?.(${[JSON.stringify(rest[0]), ...rest.slice(1).map(Number)].join(", ")}) ?? "no hook"`)
     : kind === "quest" ? await evaluate<boolean>(`globalThis.__openkcdQuest?.(${JSON.stringify(rest[0])}, ${JSON.stringify(rest[1])}, ${JSON.stringify(rest[2])}) ?? false`)
     : kind === "wait" ? (await sleep(Number(rest[0]) * 1000), "waited")
     // npcs:NAME[;NAME]: where those NPCs are and what their trees do ("*": every shown NPC)
     : kind === "npcs" ? await evaluate<string>(`globalThis.__openkcdNpcs?.(${JSON.stringify(rest.join(":").split(";"))}) ?? "no hook"`)
     // talk:NAME: why talking to that NPC is or isn't offered
     : kind === "talk" ? await evaluate<string>(`globalThis.__openkcdTalk?.(${JSON.stringify(rest[0])}) ?? "no hook"`)
+    // eval:CODE: a debugging expression in the page (its value printed)
+    : kind === "eval" ? String(await evaluate<unknown>(rest.join(":")))
     // hud: the view's status line (scene, textures, NPCs)
     : kind === "hud" ? await evaluate<string>(`[...document.querySelectorAll("*")].find((e) => e.children.length === 0 && /fps, cpu/.test(e.textContent ?? ""))?.textContent ?? "no hud"`)
     // shot:NAME: a screenshot to PREFIX-NAME.png (--screenshot=PREFIX; never commit: game content)

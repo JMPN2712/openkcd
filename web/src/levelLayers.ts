@@ -119,7 +119,7 @@ export async function layerProps(entries: PakEntry[], read: (e: PakEntry) => Pro
     const id = ids.get(m[1].toLowerCase());
     if (id === undefined || hidden.has(id)) continue;
     const text = new TextDecoder().decode(await read(e));
-    if (!text.includes("object_Model=")) continue;
+    if (!text.includes("object_Model=") && !text.includes("Geometry=")) continue;
     for (const ent of propEntities(parseEntityIndex(text))) {
       ent.layerId = id;
       out.push(ent);

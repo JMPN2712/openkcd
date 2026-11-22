@@ -37,6 +37,9 @@ check(all.length > 866 && !!skalitz && !!hall && !hall.locked, `doors from the v
 const names = new Map([...lvl.layerNames].map(([id, n]) => [n.toLowerCase(), id]));
 const inLayer = (n: string) => lvl.props.filter((e) => e.layerId === names.get(n)).length;
 check(inLayer("sv_state0_prefabs") > 200 && inLayer("sv_state1") === 0, `Skalitz's furnishings from the layer files: ${inLayer("sv_state0_prefabs")} in sv_state0_prefabs, ${inLayer("sv_state0")} in sv_state0, none of the burned sv_state1`);
+// entities whose mesh is named on the entity (GeomEntity Geometry=): Skalitz's forge, weapons on racks
+const geom = lvl.props.filter((e) => e.cls === "GeomEntity");
+check(geom.length > 300 && geom.some((e) => /smithery_forge_v2\.cgf$/i.test(e.model ?? "")), `GeomEntity props are drawn: ${geom.length}, among them the forge at Henry's father's smithy`);
 doors.preload();
 await doors.ready();
 

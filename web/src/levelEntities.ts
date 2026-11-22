@@ -118,7 +118,10 @@ export function parseEntityIndex(xml: string): Map<number, EntityInfo> {
     };
     const end = xml.indexOf("</Entity>", re.lastIndex);
     const body = xml.slice(re.lastIndex, end < 0 ? undefined : end);
-    const model = /<Properties\b[^>]*\bobject_Model="([^"]+)"/.exec(body)?.[1];
+    // a GeomEntity names its mesh on the entity itself (Geometry="…smithery_forge_v2.cgf"): 1,869 of
+    // them in Rataje (forges, weapons on racks, shields, cloth, carts) were left out, so Henry's
+    // father worked an invisible forge
+    const model = /<Properties\b[^>]*\bobject_Model="([^"]+)"/.exec(body)?.[1] ?? attr(head, "Geometry");
     if (model) info.model = model;
     const linkText = body.slice(0, body.indexOf("</EntityLinks>") + 1);
     if (linkText) {

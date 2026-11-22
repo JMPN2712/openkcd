@@ -586,12 +586,13 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   }).catch((err) => { playerInfo = `Henry: ${(err as Error).message}`; });
   // debugging (the browser harness): a quest call (StartObjective …), and Henry beside a named NPC
   (globalThis as { __openkcdQuest?: (fn: string, q: string, o?: string) => boolean }).__openkcdQuest = (fn, q, o) => viewQuests?.apply(fn, q, o) ?? false;
-  (globalThis as { __openkcdGoto?: (name: string) => string }).__openkcdGoto = (name) => {
+  // (dx, dy: Henry's offset from the NPC in metres, east and north; yaw: his facing in degrees, 0 east)
+  (globalThis as { __openkcdGoto?: (name: string, dx?: number, dy?: number, yaw?: number) => string }).__openkcdGoto = (name, dx = 1.4, dy = 0, yawDeg = 180) => {
     const e = [...ents.values()].find((x) => x.name === name && /^NPC/.test(x.cls) && (!story || !x.layer || story.added.has(x.id))) ?? [...ents.values()].find((x) => x.name === name);
     if (!e || !player) return "not found";
     const n = npcs.find((x) => x.entity.id === e.id);
     const p = n ? (npcWorld.drawn(e.id) ?? n.placement).pos : e.pos;
-    teleportHenry(p[0] + 1.4, p[1], p[2] + 1, Math.PI);
+    teleportHenry(p[0] + dx, p[1] + dy, p[2] + 1, (yawDeg * Math.PI) / 180);
     return `${name} at ${p.map((v) => v.toFixed(1)).join(",")}`;
   };
   // debugging: why talking to a named NPC is or isn't offered (with Henry where he stands)
@@ -610,7 +611,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     if (!n) return `${name}: not shown`;
     const p = npcWorld.drawn(n.entity.id) ?? n.placement;
     const st = npcAi?.state(n.entity.id);
-    return `${name}: ${p.pos.map((v) => v.toFixed(1)).join(",")} ${p.pose} ${p.where}${st ? ` tree ${st.mode}${st.fragment ? ` ${st.fragment}` : ""}` : " (no tree)"}${npcWorld.running.get(n.entity.id) ? ` [${npcWorld.running.get(n.entity.id)}]` : ""}${npcWorld.pinned.has(n.entity.id) ? " pinned" : ""} {${npcWorld.moverInfo(n.entity.id)}}`;
+    return `${name}: ${p.pos.map((v) => v.toFixed(1)).join(",")} ${p.pose} ${p.where}${st ? ` tree ${st.mode}${st.fragment ? ` ${st.fragment}` : ""}` : " (no tree)"}${npcWorld.running.get(n.entity.id) ? ` [${npcWorld.running.get(n.entity.id)}]` : ""}${npcWorld.pinned.has(n.entity.id) ? " pinned" : ""} {${npcWorld.moverInfo(n.entity.id)}} ${NpcWorld.bodyInfo(n)}`;
   }).join(" | ");
   const npcWorld = new NpcWorld(vfs, npcEntities, schedules, (x, y) => heightAt(terrain, x, y));
   dlgBtn.addEventListener("click", () => {
@@ -1459,7 +1460,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     }
     if (!worldLoading) {
       npcWorld.stepCrowd(npcs, minute, simDt);
-      animateNpcs(npcs, npcWorld, minute, simSeconds, npcR, cam.pos);
+      animateNpcs(npcs, npcWorld, minute, simSeconds, npcR, cam.pos, vp);
     }
     if (scene) {
       // occlusion by the level's occluder shells (the camera's view only; ?no-occlusion: off)
