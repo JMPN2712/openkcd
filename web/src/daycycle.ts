@@ -226,7 +226,8 @@ export class FunAreas {
 
   constructor(w: CycleWorld) {
     this.w = w;
-    this.areas = [...w.ents.values()].filter((e) => e.points && e.points.length >= 6);
+    // (area shapes only: trigger areas carry polygons too, but aren't places to be)
+    this.areas = [...w.ents.values()].filter((e) => e.points && e.points.length >= 6 && e.cls.endsWith("AreaShape"));
   }
 
   private poly(a: EntityInfo): number[] {

@@ -345,6 +345,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
   const LOADING_MAX = 90;
   /** a new game is being set up (the layers, the move, the scene around Henry) */
   let storyLoading = false;
+  /** a new game's first talk has its two in place (the loading screen waits for it) */
+  let firstTalkPlaced = false;
   let storyReadyAt = 0;
   void loadGameUi(vfs, paks).then((a) => { applyGameUi(stage, a); buildMenu(a.text); }).catch(() => buildMenu((_k, f) => f));
   void artworkUrl(vfs).then((u) => { if (u) stage.style.setProperty("--kcd-start-art", `url("${u}")`); });
@@ -592,6 +594,16 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     teleportHenry(p[0] + 1.4, p[1], p[2] + 1, Math.PI);
     return `${name} at ${p.map((v) => v.toFixed(1)).join(",")}`;
   };
+  // debugging: why talking to a named NPC is or isn't offered (with Henry where he stands)
+  (globalThis as { __openkcdTalk?: (name: string) => string }).__openkcdTalk = (name) => {
+    const n = npcs.find((x) => x.entity.name === name);
+    if (!n) return `${name}: not shown`;
+    const p = (npcWorld.drawn(n.entity.id) ?? n.placement).pos, h = player?.controller.pos;
+    const target = { soul: n.soul, name: n.entity.name, entity: n.entity.id };
+    const areas = [...new Set((dialogue.explain(target).join(" ").match(/IsActorInside\('([^']+)'\)/g) ?? []).map((m) => m.slice(15, -2)))];
+    const inside = areas.map((a) => `${a}: Henry ${dialogue.actorInside?.(a, -1)}, ${name} ${dialogue.actorInside?.(a, n.entity.id)}`).join("; ");
+    return [`${name} ${h ? `${Math.hypot(p[0] - h[0], p[1] - h[1]).toFixed(1)} m from Henry` : ""}${inside ? ` (${inside})` : ""}, hint ${talkHint ? `${talkHint.name} ready ${talkHint.ready}` : "none"}, says ${dialogue.hasSomethingToSay(target)}`, ...dialogue.explain(target)].join("\n    ");
+  };
   // debugging: where named NPCs are and what they do (the browser harness reads it)
   (globalThis as { __openkcdNpcs?: (names: string[]) => string }).__openkcdNpcs = (names) => (names[0] === "*" ? npcs.map((x) => x.entity.name) : names).map((name) => {
     const n = npcs.find((x) => x.entity.name === name);
@@ -741,11 +753,17 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     return scenePlace(cams);
   };
   const startStory = async () => {
-    const w = npcAi?.world, quests = viewQuests;
-    if (story || !w || !quests) { storyInfo = story ? "New game: already started" : "New game: the behaviour trees are still loading"; return; }
-    storyInfo = "New game: reading the editor layers…";
+    if (story) { storyInfo = "New game: already started"; return; }
+    // under the loading screen from the click on: a new game asked for before the behaviour trees
+    // had loaded waits for them there (it did nothing, and Henry stood on in Rattay)
     storyLoading = true;
     storyReadyAt = 0;
+    firstTalkPlaced = false;
+    storyInfo = "New game: waiting for the behaviour trees…";
+    for (let t = 0; (!npcAi?.world || !viewQuests) && t < 600 && !stopped; t++) await new Promise((r) => setTimeout(r, 200));
+    const w = npcAi?.world, quests = viewQuests;
+    if (story || !w || !quests) { storyLoading = false; storyInfo = story ? "New game: already started" : "New game: the behaviour trees didn't load"; return; }
+    storyInfo = "New game: reading the editor layers…";
     const layers = await readLayerFiles();
     if (stopped || story) return;
     w.addEntities(layers.entities);
@@ -798,7 +816,8 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
     viewQuests = quests;
     // ?trace=NAME,…: the behaviour-tree trace of those entities in the console (debugging)
     const traceNames = new URLSearchParams(location.search).get("trace")?.split(",").filter(Boolean) ?? [];
-    const traceIds = () => new Set(traceNames.map((nm) => [...ents.values()].find((e) => e.name === nm)?.id).filter((x): x is number => x !== undefined));
+    // (names among the shown NPCs too: the story's layer NPCs aren't in the mission's entities)
+    const traceIds = () => new Set(traceNames.flatMap((nm) => [[...ents.values()].find((e) => e.name === nm)?.id, ...npcs.filter((n) => n.entity.name === nm).map((n) => n.entity.id)]).filter((x): x is number => x !== undefined));
     let traced: Set<number> | null = null, tracedAt = 0;
     const w = await createAiWorld(vfs, {
       trace: traceNames.length ? (m) => { if (!traced || performance.now() - tracedAt > 2000) { traced = traceIds(); tracedAt = performance.now(); } const id = Number(/^npc (\d+)/.exec(m)?.[1]); if (traced.has(id) || traceNames.some((nm) => m.includes(nm))) console.warn(`[tree] ${m}`); } : undefined,
@@ -1373,6 +1392,7 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
           }
         }
         // (placed while the loading screen is up; the talk begins once it has lifted)
+        if (n && ready) firstTalkPlaced = true;
         if (n && ready && !storyLoading) {
           storyInfo = `New game: ${n.entity.name} starts a conversation`;
           loadRig();
@@ -1514,7 +1534,9 @@ export async function showLevel(host: HTMLElement, paks: PakSource[], level: str
       const ready = !pendingPlace && worldReadyNear(pc.pos[0], pc.pos[1]);
       if (ready && !storyReadyAt) storyReadyAt = now;
       // (the scene is there and quiet: the screen lifts, then the first conversation begins)
-      if (storyReadyAt && now - storyReadyAt > 1000 && (now - quietSince >= 1500 || now - storyReadyAt > LOADING_MAX * 1000)) storyLoading = false;
+      // (and the first talk placed: lifted at the level's spawn point, the talk then moved Henry into
+      // the room in view; at most LOADING_MAX seconds after the scene was ready)
+      if (storyReadyAt && now - storyReadyAt > 1000 && ((now - quietSince >= 1500 && firstTalkPlaced) || now - storyReadyAt > LOADING_MAX * 1000)) storyLoading = false;
     }
     // (it lifts once everything around Henry has arrived and stayed quiet for a moment: the scene,
     // its textures, the grass, the first NPCs; at most LOADING_MAX seconds)

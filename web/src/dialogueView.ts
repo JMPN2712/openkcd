@@ -176,16 +176,19 @@ export class DialogueHost {
     void this.load();
   }
 
-  private flowHost(l: Loaded): FlowHost {
+  /** The flow's host for a talk with `npc` (the NPC asked about or talked to: its entity for the conditions). */
+  private flowHost(l: Loaded, npc: TalkTarget | null = this.with): FlowHost {
     const base = neutralWorld(() => this.clock().hour, l.quests);
-    const entityOf = (name: string) => (name === HENRY_SOUL ? HENRY_ENTITY : name === this.with?.name ? this.with.entity : undefined);
+    const entityOf = (name: string) => (name === HENRY_SOUL ? HENRY_ENTITY : name === npc?.name ? npc.entity : undefined);
     return {
       now: () => this.clock().seconds,
       call: (name, args, who, named) => {
         // IsActorInside('area')[n]: the participant n stands inside the area entity of that name
         // (Kunesh's yard for the debt talk: IsActorInside('q_skalitz_kunes_triggerArea2')[1])
         if (name === "IsActorInside" && this.actorInside && who) {
-          const entity = who.player ? HENRY_ENTITY : who.name === this.with?.name ? this.with.entity : undefined;
+          // (the NPC asked about, not only the one talked to: asking "has he something to say?" before
+          // a talk left Kunesh without an entity, his yard test failed, and he had nothing to say)
+          const entity = who.player ? HENRY_ENTITY : who.name === npc?.name ? npc.entity : undefined;
           const v = entity === undefined ? undefined : this.actorInside(String(args[0] ?? ""), entity);
           if (v !== undefined) return v ? 1 : 0;
         }
@@ -210,6 +213,13 @@ export class DialogueHost {
     return [henry, other];
   }
 
+  /** For debugging: every start branch for a talk with this NPC, and why it is or isn't offered. */
+  explain(npc: TalkTarget): string[] {
+    const l = this.ready;
+    if (!l) return ["dialogue tables not loaded"];
+    return new Conversation(l.db, this.state, this.people(l, npc), this.flowHost(l, npc)).explainStarts().filter((x) => !/loosely only/.test(x));
+  }
+
   /**
    * Whether the NPC has something to say (the "Talk" prompt): undefined until the tables have
    * loaded. Checked at most every 2 s per NPC.
@@ -220,7 +230,7 @@ export class DialogueHost {
     const now = performance.now();
     const c = this.somethingToSay.get(npc.entity);
     if (c && now - c.at < 2000) return c.yes;
-    const yes = new Conversation(l.db, this.state, this.people(l, npc), this.flowHost(l)).hasSomethingToSay();
+    const yes = new Conversation(l.db, this.state, this.people(l, npc), this.flowHost(l, npc)).hasSomethingToSay();
     this.somethingToSay.set(npc.entity, { at: now, yes });
     return yes;
   }
@@ -237,7 +247,7 @@ export class DialogueHost {
     this.shots.reset();
     // a conversation a tree asked for starts at its topic, with the greeting and farewell it allows
     if (request) { this.answering = request.id; this.requests?.begin(request.id); }
-    this.conv = new Conversation(l.db, this.state, this.people(l, npc), this.flowHost(l), request ? { topic: request.topic, greeting: request.greeting, farewell: request.ending } : {});
+    this.conv = new Conversation(l.db, this.state, this.people(l, npc), this.flowHost(l, npc), request ? { topic: request.topic, greeting: request.greeting, farewell: request.ending } : {});
     this.somethingToSay.delete(npc.entity);
     await this.go(() => this.conv!.start());
   }

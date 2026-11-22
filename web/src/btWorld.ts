@@ -155,6 +155,8 @@ export interface Action {
   object?: number;
   /** move: the orientation to end in (a helper's), quaternion w, x, y, z */
   rot?: [number, number, number, number];
+  /** animation: the fragment tags it asks for (a lean's side: "leaningLeft") */
+  tags?: string[];
 }
 
 export interface WorldOptions {
@@ -1990,6 +1992,8 @@ export class AiWorld {
         // left out, NPCs stood on benches and chairs where they should have sat
         const action = n.tag === "MoveAndAct" ? kids.find((k) => k.tag === "Action")?.children.find((k) => k.tag !== "OutputBreakpoints") : undefined;
         let body: Task | null = null, arrived = false;
+        // PlayAnimation on a smart object: first to the object's helper for that animation
+        let walkedToHelper = false;
         return {
           tick: () => {
             if (arrived && action) {
@@ -2001,8 +2005,19 @@ export class AiWorld {
             if (until === null) {
               const npc = this.current.npc;
               let a: Action;
-              if (n.tag === "PlayAnimation") {
-                a = { kind: "animation", npc, target: String(c.eval("animation", "")), object: wuid(this.ref(n, c, "SmartObject")) ?? undefined };
+              const so = n.tag === "PlayAnimation" ? wuid(this.ref(n, c, "SmartObject")) : null;
+              // ASSUMPTION: an animation played on a smart object (the forge's SmithGrab) is played at
+              // that object's helper, as a MoveAndAct would; the NPC walks there first and takes the
+              // helper's facing. Played where he stood, Henry's father hammered at nothing 17 m away
+              const helper = so !== null && !walkedToHelper ? this.helperFor(so, String(c.eval("animation", ""))) : null;
+              const here = this.pos(npc);
+              if (helper && helper.id >= 0 && here && Math.hypot(helper.pos[0] - here[0], helper.pos[1] - here[1]) > 0.4) {
+                walkedToHelper = true;
+                a = { kind: "move", npc, target: [...helper.pos] as [number, number, number], object: so ?? undefined, rot: helper.rot };
+              } else if (n.tag === "PlayAnimation") {
+                walkedToHelper = false;
+                const tags = String(c.eval("tags", "") ?? "").split(/[+,]/).map((t) => t.trim()).filter((t) => t && t !== "undefined");
+                a = { kind: "animation", npc, target: String(c.eval("animation", "")), object: so ?? undefined, ...(tags.length ? { tags } : {}) };
               } else {
                 const dest = this.ref(n, c, "destinationSpecification");
                 let p = Array.isArray(dest) && dest.length === 3 ? (dest as number[]) : wuid(dest) !== null ? this.pos(wuid(dest)!) : null;
@@ -2047,9 +2062,11 @@ export class AiWorld {
             if (this.o.realTime() < until) return "running";
             until = null;
             if (action) { arrived = true; return "running"; }
+            // (at the helper now: the animation itself next tick)
+            if (walkedToHelper) return "running";
             return "success";
           },
-          abort: () => { until = null; body?.abort(); body = null; arrived = false; },
+          abort: () => { until = null; body?.abort(); body = null; arrived = false; walkedToHelper = false; },
         };
       }
     }

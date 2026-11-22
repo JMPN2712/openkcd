@@ -430,6 +430,38 @@ follows them):
   shops with a trade panel (the tailor's "Let's talk trade" opens it), the
   shop and calendar script functions, diet mode's shop grants.
   `test-shops.ts`; `test-quest-opening.ts` now buys the charcoal.
+- #60 (2026-11-21): Kunesh talks, NPCs at their work spots facing the right
+  way, a new game opens straight on the first talk.
+  - **Kunesh:** trigger areas (`TriggerArea`) had no polygon (only
+    `…AreaShape` classes were read), so `IsActorInside('q_skalitz_kunes_
+    triggerArea2')` was always false; and the dialogue host gave the NPC asked
+    about no entity before a talk (it used `this.with`, set only once a talk
+    began). Both fixed: the debt talk is offered in his yard. The quest
+    trees' `IsInsideArea`/`AreaPresence` on trigger areas work now too. The
+    daily cycle's areas stay area shapes.
+  - **Smart-object animations:** `PlayAnimation` with a `SmartObject` (the
+    forge's `SmithGrab`) played where the NPC stood (Henry's father hammered
+    the air 17 m from his forge). It now walks to the object's helper first
+    (ASSUMPTION).
+  - **Root motion of "in" clips:** `leaning_back_in` walks 0.75 m and turns
+    180°, `sitting_bench_sitdown_front_01` 1.67 m and 180°. Started at the
+    helper they ended past it facing the other way (leaning into walls).
+    `NpcAi` starts such clips back from the helper by their travel and turn
+    so they end on it (ASSUMPTION: helpers mark where they end), and the
+    next action starts from there; the crowd puts acting NPCs exactly at
+    their clip's start.
+  - **Animation tags:** `PlayAnimation tags` (a lean's side) choose the
+    fragment variant (`AnimLibrary.tagged`).
+  - **New game:** clicked before the behaviour trees had loaded it did
+    nothing; it now waits under the loading screen. The loading screen
+    stays until the first talk is placed (it lifted at the spawn point and
+    the talk then moved Henry into the room in view).
+  - **Kunesh's look:** his preset is boots, trousers and `waffenrock_004_k`,
+    no hood item and no second clothing state; the jerkin's mesh models a
+    hood that its texture cuts away but for the collar. Research question:
+    does the game show that hood (another alpha source)?
+  - Debugging: `__openkcdTalk(name)` (harness `talk:NAME`) explains why a
+    talk is or isn't offered, term by term; `?trace=` finds layer NPCs.
 - #59 (2026-11-15): NPCs don't walk through Skalitz's palisade; the loading
   screen lifts where nobody is near.
   - **Walls for the crowd** (`navBlockers.ts`): the shown palisade pieces

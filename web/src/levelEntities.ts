@@ -146,7 +146,9 @@ export function parseEntityIndex(xml: string): Map<number, EntityInfo> {
     if (soHelpers) info.soHelpers = soHelpers;
     const scale = attr(head, "Scale");
     if (scale) info.scale = num(scale, 3, [1, 1, 1]) as [number, number, number];
-    if (cls.endsWith("AreaShape")) {
+    // area shapes, and trigger areas (TriggerArea: the quests' "is Henry in Kunesh's yard"), which
+    // were left without their polygon
+    if (cls.endsWith("AreaShape") || (/\bArea\b|Trigger/.test(cls) && body.includes("<Points>"))) {
       const h = /<Area\b[^>]*\bHeight="([^"]*)"/.exec(body)?.[1];
       if (h !== undefined) info.areaHeight = Number(h) || 0;
       const pts = body.slice(body.indexOf("<Points>"), body.indexOf("</Points>"));

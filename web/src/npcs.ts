@@ -357,7 +357,10 @@ export class NpcWorld {
       let m = this.movers.get(n.entity.id);
       // (a pinned NPC is put at its spot: the scene fades in on it, as the game's dialogue fade-in does)
       const snap = this.pinned.has(n.entity.id) ? 1 : SNAP_DISTANCE;
-      const far = m && (Math.hypot(goal[0] - m.agent.pos[0], goal[1] - m.agent.pos[1]) > snap || Math.abs(goal[2] - m.agent.pos[2]) > 2);
+      const off = m ? Math.hypot(goal[0] - m.agent.pos[0], goal[1] - m.agent.pos[1]) : 0;
+      // (an NPC playing a behaviour animation stands exactly where its clip starts: a clip that walks
+      // in and turns starts back from its spot, NpcAi alignToEnd)
+      const far = m && (off > snap || Math.abs(goal[2] - m.agent.pos[2]) > 2 || (ref.pose === "act" && off > 0.02 && off < 3));
       if (!m || far) {
         // new, or the plan jumped (clock moved, activity elsewhere): start at the planned spot
         m = { agent: { radius: NPC_PATH_RADIUS + CA.agentExtraFat, pos: [...goal], vel: [0, 0], pref: [0, 0], maxSpeed: 0, avoids: false, shrink: m?.agent.shrink ?? 1 }, ref, yaw: yawOf(ref.rot) };

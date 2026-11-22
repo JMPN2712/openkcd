@@ -17,6 +17,24 @@ type Quat = [number, number, number, number];
 const WALK_SPEED = 1.4;
 const yawQuat = (a: number): Quat => [Math.cos(a / 2), 0, 0, Math.sin(a / 2)];
 
+/**
+ * A clip whose root moves or turns (an "in" clip: leaning_back_in walks 0.75 m and turns 180°,
+ * sitting_bench_sitdown_front_01 1.67 m and 180°) ends where the NPC was put, at the helper,
+ * facing its way: it starts back from there by its travel and turn. Started at the helper, the
+ * NPCs ended past their spot facing the other way (leaning into walls, sitting beside benches).
+ * ASSUMPTION: the helpers mark where such clips end (the research notes don't say).
+ */
+function alignToEnd(st: AiState, c: FragmentClip | null): void {
+  const m = c?.clip.motion;
+  if (!c || c.loop || !m || (m.distance < 0.05 && Math.abs(m.turn) < 0.05)) return;
+  const endPos = st.pos, endRot = st.rot;
+  const endYaw = 2 * Math.atan2(endRot[3], endRot[0]), startYaw = endYaw - m.turn;
+  const [tx, ty] = m.travel, cs = Math.cos(startYaw), sn = Math.sin(startYaw);
+  st.anchor = { pos: [...endPos], rot: [...endRot] };
+  st.pos = [endPos[0] - (tx * cs - ty * sn), endPos[1] - (tx * sn + ty * cs), endPos[2]];
+  st.rot = yawQuat(startYaw);
+}
+
 export interface AiState {
   pos: Vec3;
   rot: Quat;
@@ -30,6 +48,12 @@ export interface AiState {
   route?: { pts: Vec3[]; cum: number[] };
   duration?: number;
   endRot?: Quat;
+  /**
+   * where a clip with root motion ends (an "in" clip: lean, sit down), set while it plays: the clip
+   * starts back from it by its travel and turn and its root carries the NPC there; the next action
+   * starts from it
+   */
+  anchor?: { pos: Vec3; rot: Quat };
   /** a move without a navmesh path: the NPC waits, then is at `to` (no walk through walls) */
   jump?: { at: number; to: Vec3 };
 }
@@ -88,6 +112,8 @@ export class NpcAi {
     if (!d) return 1;
     const st = d.state;
     st.jump = undefined;
+    // the last clip's root motion ended at its anchor: the NPC is there now
+    if (st.anchor) { st.pos = [...st.anchor.pos]; st.rot = [...st.anchor.rot]; st.anchor = undefined; }
     if (a.kind === "teleport" && typeof a.target !== "string") {
       Object.assign(st, { mode: "idle", pos: [...a.target], route: undefined, clip: null, fragment: "", since: this.now });
       return 0;
@@ -123,12 +149,21 @@ export class NpcAi {
     const lib = this.libs[this.female.get(a.npc) ? "female" : "male"];
     Object.assign(st, { mode: "act", fragment, since: this.now, clip: null });
     // loaded clips give the real length (loops: three cycles); else an estimate while it loads
+    // a fragment asked for with tags (a lean's side): the variant with those tags
+    if (a.tags?.length) {
+      const load = lib.tagged(fragment, [], a.tags).then(async (c) => c ?? (await lib.fragment(fragment))).then((c) => { if (st.fragment === fragment) { st.clip = c; alignToEnd(st, c); } });
+      this.pending.add(load);
+      void load.finally(() => this.pending.delete(load));
+      const known = lib.ready.get(fragment.toLowerCase());
+      return known ? known.seconds * (known.loop ? 3 : 1) : 4;
+    }
     const ready = lib.ready.get(fragment.toLowerCase());
     if (ready !== undefined) {
       st.clip = ready;
+      alignToEnd(st, ready);
       return ready ? ready.seconds * (ready.loop ? 3 : 1) : 4;
     }
-    const load = lib.fragment(fragment).then((c) => { if (st.fragment === fragment) st.clip = c; });
+    const load = lib.fragment(fragment).then((c) => { if (st.fragment === fragment) { st.clip = c; alignToEnd(st, c); } });
     this.pending.add(load);
     void load.finally(() => this.pending.delete(load));
     return 4;

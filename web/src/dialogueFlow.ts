@@ -314,7 +314,15 @@ export class Conversation {
         if (!e.entryCondition.trim()) return `seq ${q.id}: no entry condition`;
         let holds = false, why = "";
         try { holds = this.holds(e.entryCondition, true); } catch (err) { why = ` (${(err as Error).message})`; }
-        return `seq ${q.id}: ${holds ? "yes" : "no"} [${e.entryCondition.replace(/\s+/g, " ").trim().slice(0, 400)}]${why}`;
+        // (a refused condition joined by & / AND: which of its terms fail)
+        let failing = "";
+        if (!holds) {
+          const terms = e.entryCondition.split(/\s*(?:&|\bAND\b)\s*/i).map((t) => t.trim()).filter(Boolean);
+          if (terms.length > 1 && terms.every((t) => (t.match(/\(/g) ?? []).length === (t.match(/\)/g) ?? []).length)) {
+            failing = ` failing: ${terms.filter((t) => { try { return !this.holds(t, true); } catch { return true; } }).join(" & ")}`;
+          }
+        }
+        return `seq ${q.id}: ${holds ? "yes" : "no"} [${e.entryCondition.replace(/\s+/g, " ").trim().slice(0, 400)}]${why}${failing}`;
       });
       out.push(`branch type ${b.type} topic ${b.startTopic}${strict}: ${seqs.join("; ") || "no sequences"}`);
     }
