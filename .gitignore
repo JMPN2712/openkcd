@@ -87,4 +87,6 @@ __pycache__/
 
 # --- Machine-specific Claude Code files ---
 CLAUDE.local.md
+# this machine's paths (tools/setup.sh, web/scripts/paths.ts)
+.openkcd.json
 .claude/settings.local.json

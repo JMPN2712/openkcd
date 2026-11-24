@@ -12,6 +12,7 @@ import { Runner, type Host, type Status, type Value } from "../src/btRuntime.ts"
 import type { PakSource } from "../src/paks.ts";
 import { Vfs } from "../src/vfs.ts";
 import { durationMs, timerClock } from "../src/duration.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 let fails = 0;
 const check = (name: string, ok: boolean, detail = "") => {
@@ -122,7 +123,7 @@ const expr = (s: string) => `<Expression expressions="${q(s)}" />`;
 }
 
 // a real tree: final/sa_tailory.xml "tailor_setParams" (sets the workplace parameters)
-const root = process.argv[2] ?? join(homedir(), "kcd1");
+const root = process.argv[2] ?? defaultGameRoot;
 async function findPaks(dir: string): Promise<string[]> {
   const out: string[] = [];
   for (const d of await readdir(dir, { withFileTypes: true })) {

@@ -35,3 +35,17 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Type check and build
         run: npm run build
+  setup:
+    # tools/setup.sh on a fresh Linux clone (no game there: it notes that and goes on)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.node-version
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Setup script
+        run: tools/setup.sh --yes
+      - name: Paths file written
+        run: test -f .openkcd.json && test -f CLAUDE.local.md && node -e 'JSON.parse(require("fs").readFileSync(".openkcd.json","utf8"))'

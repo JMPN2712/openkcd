@@ -16,10 +16,11 @@ import { buildWorldScene, newWorldCaches } from "../src/world.ts";
 import { CollisionWorld } from "../src/collision.ts";
 import { heightAt } from "../src/terrain.ts";
 import { Doors, type Door } from "../src/doors.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
-const root = opt("--root", join(homedir(), "kcd1"));
+const root = opt("--root", defaultGameRoot);
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => { console.log(`${ok ? "ok  " : "FAIL"} ${msg}`); if (!ok) failures++; };

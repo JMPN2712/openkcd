@@ -18,9 +18,11 @@ stays strictly clean, so the rules below are not negotiable.
 - No large binaries.
 
 The code reads the player's own copy at runtime. Tests run against a local
-install (by default `~/kcd1`) and are never shipped with data.
+install (`.openkcd.json`'s `gameRoot`, by default `~/kcd1`) and are never
+shipped with data.
 
-Enable the commit guard once after cloning:
+Set up a clone once with `tools/setup.sh` ([docs/BUILDING.md](docs/BUILDING.md)):
+among other things it enables the commit guard, which by hand is:
 
 ```sh
 git config core.hooksPath .githooks

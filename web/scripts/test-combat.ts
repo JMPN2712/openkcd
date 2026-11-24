@@ -11,9 +11,10 @@ import {
   ATTACK_TYPES, CombatDb, Fight, P, aggression, attackChance, attackDelay, attackSpeed, attackStaminaCost, attackVector, blockDefence, blockProbability, defenceWeights, dodgeSlot,
   energy, evaluateHit, healthFactor, normalCdf, perfectBlockSlot, pickAnswer, sCurve, skillMultiplier, staminaCost, statMultiplier, windowLength, windows, type Fighter, type Weapon,
 } from "../src/combat.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
-const root = args.includes("--root") ? args[args.indexOf("--root") + 1] : join(homedir(), "kcd1");
+const root = args.includes("--root") ? args[args.indexOf("--root") + 1] : defaultGameRoot;
 let fails = 0;
 const check = (ok: boolean, what: string) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (!ok) fails++; };
 const near = (a: number, b: number, eps = 0.05) => Math.abs(a - b) <= eps;

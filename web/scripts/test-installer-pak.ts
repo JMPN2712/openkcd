@@ -12,10 +12,11 @@ import { DEFAULT_OPTIONS, findInstallers, wanted } from "../src/install.ts";
 import { installerPak, PartCache } from "../src/installerPak.ts";
 import { readEntry, readZip } from "../src/zip.ts";
 import { planRepack, repackedSize } from "../src/repack.ts";
+import { defaultGameRoot, defaultInstallers } from "./paths.ts";
 
-const [srcDir] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const [srcDir = defaultInstallers] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 if (!srcDir) throw new Error("usage: test-installer-pak.ts INSTALLER_DIR [--root=GAME_ROOT]");
-const root = process.argv.find((a) => a.startsWith("--root="))?.slice(7) ?? join(homedir(), "kcd1");
+const root = process.argv.find((a) => a.startsWith("--root="))?.slice(7) ?? defaultGameRoot;
 const sample = Number(process.argv.find((a) => a.startsWith("--sample="))?.slice(9) ?? 20);
 
 function nodeDir(path: string): FileSystemDirectoryHandle {

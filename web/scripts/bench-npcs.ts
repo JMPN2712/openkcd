@@ -23,11 +23,12 @@ import { NpcAi } from "../src/npcAi.ts";
 import { AnimLibrary } from "../src/mannequin.ts";
 import { LuaHost } from "../src/luaHost.ts";
 import { setGpuBlockCompression } from "../src/model.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 // as in the browser with texture-compression-bc: keep BC blocks instead of decoding on the CPU
 setGpuBlockCompression(!process.argv.includes("--decode"));
 
-const root = process.argv.slice(2).find((a) => !a.startsWith("--")) ?? join(homedir(), "kcd1");
+const root = process.argv.slice(2).find((a) => !a.startsWith("--")) ?? defaultGameRoot;
 const T = () => performance.now();
 const lap = (label: string, t0: number) => console.log(`${label.padEnd(44)} ${(T() - t0).toFixed(0).padStart(6)} ms`);
 

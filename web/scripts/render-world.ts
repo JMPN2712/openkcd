@@ -33,11 +33,12 @@ import { setGpuBlockCompression } from "../src/model.ts";
 import { ModelRenderer } from "../src/renderer.ts";
 import { buildWorldScene, lodItems, newWorldCaches, selectLods } from "../src/world.ts";
 import { CoverageBuffer, parseOccluders } from "../src/occlusion.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 Object.assign(globalThis, globals);
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
-const root = opt("--root", join(homedir(), "kcd1"));
+const root = opt("--root", defaultGameRoot);
 const radius = Number(opt("--radius", "500"));
 const maxModels = Number(opt("--max-models", "20000"));
 const allLayers = args.includes("--all-layers") ? (args.splice(args.indexOf("--all-layers"), 1), true) : false; // draw every editor layer

@@ -11,8 +11,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_OPTIONS, findInstallers, install, SliceNeeded, type Target } from "../src/install.ts";
 import { sliceName } from "../src/inno.ts";
+import { defaultInstallers } from "./paths.ts";
 
-const [srcDir] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const [srcDir = defaultInstallers] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 if (!srcDir) throw new Error("usage: test-part-install.ts INSTALLER_DIR [--slices=2]");
 const first = Number(process.argv.find((a) => a.startsWith("--slices="))?.slice(9) ?? 2);
 

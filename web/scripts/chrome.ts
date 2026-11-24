@@ -1,9 +1,10 @@
 // Which Chrome the headless harnesses start, and the flags it needs for a hardware WebGPU adapter
-// on this platform. CHROME=… overrides the binary.
+// on this platform. CHROME=… (or "chrome" in .openkcd.json, scripts/paths.ts) overrides the binary.
 
 import { platform } from "node:process";
+import { localConfig } from "./paths.ts";
 
-export const chromeBinary = process.env.CHROME ?? (
+export const chromeBinary = process.env.CHROME ?? localConfig.chrome ?? (
   platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
   : platform === "win32" ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
   : "google-chrome");

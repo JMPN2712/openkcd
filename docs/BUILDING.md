@@ -29,11 +29,45 @@ binaries over 100 KB, no decompiler-style names, no home paths), and the
 commit messages and e-mail addresses. The `checks` workflow runs it again on
 every pull request, with the PR's title and description, and builds the app.
 
-## Build and run
+## Setting up a machine (one command)
 
 ```sh
 git clone https://github.com/JMPN2712/openkcd.git
 cd openkcd
+tools/setup.sh          # asks for the game and installer folders; --yes takes the defaults
+```
+
+`tools/setup.sh` (macOS, Linux and WSL; safe to run again) checks Git and
+Node (24+, see `web/.node-version`), enables the git hooks, sets this clone's commit
+e-mail to your GitHub no-reply address (through `gh`, when signed in),
+installs the packages, and writes this machine's paths to **`.openkcd.json`**
+(gitignored):
+
+```json
+{ "gameRoot": "/path/to/game", "installers": "/path/to/gog", "chrome": "/path/to/chrome" }
+```
+
+Every script and harness reads it (`web/scripts/paths.ts`), so nothing in the
+repository names a machine's folders. `OPENKCD_GAME_ROOT`,
+`OPENKCD_INSTALLERS` and `CHROME` override it for one run, and `--root`
+for one script. For Claude Code it also writes `CLAUDE.local.md` (this
+machine's notes) and adds the clean-room folder's absolute path to
+`.claude/settings.local.json`. Flags: `--game DIR`, `--installers DIR`,
+`--research DIR`, `--chrome PATH`, `--no-npm`.
+
+Then, on any machine:
+
+```sh
+tools/check.sh --quick  # type check and the fast tests (a minute)
+tools/check.sh          # all headless tests and the clean-room audit (before a PR)
+cd web && npm run dev   # dev server: http://localhost:5173/
+```
+
+## Build and run
+
+By hand, without the setup script:
+
+```sh
 git config core.hooksPath .githooks   # the pre-commit checks (no game data, no decompiler output)
 cd web
 npm ci
@@ -49,17 +83,18 @@ Other commands, from `web/`:
 | Command | What it does |
 |---|---|
 | `npm run typecheck` | `tsc --noEmit`; run before every commit |
+| `npm run check` | `tools/check.sh`: the type check, the headless tests and the audit |
 | `npm run build` | type check, then a production build into `web/dist/` |
 | `npx vite preview` | serve `web/dist/` locally (http://localhost:4173/) |
 | `node scripts/<name>.ts` | the headless tests and tools; the README lists each one |
 
-Most test scripts read an extracted copy of the game, by default from `kcd1`
-in your home folder; pass `--root PATH` (or the path as the first argument,
+Most test scripts read an extracted copy of the game, by default from
+`.openkcd.json`'s `gameRoot` (else `kcd1` in your home folder); pass `--root PATH` (or the path as the first argument,
 as each script's usage line says) to use another. Headless renders use Dawn
 through the `webgpu` npm package: Vulkan on Linux, Metal on macOS. The
 headless Chrome harnesses (`profile-browser.ts`, `test-install-browser.ts`)
-find Chrome in its usual place on Linux, macOS and Windows (`CHROME=` picks
-another binary) and pass the Linux flags below only on Linux.
+find Chrome in its usual place on Linux, macOS and Windows (`.openkcd.json`'s
+`chrome` or `CHROME=` picks another binary) and pass the Linux flags below only on Linux.
 
 ## Linux: Chrome flags
 

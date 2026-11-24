@@ -37,10 +37,11 @@ import { nodeReadWorkers, openRataje } from "./lib.ts";
 import { loadDetailLayers } from "../src/terrainDetail.ts";
 import { ShadowMap } from "../src/shadow.ts";
 import { ShadowCasters } from "../src/shadowPass.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
-const root = opt("--root", join(homedir(), "kcd1"));
+const root = opt("--root", defaultGameRoot);
 const gpuOpt = opt("--gpu", "both");
 const gpus = (gpuOpt === "both" ? ["high-performance", "low-power"] : [gpuOpt]) as GPUPowerPreference[];
 const FRAMES = Number(opt("--frames", "240"));

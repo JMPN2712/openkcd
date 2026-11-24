@@ -4,10 +4,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { gameSources } from "./lib.ts";
 import { Vfs } from "../src/vfs.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
-const root = opt("--root", join(homedir(), "kcd1"));
+const root = opt("--root", defaultGameRoot);
 const grep = opt("--grep", "");
 const want = (args[0] ?? "").toLowerCase();
 const re = grep ? new RegExp(grep, "i") : null;

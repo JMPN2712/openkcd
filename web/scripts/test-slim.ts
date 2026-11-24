@@ -7,10 +7,11 @@ import { join } from "node:path";
 import { decodeEntry, encodeEntry, SlimPackage, textureKeys } from "../src/slim.ts";
 import { loadMipChain, loadModelParts, setGpuBlockCompression } from "../src/model.ts";
 import { nodeSlimFiles, openRataje } from "./lib.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
-const root = opt("--root", join(homedir(), "kcd1"));
+const root = opt("--root", defaultGameRoot);
 const sample = Number(opt("--sample", "300"));
 const dir = args[0];
 if (!dir) throw new Error("usage: test-slim.ts PACKAGE_DIR [--root GAME_ROOT] [--sample N]");

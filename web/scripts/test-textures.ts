@@ -13,11 +13,12 @@ import type { PakSource } from "../src/paks.ts";
 import { Vfs } from "../src/vfs.ts";
 import { TEXTURE_RE, decodeMip, mipData, openTexture, textureStem } from "../src/texture.ts";
 import { mipDims } from "../src/dds.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
 const outDir = args[0];
 if (!outDir) throw new Error("usage: test-textures.ts OUT_DIR [GAME_ROOT] [--samples N]");
-const root = args[1] && !args[1].startsWith("--") ? args[1] : join(homedir(), "kcd1");
+const root = args[1] && !args[1].startsWith("--") ? args[1] : defaultGameRoot;
 const samplesPerFormat = args.includes("--samples") ? Number(args[args.indexOf("--samples") + 1]) : 6;
 
 async function findPaks(dir: string): Promise<string[]> {

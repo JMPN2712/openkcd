@@ -10,10 +10,11 @@ import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { readCentralDirectory, readEntry } from "../src/zip.ts";
 import { parseTerrain, HEIGHT_UNIT } from "../src/terrain.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const [out, rootArg, levelArg] = process.argv.slice(2);
 if (!out) throw new Error("usage: test-terrain.ts OUT.png [GAME_ROOT] [LEVEL]");
-const root = rootArg ?? join(homedir(), "kcd1");
+const root = rootArg ?? defaultGameRoot;
 const level = levelArg ?? "rataje";
 
 const blob = await openAsBlob(join(root, `Data/Levels/${level}/level.pak`));

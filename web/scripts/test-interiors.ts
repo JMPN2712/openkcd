@@ -11,10 +11,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { buildWorldScene, newWorldCaches, type WorldModel } from "../src/world.ts";
 import { openRataje } from "./lib.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
-const root = opt("--root", join(homedir(), "kcd1"));
+const root = opt("--root", defaultGameRoot);
 const sample = Number(opt("--beds", "60"));
 
 let failures = 0;

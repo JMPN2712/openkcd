@@ -28,10 +28,11 @@ import { NpcAi } from "../src/npcAi.ts";
 import { AnimLibrary } from "../src/mannequin.ts";
 import { LuaHost } from "../src/luaHost.ts";
 import { setGpuBlockCompression } from "../src/model.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 setGpuBlockCompression(true);
 const arg = (name: string) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : undefined; };
-const root = arg("--root") ?? join(homedir(), "kcd1");
+const root = arg("--root") ?? defaultGameRoot;
 const follow = arg("--follow") ?? "rat_tailor";
 const max = Number(arg("--max") ?? 8);
 const [hh, mm] = (arg("--clock") ?? "18:25").split(":").map(Number);

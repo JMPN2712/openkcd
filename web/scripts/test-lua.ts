@@ -11,9 +11,10 @@ import type { PakSource } from "../src/paks.ts";
 import { Vfs } from "../src/vfs.ts";
 import { LuaHost } from "../src/luaHost.ts";
 import { TypeDefs } from "../src/typeDefs.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const wasm = createRequire(import.meta.url).resolve("wasmoon-lua5.1/dist/liblua5.1.wasm");
-const root = process.argv[2] ?? join(homedir(), "kcd1");
+const root = process.argv[2] ?? defaultGameRoot;
 let fails = 0;
 const check = (name: string, ok: boolean, detail = "") => { console.log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? `: ${detail}` : ""}`); if (!ok) fails++; };
 

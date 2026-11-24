@@ -10,12 +10,13 @@ import { open, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { checkSlice, readFile, readInstaller, sliceName, sliceSource, type InstallerFile } from "../src/inno.ts";
+import { defaultGameRoot, defaultInstallers } from "./paths.ts";
 
 const full = process.argv.includes("--full");
-const root = process.argv.find((a) => a.startsWith("--root="))?.slice(7) ?? join(homedir(), "kcd1");
+const root = process.argv.find((a) => a.startsWith("--root="))?.slice(7) ?? defaultGameRoot;
 let exes = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 if (!exes.length) {
-  const dir = join(homedir(), "Downloads/kingdom_come_deliverance");
+  const dir = defaultInstallers;
   // the DLC installers sit beside the base game's or in a DLC subfolder
   const inDir = async (d: string) => (await readdir(d).catch(() => [])).filter((n) => n.endsWith(".exe")).map((n) => join(d, n));
   exes = [...(await inDir(dir)), ...(await inDir(join(dir, "DLC")))];

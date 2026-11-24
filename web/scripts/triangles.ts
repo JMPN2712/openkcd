@@ -11,10 +11,11 @@ import { TerrainRenderer } from "../src/terrainRenderer.ts";
 import { buildWorldScene, newWorldCaches, selectLods } from "../src/world.ts";
 import { PRESETS, type PresetName } from "../src/quality.ts";
 import { openRataje } from "./lib.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args[args.indexOf(k) + 1] : d);
-const root = opt("--root", join(homedir(), "kcd1"));
+const root = opt("--root", defaultGameRoot);
 const preset = opt("--preset", "medium") as PresetName;
 const [x, y, yawDeg] = opt("--at", "2577.8,574,-124").split(",").map(Number);
 const top = Number(opt("--top", "30"));

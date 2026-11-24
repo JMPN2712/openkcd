@@ -12,8 +12,9 @@ import { join } from "node:path";
 import { readCentralDirectory, readEntry } from "../src/zip.ts";
 import { EXTERNAL_LINK, NavMesh, type Vec3 } from "../src/navmesh.ts";
 import { parseTerrain, heightAt } from "../src/terrain.ts";
+import { defaultGameRoot } from "./paths.ts";
 
-const root = process.argv[2] ?? join(homedir(), "kcd1");
+const root = process.argv[2] ?? defaultGameRoot;
 const pak = await openAsBlob(join(root, "Data/Levels/rataje/recast.pak"));
 const entry = (await readCentralDirectory(pak)).find((e) => e.name.toLowerCase() === "recast/rdnavmesh_1.nav")!;
 let t0 = performance.now();

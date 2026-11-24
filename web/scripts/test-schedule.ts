@@ -15,8 +15,9 @@ import type { PakSource } from "../src/paks.ts";
 import { Vfs } from "../src/vfs.ts";
 import { ASSET_RE } from "../src/assets.ts";
 import { CharacterDb } from "../src/character.ts";
+import { defaultGameRoot } from "./paths.ts";
 
-const root = process.argv[2] ?? join(homedir(), "kcd1");
+const root = process.argv[2] ?? defaultGameRoot;
 const blob = await openAsBlob(join(root, "Data/Levels/rataje/level.pak"));
 const entries = await readCentralDirectory(blob);
 const find = (n: string) => entries.find((e) => e.name.toLowerCase() === n)!;

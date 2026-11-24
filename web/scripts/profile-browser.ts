@@ -17,9 +17,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromeBinary, chromeGpuFlags } from "./chrome.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const arg = (k: string, d: string) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3) ?? d;
-const root = arg("root", join(homedir(), "kcd1"));
+const root = arg("root", defaultGameRoot);
 const preset = arg("preset", "high");
 const settle = Number(arg("settle", "15"));
 const seconds = Number(arg("seconds", "8"));

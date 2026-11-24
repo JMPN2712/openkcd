@@ -5,9 +5,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { openRataje } from "./lib.ts";
 import { daylight, pickProfile, skyAt, sunDirection } from "../src/sky.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
-const root = args.includes("--root") ? args[args.indexOf("--root") + 1] : join(homedir(), "kcd1");
+const root = args.includes("--root") ? args[args.indexOf("--root") + 1] : defaultGameRoot;
 let failures = 0;
 const check = (ok: boolean, msg: string) => { console.log(`${ok ? "ok  " : "FAIL"} ${msg}`); if (!ok) failures++; };
 

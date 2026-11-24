@@ -9,9 +9,10 @@ import { gpuDevice, nodeReadWorkers, openRataje } from "./lib.ts";
 import { loadMipChain, type MipChain } from "../src/model.ts";
 import { TexturePool, type PooledTexture } from "../src/texturePool.ts";
 import { TEXTURE_RE } from "../src/texture.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
-const root = args.includes("--root") ? args[args.indexOf("--root") + 1] : join(homedir(), "kcd1");
+const root = args.includes("--root") ? args[args.indexOf("--root") + 1] : defaultGameRoot;
 const lvl = await openRataje(root);
 const device = await gpuDevice();
 let failures = 0;

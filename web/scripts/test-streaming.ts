@@ -8,10 +8,11 @@ import { join } from "node:path";
 import { buildWorldScene, newWorldCaches, trimWorldCaches } from "../src/world.ts";
 import { PRESETS, type PresetName } from "../src/quality.ts";
 import { openRataje } from "./lib.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
-const root = opt("--root", join(homedir(), "kcd1"));
+const root = opt("--root", defaultGameRoot);
 const q = PRESETS[opt("--preset", "medium") as PresetName];
 const towns = Number(opt("--towns", "8"));
 const keepAll = args.includes("--no-trim");

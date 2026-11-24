@@ -26,9 +26,10 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { sliceName } from "../src/inno.ts";
 import { chromeBinary, chromeGpuFlags } from "./chrome.ts";
+import { defaultGameRoot, defaultInstallers } from "./paths.ts";
 
-const srcDir = resolve(process.argv.slice(2).find((a) => !a.startsWith("--")) ?? "");
-const root = process.argv.find((a) => a.startsWith("--root="))?.slice(7) ?? join(homedir(), "kcd1");
+const srcDir = resolve(process.argv.slice(2).find((a) => !a.startsWith("--")) ?? defaultInstallers);
+const root = process.argv.find((a) => a.startsWith("--root="))?.slice(7) ?? defaultGameRoot;
 const keep = process.argv.includes("--keep");
 const compact = process.argv.find((a) => a.startsWith("--compact="))?.slice(10);
 const part = Number(process.argv.find((a) => a.startsWith("--part="))?.slice(7) ?? 0);

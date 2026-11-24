@@ -16,11 +16,12 @@ import { buildSlim, characterParts, type SlimSink } from "../src/slimBuild.ts";
 import { planFileStore } from "../src/slimStore.ts";
 import { repackedPak } from "../src/repack.ts";
 import { openRataje } from "./lib.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
 const flag = (k: string) => (args.includes(k) ? (args.splice(args.indexOf(k), 1), true) : false);
-const root = opt("--root", join(homedir(), "kcd1"));
+const root = opt("--root", defaultGameRoot);
 const potato = flag("--potato");
 const around = opt("--around", "").split(",").filter(Boolean).map(Number) as [number, number, number];
 const inline = opt("--inline", "");

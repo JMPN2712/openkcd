@@ -19,8 +19,9 @@ import { parseEntityIndex, parseNpcEntities } from "../src/levelEntities.ts";
 import type { PakSource } from "../src/paks.ts";
 import { Vfs } from "../src/vfs.ts";
 import { readCentralDirectory, readEntry } from "../src/zip.ts";
+import { defaultGameRoot } from "./paths.ts";
 
-const root = process.argv[2] ?? join(homedir(), "kcd1");
+const root = process.argv[2] ?? defaultGameRoot;
 async function findPaks(dir: string): Promise<string[]> {
   const out: string[] = [];
   for (const d of await readdir(dir, { withFileTypes: true })) {

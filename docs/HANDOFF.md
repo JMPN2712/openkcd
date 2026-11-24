@@ -450,6 +450,23 @@ follows them):
   shops with a trade panel (the tailor's "Let's talk trade" opens it), the
   shop and calendar script functions, diet mode's shop grants.
   `test-shops.ts`; `test-quest-opening.ts` now buys the charcoal.
+- #63 (2026-11-23): one-command setup on a new machine. `tools/setup.sh`
+  (macOS, Linux, WSL; rerunnable) checks Git and Node 24+, enables the
+  hooks, sets the clone's commit e-mail to the GitHub no-reply address
+  (via `gh`), runs `npm ci`, writes this machine's paths to `.openkcd.json`
+  (gitignored: `gameRoot`, `installers`, `chrome`) and `CLAUDE.local.md`,
+  and adds the clean-room folder's absolute path to
+  `.claude/settings.local.json`. All 56 scripts that defaulted to `~/kcd1`
+  read `web/scripts/paths.ts` (env `OPENKCD_GAME_ROOT` / `OPENKCD_INSTALLERS`
+  / `CHROME`, then `.openkcd.json`, then the old defaults). `tools/check.sh`
+  runs the type check, the headless tests and the audit (`--quick`: the
+  fast ones; `--browser`: also headless Chrome). CI runs the setup script on
+  a fresh Ubuntu clone. Also tried: a filmic tone curve from the level's
+  film-curve settings; not shipped, since without a fixed time and weather in
+  the harness no fair before/after comparison was possible (the next
+  graphics step should first make the harness pin the clock and weather).
+  This Mac's GOG installers aren't in `~/Downloads/kingdom_come_deliverance`
+  any more (setup warns); set `installers` in `.openkcd.json` when found.
 - #62 (2026-11-22): the opening starts on the mother's own line, a new game
   reaches it in seconds, anti-aliasing, Henry's father turns from the
   forge to the anvil, NPCs at work kept out of walls.

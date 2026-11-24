@@ -9,9 +9,10 @@ import { ModelRenderer } from "../src/renderer.ts";
 import { buildWorldScene, lodItems, newWorldCaches, sceneMatrices, trimWorldCaches, type WorldScene } from "../src/world.ts";
 import { PRESETS } from "../src/quality.ts";
 import { gpuDevice, openRataje } from "./lib.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
-const root = args.includes("--root") ? args[args.indexOf("--root") + 1] : join(homedir(), "kcd1");
+const root = args.includes("--root") ? args[args.indexOf("--root") + 1] : defaultGameRoot;
 const q = PRESETS.potato;
 
 let failures = 0;

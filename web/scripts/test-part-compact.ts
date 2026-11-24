@@ -22,11 +22,12 @@ import { Vfs } from "../src/vfs.ts";
 import { openTexture, TEXTURE_RE, textureStem } from "../src/texture.ts";
 import type { PakSource } from "../src/paks.ts";
 import type { SlimIndex } from "../src/slim.ts";
+import { defaultGameRoot, defaultInstallers } from "./paths.ts";
 
-const [srcDir] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const [srcDir = defaultInstallers] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 if (!srcDir) throw new Error("usage: test-part-compact.ts INSTALLER_DIR [--full]");
 const potato = !process.argv.includes("--full");
-const root = process.argv.find((a) => a.startsWith("--root="))?.slice(7) ?? join(homedir(), "kcd1");
+const root = process.argv.find((a) => a.startsWith("--root="))?.slice(7) ?? defaultGameRoot;
 const work = join(homedir(), ".cache", "openkcd-part-compact");
 const G = (n: number) => `${(n / 2 ** 30).toFixed(2)} GiB`;
 

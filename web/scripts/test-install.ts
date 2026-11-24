@@ -12,10 +12,11 @@ import { relative } from "node:path";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { DEFAULT_OPTIONS, findInstallers, install, isPak, wanted, type Target } from "../src/install.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const [srcDir, outDir] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 if (!srcDir || !outDir) throw new Error("usage: test-install.ts INSTALLER_DIR OUT_DIR");
-const root = process.argv.find((a) => a.startsWith("--root="))?.slice(7) ?? join(homedir(), "kcd1");
+const root = process.argv.find((a) => a.startsWith("--root="))?.slice(7) ?? defaultGameRoot;
 const only = process.argv.find((a) => a.startsWith("--only="))?.slice(7);
 
 /** Just enough of FileSystemDirectoryHandle for findInstallers. */

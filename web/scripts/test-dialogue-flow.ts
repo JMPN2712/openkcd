@@ -20,11 +20,12 @@ import { readTable } from "../src/tables.ts";
 import { Vfs } from "../src/vfs.ts";
 import { readCentralDirectory, readEntry } from "../src/zip.ts";
 import { gameSources } from "./lib.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 let fails = 0;
 const check = (ok: boolean, what: string) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (!ok) fails++; };
 
-const root = process.argv[2] ?? join(homedir(), "kcd1");
+const root = process.argv[2] ?? defaultGameRoot;
 const all = await gameSources(root);
 const sources = all.filter((s) => !s.path.toLowerCase().includes("levels/"));
 const vfs = await Vfs.build(sources, { filter: (n) => /^libs\/tables\//.test(n) || n.endsWith(".lua") || n.startsWith("libs/luaxml/"), includeHd: false });

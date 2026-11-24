@@ -20,8 +20,9 @@ import { readEntry, readZip } from "../src/zip.ts";
 import { openTexture, TEXTURE_RE, textureStem } from "../src/texture.ts";
 import { MODEL_RE } from "../src/model.ts";
 import { parseCgf } from "../src/cgf.ts";
+import { defaultGameRoot } from "./paths.ts";
 
-const root = process.argv.slice(2).find((a) => !a.startsWith("--")) ?? join(homedir(), "kcd1");
+const root = process.argv.slice(2).find((a) => !a.startsWith("--")) ?? defaultGameRoot;
 const out = process.argv.find((a) => a.startsWith("--out="))?.slice(6) ?? join(homedir(), ".cache", "openkcd-test-repack");
 const G = (b: number) => `${(b / 2 ** 30).toFixed(2)} GiB`;
 

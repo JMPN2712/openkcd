@@ -11,10 +11,11 @@ import { create, globals } from "webgpu";
 import { readCentralDirectory, readEntry } from "../src/zip.ts";
 import { parseTerrain, heightAt } from "../src/terrain.ts";
 import { TerrainRenderer } from "../src/terrainRenderer.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 Object.assign(globalThis, globals);
 const args = process.argv.slice(2);
-const root = args.includes("--root") ? args.splice(args.indexOf("--root"), 2)[1] : join(homedir(), "kcd1");
+const root = args.includes("--root") ? args.splice(args.indexOf("--root"), 2)[1] : defaultGameRoot;
 const [outDir, ...views] = args;
 if (!outDir) throw new Error("usage: render-terrain.ts OUT_DIR [x,y,z,yaw,pitch ...]");
 const W = 1280, H = 720;

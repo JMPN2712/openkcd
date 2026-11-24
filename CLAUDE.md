@@ -4,7 +4,8 @@ Unofficial, open-source browser engine (WebAssembly + WebGPU) that runs
 Kingdom Come: Deliverance 1 from the player's **own legally owned copy**. Not
 affiliated with or endorsed by Warhorse Studios or PLAION. GitHub repo:
 `openkcd`. Machine-specific paths (this checkout, the installer, the game
-copy, the research repo) are in `CLAUDE.local.md`, which is not committed.
+copy, the research repo) are in `CLAUDE.local.md` and `.openkcd.json`, which
+are not committed; `tools/setup.sh` writes both on a new machine.
 
 ## Hard rules
 
@@ -12,7 +13,8 @@ copy, the research repo) are in `CLAUDE.local.md`, which is not committed.
   the GOG installer folder or the extracted game folder.
 - **Never commit** game files, extracted assets, converted packages, renders
   of game content or large binaries. `.gitignore` plus `.githooks/pre-commit`
-  enforce this. After cloning, run `git config core.hooksPath .githooks`.
+  enforce this. After cloning, run `tools/setup.sh` (it enables the hooks
+  and writes this machine's `.openkcd.json` and `CLAUDE.local.md`).
 - **Clean room: two kinds of session, never mixed.**
   - **Research sessions** run in the private research repo. They may read
     the local decompiler-output folder (never committed anywhere), and
@@ -135,11 +137,13 @@ questlines whole and never cuts anything the main quest depends on.
   `COMPATIBILITY.md`, `DEPLOY.md` (keep them current when behaviour, sizes
   or requirements change).
 - **Tests:** headless scripts in `web/scripts/` run with
-  `node scripts/<name>.ts` against the extracted game folder (`--root`).
+  `node scripts/<name>.ts` against the game folder from `.openkcd.json`
+  (`web/scripts/paths.ts`; `--root` overrides).
   Headless WebGPU renders go
   through Dawn (`webgpu` npm). The README lists every script.
-- **Checks before committing:** `cd web && npx tsc --noEmit`, plus the
-  relevant test scripts.
+- **Checks before committing:** `tools/check.sh --quick` (type check and
+  the fast tests), plus the relevant test scripts; `tools/check.sh` (all
+  headless tests and the audit) before a PR.
 
 ## Research (private, not in this repo)
 

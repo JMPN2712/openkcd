@@ -39,7 +39,7 @@ they hold; nothing can be taken yet. Henry can sleep in beds until morning.
 **Play it at <https://openkcd.jmpn.workers.dev/>** with your GOG installer:
 see [docs/PLAYING.md](docs/PLAYING.md). What has been tested is in
 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md), building from source in
-[docs/BUILDING.md](docs/BUILDING.md), and the plan in
+[docs/BUILDING.md](docs/BUILDING.md) (a new machine: `tools/setup.sh`), and the plan in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Browser requirements
@@ -92,7 +92,7 @@ You need Node.js 24+ and your own installed copy of Kingdom Come: Deliverance
 cd web
 npm install
 npm run dev        # then open http://localhost:5173/ in Chrome
-npm run test:pak   # Node smoke test against ~/kcd1 (or pass a game root)
+npm run test:pak   # Node smoke test against the game in .openkcd.json (tools/setup.sh; else ~/kcd1, or pass a game root)
 node scripts/test-inno.ts                        # read the GOG installers (base + DLC) in place: file lists, sampled files vs ~/kcd1 and MD5s (--full: every file, ~4 min)
 node scripts/test-install.ts ~/Downloads/kingdom_come_deliverance/DLC /tmp/inst --only=band_of_bastards   # install flow into a folder, compare with ~/kcd1, rerun skips, repack
 node scripts/test-install-browser.ts ~/Downloads/kingdom_come_deliverance   # headless Chrome: install into OPFS through the page, check the copy, open it (--compact=potato|full: the compact package straight from the installer, then open it with no game files; --part=2: part by part, two slices at a time, deleting each one the page is done with; --interrupt: Cancel while the store is written, then carry on)

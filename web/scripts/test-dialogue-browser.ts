@@ -13,9 +13,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromeBinary, chromeGpuFlags } from "./chrome.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const arg = (k: string, d: string) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3) ?? d;
-const root = arg("root", join(homedir(), "kcd1"));
+const root = arg("root", defaultGameRoot);
 const preset = arg("preset", "potato");
 const [W, H] = arg("size", "1920x1080").split("x").map(Number);
 // PORT=… and DEBUG_PORT=…: other ports, so two runs (two checkouts) don't collide

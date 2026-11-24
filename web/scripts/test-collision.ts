@@ -10,10 +10,11 @@ import { buildWorldScene, newWorldCaches } from "../src/world.ts";
 import { CollisionWorld, type CollisionSource } from "../src/collision.ts";
 import { PlayerController, PLAYER, type MoveInput } from "../src/player.ts";
 import { openRataje } from "./lib.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
-const root = opt("--root", join(homedir(), "kcd1"));
+const root = opt("--root", defaultGameRoot);
 const [cx, cy] = opt("--at", "2577.8,574").split(",").map(Number);
 const radius = Number(opt("--radius", "200"));
 const runs = Number(opt("--runs", "150"));

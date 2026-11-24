@@ -8,8 +8,9 @@ import { join } from "node:path";
 import { readCentralDirectory, readEntry } from "../src/zip.ts";
 import { parseTerrain, heightAt } from "../src/terrain.ts";
 import { parseLevelObjects } from "../src/levelObjects.ts";
+import { defaultGameRoot } from "./paths.ts";
 
-const root = process.argv[2] ?? join(homedir(), "kcd1");
+const root = process.argv[2] ?? defaultGameRoot;
 const blob = await openAsBlob(join(root, "Data/Levels/rataje/level.pak"));
 const entry = (await readCentralDirectory(blob)).find((e) => e.name.toLowerCase() === "terrain/terrain.dat")!;
 const bytes = await readEntry(blob, entry);

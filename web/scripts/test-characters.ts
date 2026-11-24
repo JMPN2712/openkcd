@@ -11,9 +11,10 @@ import type { PakSource } from "../src/paks.ts";
 import { Vfs } from "../src/vfs.ts";
 import { ASSET_RE } from "../src/assets.ts";
 import { CharacterDb, loadCharacter, type CharacterSpec } from "../src/character.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
-const root = args[0] && !args[0].startsWith("--") ? args[0] : join(homedir(), "kcd1");
+const root = args[0] && !args[0].startsWith("--") ? args[0] : defaultGameRoot;
 const sample = args.includes("--sample") ? Number(args[args.indexOf("--sample") + 1]) : 150;
 
 async function findPaks(dir: string): Promise<string[]> {

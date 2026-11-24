@@ -11,9 +11,10 @@ import { Inventory, ItemDb } from "../src/inventory.ts";
 import { healthFactor, ShopDb, Shops } from "../src/shops.ts";
 import { DIET } from "../src/dietConfig.ts";
 import { readTable } from "../src/tables.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
-const root = args.includes("--root") ? args[args.indexOf("--root") + 1] : join(homedir(), "kcd1");
+const root = args.includes("--root") ? args[args.indexOf("--root") + 1] : defaultGameRoot;
 let fails = 0;
 const check = (ok: boolean, what: string) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (!ok) fails++; };
 

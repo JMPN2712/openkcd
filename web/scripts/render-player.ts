@@ -37,10 +37,11 @@ import { NavMesh } from "../src/navmesh.ts";
 import { readCentralDirectory, readEntry } from "../src/zip.ts";
 
 import { DialogueCameraRig, type Shot } from "../src/dialogueCamera.ts";
+import { defaultGameRoot } from "./paths.ts";
 let dialogueRig: Promise<DialogueCameraRig> | null = null;
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
-const root = opt("--root", join(homedir(), "kcd1"));
+const root = opt("--root", defaultGameRoot);
 const [ax, ay, ayaw = -90] = opt("--at", "2577.8,574,-90").split(",").map(Number); // yaw in degrees, optional
 const walk = opt("--walk", "0.5:;2:w;1.5:w+shift;1:");
 const view = opt("--view", "third");

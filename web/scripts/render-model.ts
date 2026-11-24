@@ -18,12 +18,13 @@ import { Dba } from "../src/dba.ts";
 import { Animator } from "../src/pose.ts";
 import { parseSkeleton } from "../src/skeleton.ts";
 import { ModelRenderer } from "../src/renderer.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 Object.assign(globalThis, globals);
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string) => (args.includes(k) ? args.splice(args.indexOf(k), 2)[1] : d);
-const root = opt("--root", join(homedir(), "kcd1"));
+const root = opt("--root", defaultGameRoot);
 const [W, H] = opt("--size", "800x600").split("x").map(Number);
 const view = opt("--view", ""); // yaw,pitch,zoom[,targetZ] e.g. -1.9,0.35,1
 const animPath = opt("--anim", ""); // .caf clip, or database.dba#animation/name.caf, for characters

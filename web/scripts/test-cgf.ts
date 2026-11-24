@@ -7,9 +7,10 @@ import { homedir } from "node:os";
 import { join, relative } from "node:path";
 import { readCentralDirectory, readEntry } from "../src/zip.ts";
 import { parseCgf, CHUNK } from "../src/cgf.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 const args = process.argv.slice(2);
-const root = args[0] && !args[0].startsWith("--") ? args[0] : join(homedir(), "kcd1");
+const root = args[0] && !args[0].startsWith("--") ? args[0] : defaultGameRoot;
 const exts = (args.includes("--ext") ? args[args.indexOf("--ext") + 1] : "cgf,cga,skin,chr").split(",");
 
 async function findPaks(dir: string): Promise<string[]> {

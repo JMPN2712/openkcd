@@ -15,6 +15,7 @@ import { readTable } from "../src/tables.ts";
 import { Vfs } from "../src/vfs.ts";
 import { readCentralDirectory, readEntry } from "../src/zip.ts";
 import { gameSources } from "./lib.ts";
+import { defaultGameRoot } from "./paths.ts";
 
 let fails = 0;
 const check = (ok: boolean, what: string) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (!ok) fails++; };
@@ -91,7 +92,7 @@ const tailor = [{ start: 542, activity: "work" }, { start: 1111, activity: "fun"
 }
 
 // ---- the game data ----
-const root = process.argv[2] ?? join(homedir(), "kcd1");
+const root = process.argv[2] ?? defaultGameRoot;
 const sources = (await gameSources(join(root, "Data"))).filter((s) => !s.path.toLowerCase().includes("levels/"));
 const vfs = await Vfs.build(sources, { filter: (n) => /^libs\/tables\//.test(n) || n.startsWith("libs/") && n.endsWith(".xml"), includeHd: false });
 const level = await openAsBlob(join(root, "Data/Levels/rataje/level.pak"));
